@@ -141,7 +141,7 @@ Implementation should make this filter list configurable.
 
 ### 3.2 Company homepages
 
-- Resolve homepage URL: try common patterns (`{normalized_name}.com`, `.io`, `.ai`, `.co`), then fall back to a Google web search via DuckDuckGo HTML (free, scrapable) or Bing free tier.
+- Resolve homepage URL: try common patterns (`{normalized_name}.com`, `.io`, `.ai`, `.co`), then fall back to a Google web search via DuckDuckGo HTML (free, scrapable) or Bing free tier. **M2 ships only the TLD-pattern path; the DDG fallback is deferred to M5** since the heuristic alone covers most software startups and avoids a search-engine bot-detection failure mode.
 - Fetch homepage + likely subpages: `/`, `/about`, `/about-us`, `/product`, `/products`, `/company`, `/team`.
 - Respect `robots.txt`.
 - Cache aggressively (refetch quarterly, not weekly).

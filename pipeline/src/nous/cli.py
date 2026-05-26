@@ -64,18 +64,136 @@ def ingest_filings_cmd(since: object, until: object) -> None:
 
 
 @cli.command("resolve-homepages")
-def resolve_homepages() -> None:
-    _stub("resolve-homepages")
+@click.option(
+    "--limit",
+    type=int,
+    default=None,
+    help="Maximum number of companies to process (for testing / partial runs).",
+)
+@click.option(
+    "--refetch-after-days",
+    type=int,
+    default=90,
+    show_default=True,
+    help="Re-attempt resolution for companies last checked more than N days ago.",
+)
+def resolve_homepages(limit: int | None, refetch_after_days: int) -> None:
+    """Attempt to resolve a homepage URL for companies that lack one."""
+    import asyncio
+
+    from nous.config import Settings
+    from nous.db.session import AsyncSessionLocal
+    from nous.pipeline.resolve_homepages import run_resolve_homepages
+    from nous.sources.homepage import HomepageClient
+
+    settings = Settings()
+
+    async def _run() -> None:
+        async with (
+            HomepageClient(
+                settings.SEC_USER_AGENT,
+                requests_per_second_per_domain=1.0,
+            ) as homepage_client,
+            AsyncSessionLocal() as session,
+        ):
+            summary = await run_resolve_homepages(
+                session,
+                homepage_client,
+                refetch_after_days=refetch_after_days,
+                limit=limit,
+            )
+            click.echo(summary.model_dump_json(indent=2))
+
+    asyncio.run(_run())
 
 
 @cli.command("scrape-homepages")
-def scrape_homepages() -> None:
-    _stub("scrape-homepages")
+@click.option(
+    "--limit",
+    type=int,
+    default=None,
+    help="Maximum number of companies to process.",
+)
+@click.option(
+    "--refetch-after-days",
+    type=int,
+    default=90,
+    show_default=True,
+    help="Re-scrape companies whose pages are older than N days.",
+)
+@click.option(
+    "--max-pages-per-company",
+    type=int,
+    default=4,
+    show_default=True,
+    help="Maximum number of pages to fetch per company.",
+)
+def scrape_homepages(
+    limit: int | None,
+    refetch_after_days: int,
+    max_pages_per_company: int,
+) -> None:
+    """Fetch homepage + subpages and store raw HTML in raw_pages."""
+    import asyncio
+
+    from nous.config import Settings
+    from nous.db.session import AsyncSessionLocal
+    from nous.pipeline.scrape_homepages import run_scrape_homepages
+    from nous.sources.homepage import HomepageClient
+
+    settings = Settings()
+
+    async def _run() -> None:
+        async with (
+            HomepageClient(
+                settings.SEC_USER_AGENT,
+                requests_per_second_per_domain=1.0,
+            ) as homepage_client,
+            AsyncSessionLocal() as session,
+        ):
+            summary = await run_scrape_homepages(
+                session,
+                homepage_client,
+                refetch_after_days=refetch_after_days,
+                limit=limit,
+                max_pages_per_company=max_pages_per_company,
+            )
+            click.echo(summary.model_dump_json(indent=2))
+
+    asyncio.run(_run())
 
 
 @cli.command("enrich-companies")
-def enrich_companies() -> None:
-    _stub("enrich-companies")
+@click.option(
+    "--limit",
+    type=int,
+    default=None,
+    help="Maximum number of companies to enrich (for testing / quota management).",
+)
+@click.option(
+    "--refetch-after-days",
+    type=int,
+    default=90,
+    show_default=True,
+    help="Re-enrich companies enriched more than N days ago.",
+)
+def enrich_companies(limit: int | None, refetch_after_days: int) -> None:
+    """Call Gemini to generate descriptions for companies with raw pages."""
+    import asyncio
+
+    from nous.db.session import AsyncSessionLocal
+    from nous.pipeline.enrich_companies import run_enrich_companies
+
+    async def _run() -> None:
+        async with AsyncSessionLocal() as session:
+            summary = await run_enrich_companies(
+                session,
+                max_companies=limit,
+                refetch_after_days=refetch_after_days,
+            )
+            click.echo(summary.model_dump_json(indent=2))
+
+    asyncio.run(_run())
 
 
 @cli.command("ingest-news")

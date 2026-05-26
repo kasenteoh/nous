@@ -9,6 +9,8 @@ export interface CompanyRow {
   normalized_name: string;
   description_short: string | null; // filled in M2
   description_long: string | null; // filled in M2
+  primary_category: string | null; // filled in M2
+  tags: string[] | null; // filled in M2 — Supabase returns Postgres text[] as string[]
   website: string | null; // filled in M2
   logo_url: string | null; // filled in M2
   hq_city: string | null;
@@ -64,6 +66,7 @@ export interface CompanyListRow {
   hq_city: string | null;
   hq_state: string | null;
   industry_group: string | null;
+  description_short: string | null; // M2 — shown as preview on index cards
   latest_filing_date: string | null; // ISO date
   latest_offering_amount: number | null;
 }

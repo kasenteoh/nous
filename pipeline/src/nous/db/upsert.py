@@ -12,7 +12,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from nous.db.models import Company, Filing, RelatedPerson
+from nous.db.models import Company, Filing, RawPage, RelatedPerson
 from nous.sources.form_d import FormD, FormDRelatedPerson
 from nous.util.slugify import normalize_name, slug_with_disambiguator, slugify
 
@@ -175,6 +175,50 @@ async def insert_filing_if_new(
     # get() returns None only if the row somehow doesn't exist — that would be
     # a logic bug, not a user error, so a hard assert is appropriate.
     assert fetched is not None, f"Filing {filing_id} missing after insert"
+    return fetched
+
+
+async def upsert_raw_page(
+    session: AsyncSession,
+    company_id: UUID,
+    url: str,
+    content: str,
+) -> RawPage:
+    """Upsert a raw HTML page for a company.
+
+    ON CONFLICT (company_id, url) DO UPDATE SET content, fetched_at = now().
+    Uses postgresql.insert; returning RawPage.id, then re-fetches via session.get
+    so the caller gets a fully-populated ORM object.
+    """
+    from sqlalchemy import func as sa_func
+
+    stmt = (
+        pg_insert(RawPage)
+        .values(
+            company_id=company_id,
+            url=url,
+            content=content,
+            fetched_at=sa_func.now(),
+        )
+        .on_conflict_do_update(
+            index_elements=["company_id", "url"],
+            set_={
+                "content": content,
+                "fetched_at": sa_func.now(),
+            },
+        )
+        .returning(RawPage.id)
+    )
+    result = await session.execute(stmt)
+    row = result.fetchone()
+    assert row is not None, "upsert_raw_page: no row returned — this is a logic bug"
+
+    raw_page_id: UUID = row[0]
+    # populate_existing=True forces a refresh from the DB so the returned object
+    # reflects the freshly-upserted content, not whatever is in the identity map
+    # from a prior call within the same session.
+    fetched = await session.get(RawPage, raw_page_id, populate_existing=True)
+    assert fetched is not None, f"RawPage {raw_page_id} missing after upsert"
     return fetched
 
 

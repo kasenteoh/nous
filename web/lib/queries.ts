@@ -40,7 +40,7 @@ export async function listCompanies(opts: {
   const { data: companies, error } = await supabase
     .from("companies")
     .select(
-      "slug, name, hq_city, hq_state, industry_group, id",
+      "slug, name, hq_city, hq_state, industry_group, description_short, id",
     )
     .order("name", { ascending: true })
     .range(offset, offset + limit - 1);
@@ -90,6 +90,7 @@ export async function listCompanies(opts: {
       hq_city: (c.hq_city as string | null) ?? null,
       hq_state: (c.hq_state as string | null) ?? null,
       industry_group: (c.industry_group as string | null) ?? null,
+      description_short: (c.description_short as string | null) ?? null,
       latest_filing_date: latest?.filing_date ?? null,
       latest_offering_amount: latest?.offering_amount_total ?? null,
     };

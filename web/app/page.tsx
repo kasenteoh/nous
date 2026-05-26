@@ -42,6 +42,12 @@ export default async function Home() {
                 {company.name}
               </h2>
 
+              {company.description_short && (
+                <p className="mt-2 text-sm text-zinc-500 dark:text-zinc-400 line-clamp-2 leading-snug">
+                  {company.description_short}
+                </p>
+              )}
+
               <dl className="mt-3 space-y-1 text-sm text-zinc-500 dark:text-zinc-400">
                 {(company.hq_city || company.hq_state) && (
                   <div className="flex justify-between gap-2">
