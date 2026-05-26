@@ -16,9 +16,8 @@ from collections.abc import AsyncIterator
 from datetime import date
 
 import pytest
-import pytest_asyncio
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from nous.db.models import Company, Filing
 from nous.pipeline.ingest_filings import IngestSummary, run_ingest_filings
@@ -28,10 +27,8 @@ from nous.sources.edgar import EdgarClient, FilingHit
 # Skip guard
 # ---------------------------------------------------------------------------
 
-DATABASE_URL = os.environ.get("DATABASE_URL", "")
-
 pytestmark = pytest.mark.skipif(
-    not DATABASE_URL,
+    not os.environ.get("DATABASE_URL"),
     reason="DATABASE_URL not set — skipping DB integration tests",
 )
 
@@ -138,29 +135,6 @@ class MockEdgarClient(EdgarClient):
 
     async def fetch_primary_doc(self, cik: str, accession_number: str) -> str:
         return self._xml_by_accession[accession_number]
-
-
-# ---------------------------------------------------------------------------
-# Session fixtures
-# ---------------------------------------------------------------------------
-
-
-@pytest_asyncio.fixture(scope="session")
-async def session_factory() -> async_sessionmaker[AsyncSession]:
-    engine = create_async_engine(DATABASE_URL, echo=False)
-    factory: async_sessionmaker[AsyncSession] = async_sessionmaker(
-        bind=engine, expire_on_commit=False
-    )
-    return factory
-
-
-@pytest_asyncio.fixture()
-async def db(session_factory: async_sessionmaker[AsyncSession]) -> AsyncSession:
-    """Yield a session, rolling back after each test."""
-    async with session_factory() as session:
-        await session.begin_nested()
-        yield session
-        await session.rollback()
 
 
 # ---------------------------------------------------------------------------

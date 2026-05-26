@@ -11,43 +11,19 @@ import os
 from uuid import UUID
 
 import pytest
-import pytest_asyncio
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from nous.db.models import Company, RawPage
 
 # ---------------------------------------------------------------------------
-# Helpers / fixtures
+# Skip guard
 # ---------------------------------------------------------------------------
 
-DATABASE_URL = os.environ.get("DATABASE_URL", "")
-
 pytestmark = pytest.mark.skipif(
-    not DATABASE_URL,
+    not os.environ.get("DATABASE_URL"),
     reason="DATABASE_URL not set — skipping DB integration tests",
 )
-
-
-@pytest_asyncio.fixture(scope="session")
-async def session_factory() -> async_sessionmaker[AsyncSession]:
-    """Create an engine and session factory for the test session."""
-    engine = create_async_engine(DATABASE_URL, echo=False)
-    factory: async_sessionmaker[AsyncSession] = async_sessionmaker(
-        bind=engine, expire_on_commit=False
-    )
-    return factory
-
-
-@pytest_asyncio.fixture()
-async def db(session_factory: async_sessionmaker[AsyncSession]) -> AsyncSession:
-    """Yield a session that is rolled back after each test (no persistent state)."""
-    async with session_factory() as session:
-        # Use a nested transaction so we can roll back after the test.
-        await session.begin_nested()
-        yield session
-        await session.rollback()
-
 
 # ---------------------------------------------------------------------------
 # Helper factories
