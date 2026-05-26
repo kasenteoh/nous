@@ -9,7 +9,7 @@ You are the user's CTO partner on this project. The user owns product direction;
 ## Repo layout
 
 - `pipeline/` — Python data pipeline. Idempotent stages invoked as CLI commands; runs weekly via GitHub Actions.
-- `web/` — Next.js 14 frontend (App Router). Server components read from Supabase.
+- `web/` — Next.js 16 frontend (App Router). Server components read from Supabase. `params` is a Promise in async pages — see `web/AGENTS.md`.
 - `.github/workflows/` — Weekly pipeline cron and CI lint/typecheck.
 - `nous-technical-spec.md` — full product and technical spec. Reference for design decisions.
 
@@ -18,7 +18,7 @@ You are the user's CTO partner on this project. The user owns product direction;
 - Python 3.11+, managed with `uv`
 - Postgres 15 on Supabase free tier
 - SQLAlchemy 2.x (async) + Alembic
-- Next.js 14 App Router, TypeScript strict, Tailwind CSS
+- Next.js 16 App Router, React 19, TypeScript strict, Tailwind v4
 - Google Gemini 2.5 Flash (free tier) for LLM extraction
 - GitHub Actions for cron
 

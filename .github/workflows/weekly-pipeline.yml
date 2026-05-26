@@ -4,6 +4,15 @@ on:
   schedule:
     - cron: "0 9 * * 1"
   workflow_dispatch:
+    inputs:
+      since:
+        description: "Optional start date (YYYY-MM-DD). Default: rolling 7-day window with overlap."
+        required: false
+        type: string
+      until:
+        description: "Optional end date (YYYY-MM-DD). Default: today."
+        required: false
+        type: string
 
 jobs:
   run-pipeline:
@@ -11,6 +20,9 @@ jobs:
     defaults:
       run:
         working-directory: pipeline
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}
     steps:
       - uses: actions/checkout@v4
 
@@ -24,5 +36,14 @@ jobs:
       - name: Install pipeline dependencies
         run: uv sync
 
-      - name: Pipeline stub
-        run: echo "pipeline not yet implemented"
+      - name: Apply migrations
+        run: uv run alembic upgrade head
+
+      - name: Ingest filings
+        run: |
+          ARGS=()
+          if [ -n "${{ inputs.since }}" ]; then ARGS+=(--since "${{ inputs.since }}"); fi
+          if [ -n "${{ inputs.until }}" ]; then ARGS+=(--until "${{ inputs.until }}"); fi
+          uv run nous ingest-filings "${ARGS[@]}"
+
+      # Note: Vercel deploy-hook POST is deferred to M6 per spec §9.
