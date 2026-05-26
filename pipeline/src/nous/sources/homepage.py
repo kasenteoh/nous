@@ -19,7 +19,9 @@ from pydantic import BaseModel
 from selectolax.parser import HTMLParser
 from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
 
+from nous.sources.duckduckgo import DuckDuckGoSearch, is_aggregator
 from nous.sources.robots import RobotsCache
+from nous.util.slugify import strip_corporate_suffix
 
 
 class FetchResult(BaseModel):
@@ -40,10 +42,19 @@ CANDIDATE_PATHS: tuple[str, ...] = (
 
 
 def _is_retryable(exc: BaseException) -> bool:
-    """Return True for errors that warrant a retry."""
+    """Return True for errors that warrant a retry.
+
+    Permanent errors (DNS failure, connection refused, TLS handshake) are
+    represented by httpx.ConnectError and must NOT be retried — they add
+    ~7s of dead time per non-existent domain across exp-backoff attempts.
+    Only transient failures (rate limits, server errors, timeouts) retry.
+    """
     if isinstance(exc, httpx.HTTPStatusError):
+        # 429 (rate limit) and 5xx (server error) — usually transient
         return exc.response.status_code == 429 or exc.response.status_code >= 500
-    return isinstance(exc, httpx.RequestError)
+    # ConnectError, ProtocolError, etc. — usually permanent (DNS, refused, TLS handshake)
+    # TimeoutException is a transient network blip — retry makes sense.
+    return isinstance(exc, httpx.TimeoutException)
 
 
 class HomepageClient:
@@ -73,6 +84,7 @@ class HomepageClient:
 
         self._client: httpx.AsyncClient | None = None
         self._robots: RobotsCache | None = None
+        self._search_client: DuckDuckGoSearch | None = None
 
     async def __aenter__(self) -> HomepageClient:
         self._client = httpx.AsyncClient(
@@ -86,6 +98,12 @@ class HomepageClient:
                 timeout=httpx.Timeout(5.0),
                 follow_redirects=True,
             ),
+            user_agent=self._user_agent,
+        )
+        # Reuse the main client for DDG searches. The DuckDuckGoSearch client
+        # manages its own global throttle (2 req/sec by default, spec §3.2).
+        self._search_client = DuckDuckGoSearch(
+            self._client,
             user_agent=self._user_agent,
         )
         return self
@@ -171,6 +189,16 @@ class HomepageClient:
             content_type=content_type_clean,
         )
 
+    async def search_companies(self, query: str, limit: int = 10) -> list[str]:
+        """Search DuckDuckGo for candidate company homepage URLs.
+
+        Delegates to the internal DuckDuckGoSearch client. Returns an empty
+        list if DDG is unavailable or returns a captcha interstitial.
+        """
+        if self._search_client is None:
+            raise RuntimeError("HomepageClient must be used as an async context manager.")
+        return await self._search_client.search(query, limit=limit)
+
 
 async def resolve_homepage(
     client: HomepageClient,
@@ -179,21 +207,18 @@ async def resolve_homepage(
     *,
     tlds: Iterable[str] = CANDIDATE_TLDS,
 ) -> str | None:
-    """Try ``{slug_base}{tld}`` for each TLD in order.
+    """Phase 1: try ``{slug_base}{tld}`` for each TLD in order.
 
     On a 200 response, validates that the page's visible text contains
-    ``slug_base`` (case-insensitive). Returns the first plausible URL or None.
+    ``slug_base`` (case-insensitive). Returns the first plausible URL on match.
 
-    slug_base must already be the normalized name (lowercase, no corporate
-    suffixes). The caller (Chunk 4) is responsible for normalization.
-    company_name is accepted for interface compatibility but slug_base drives
-    the match — slug_base is already derived from company_name.
+    Phase 2: if all TLD guesses miss, query DuckDuckGo for
+    ``"{company_name}" startup``, filter out aggregator domains, and return the
+    first candidate whose page contains the company name.
 
-    No search-engine fallback is attempted (DDG deferred to M5 per spec).
+    Returns None if both phases miss.
     """
-    # Suppress unused parameter warning — retained in signature for caller
-    _ = company_name
-
+    # Phase 1: TLD heuristic
     for tld in tlds:
         url = f"https://{slug_base}{tld}"
         try:
@@ -207,7 +232,27 @@ async def resolve_homepage(
 
         # Validate: does visible page text mention the slug?
         visible_text = HTMLParser(result.content).text(strip=True).lower()
-        if slug_base in visible_text:
+        if slug_base.replace("-", " ") in visible_text or slug_base in visible_text:
             return result.url  # final URL after any redirects
+
+    # Phase 2: DuckDuckGo search fallback
+    query = f'"{company_name}" startup'
+    candidates = await client.search_companies(query, limit=10)
+
+    name_lower = company_name.lower()
+    # Strip corporate suffixes for a more lenient page-text match.
+    naked_name = strip_corporate_suffix(company_name).lower()
+
+    for candidate_url in candidates:
+        if is_aggregator(candidate_url):
+            continue
+        try:
+            result = await client.fetch(candidate_url)
+        except (RobotsBlockedError, httpx.HTTPStatusError, httpx.RequestError):
+            continue
+        visible_text = HTMLParser(result.content).text(strip=True).lower()
+        # OR: either the suffix-stripped name or the full name appears in text.
+        if (naked_name and naked_name in visible_text) or (name_lower in visible_text):
+            return result.url
 
     return None

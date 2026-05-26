@@ -17,6 +17,7 @@ from nous.sources.homepage import (
     FetchResult,
     HomepageClient,
     RobotsBlockedError,
+    _is_retryable,
     resolve_homepage,
 )
 
@@ -101,6 +102,53 @@ def _inject_transport(client: HomepageClient, transport: MockTransport) -> None:
         headers={"User-Agent": USER_AGENT},
         follow_redirects=True,
     )
+
+
+# ---------------------------------------------------------------------------
+# _is_retryable
+# ---------------------------------------------------------------------------
+
+
+def test_is_retryable_connect_error_is_false() -> None:
+    """DNS failure / connection refused must NOT be retried — permanent error."""
+    exc = httpx.ConnectError("no such host")
+    assert _is_retryable(exc) is False
+
+
+def test_is_retryable_connect_timeout_is_true() -> None:
+    """ConnectTimeout is a TimeoutException subclass — transient, should retry."""
+    exc = httpx.ConnectTimeout("timed out")
+    assert _is_retryable(exc) is True
+
+
+def test_is_retryable_read_timeout_is_true() -> None:
+    """ReadTimeout is a TimeoutException subclass — transient, should retry."""
+    exc = httpx.ReadTimeout("read timed out")
+    assert _is_retryable(exc) is True
+
+
+def test_is_retryable_429_is_true() -> None:
+    """429 rate-limit responses should be retried."""
+    request = httpx.Request("GET", "https://example.com")
+    response = httpx.Response(429, request=request)
+    exc = httpx.HTTPStatusError("429", request=request, response=response)
+    assert _is_retryable(exc) is True
+
+
+def test_is_retryable_500_is_true() -> None:
+    """5xx server errors should be retried."""
+    request = httpx.Request("GET", "https://example.com")
+    response = httpx.Response(500, request=request)
+    exc = httpx.HTTPStatusError("500", request=request, response=response)
+    assert _is_retryable(exc) is True
+
+
+def test_is_retryable_404_is_false() -> None:
+    """4xx (non-429) client errors are permanent — should not retry."""
+    request = httpx.Request("GET", "https://example.com")
+    response = httpx.Response(404, request=request)
+    exc = httpx.HTTPStatusError("404", request=request, response=response)
+    assert _is_retryable(exc) is False
 
 
 # ---------------------------------------------------------------------------
@@ -391,3 +439,106 @@ async def test_resolve_homepage_tries_tlds_in_order() -> None:
 
     assert result is not None
     assert "acme.io" in result  # .io comes before .ai
+
+
+# ---------------------------------------------------------------------------
+# resolve_homepage — Phase 2 DDG fallback
+# ---------------------------------------------------------------------------
+
+
+class MockSearchHomepageClient(HomepageClient):
+    """HomepageClient subclass that overrides search_companies with a canned list."""
+
+    def __init__(self, search_results: list[str], **kwargs: object) -> None:
+        super().__init__(**kwargs)  # type: ignore[arg-type]
+        self._mock_search_results = search_results
+
+    async def search_companies(self, query: str, limit: int = 10) -> list[str]:
+        return self._mock_search_results[:limit]
+
+
+@pytest.mark.asyncio
+async def test_resolve_homepage_phase2_ddg_fallback() -> None:
+    """When TLD phase misses, DDG search returns a valid candidate → return it."""
+    # TLD phase: all 404
+    # DDG: first result is aggregator (linkedin.com), second is real homepage
+    real_homepage_host = "4ldata.com"
+    real_homepage_html = (
+        "<html><body><h1>4L Data Intelligence</h1><p>AI startup.</p></body></html>"
+    )
+
+    search_results = [
+        "https://www.linkedin.com/company/4l-data",  # aggregator — must be skipped
+        f"https://{real_homepage_host}/",             # real homepage
+    ]
+
+    transport = ResolverTransport(
+        {
+            real_homepage_host: (200, real_homepage_html),
+        }
+    )
+
+    client = MockSearchHomepageClient(
+        search_results=search_results,
+        user_agent=USER_AGENT,
+    )
+    async with client:
+        _inject_transport(client, transport)
+        result = await resolve_homepage(
+            client,
+            "4l-data-intelligence",
+            "4L Data Intelligence",
+            tlds=(".com", ".io"),  # won't match 4ldata.com
+        )
+
+    assert result is not None
+    assert real_homepage_host in result
+
+
+@pytest.mark.asyncio
+async def test_resolve_homepage_phase2_skips_aggregators() -> None:
+    """When DDG only returns aggregator URLs, phase 2 returns None."""
+    search_results = [
+        "https://www.linkedin.com/company/ghostco",
+        "https://crunchbase.com/organization/ghostco",
+    ]
+
+    transport = ResolverTransport({})  # nothing reachable
+
+    client = MockSearchHomepageClient(
+        search_results=search_results,
+        user_agent=USER_AGENT,
+    )
+    async with client:
+        _inject_transport(client, transport)
+        result = await resolve_homepage(
+            client,
+            "ghostco",
+            "GhostCo",
+        )
+
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_resolve_homepage_phase2_rejects_no_name_match() -> None:
+    """DDG candidate fetched but doesn't mention company name → skip, return None."""
+    # Page exists but doesn't mention the company name
+    search_results = ["https://unrelated.com/"]
+    transport = ResolverTransport(
+        {"unrelated.com": (200, HTML_NO_NAME)}  # no mention of 'ghostco'
+    )
+
+    client = MockSearchHomepageClient(
+        search_results=search_results,
+        user_agent=USER_AGENT,
+    )
+    async with client:
+        _inject_transport(client, transport)
+        result = await resolve_homepage(
+            client,
+            "ghostco",
+            "GhostCo",
+        )
+
+    assert result is None
