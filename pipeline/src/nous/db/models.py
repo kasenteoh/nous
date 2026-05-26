@@ -2,8 +2,8 @@ from datetime import date, datetime
 from decimal import Decimal
 from uuid import UUID
 
-from sqlalchemy import DateTime, ForeignKey, Numeric
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy import DateTime, ForeignKey, Numeric, String, UniqueConstraint, func
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -44,6 +44,12 @@ class Company(Base):
 
     # Tracks when LLM enrichment last ran for this company
     last_enriched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    # M2 enrichment fields
+    primary_category: Mapped[str | None]
+    tags: Mapped[list[str] | None] = mapped_column(ARRAY(String))
+    last_enriched_payload: Mapped[dict | None] = mapped_column(JSONB)  # type: ignore[type-arg]
+    website_resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class Filing(Base):
@@ -91,3 +97,29 @@ class RelatedPerson(Base):
     relationship: Mapped[str]
     # Address stored as a flexible dict; structure mirrors SEC EDGAR's address object
     address: Mapped[dict | None] = mapped_column(JSONB)  # type: ignore[type-arg]
+
+
+class RawPage(Base):
+    """Raw HTML cache for homepage / about / product pages.
+
+    Per spec §4.8 + §5.3. Unique on (company_id, url) so the scraper
+    can idempotently overwrite content+fetched_at with ON CONFLICT.
+    """
+
+    __tablename__ = "raw_pages"
+    __table_args__ = (
+        UniqueConstraint("company_id", "url", name="uq_raw_pages_company_url"),
+    )
+
+    company_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("companies.id", ondelete="CASCADE"),
+        index=True,
+    )
+    url: Mapped[str]
+    content: Mapped[str]
+    fetched_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
