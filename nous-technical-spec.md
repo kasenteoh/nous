@@ -43,7 +43,7 @@
 | Database | Postgres 15 | Hosted on Supabase free tier (500MB) |
 | ORM | SQLAlchemy 2.x + Alembic | Mature, type-safe |
 | Web framework (data) | None for pipeline. Pipeline is scripts. | Pipeline runs as scheduled jobs, not a service |
-| Frontend | Next.js 14+ (App Router) | Server components, SEO-friendly, free Vercel hosting |
+| Frontend | Next.js 16 (App Router) | Server components, SEO-friendly, free Vercel hosting. `params` is a Promise in async page components — see `web/AGENTS.md`. |
 | Frontend styling | Tailwind CSS | Standard, fast iteration |
 | Frontend hosting | Vercel (free tier) | Auto-deploy from GitHub |
 | Scheduling | GitHub Actions (cron) | Free for public repos, 2000 min/month |
