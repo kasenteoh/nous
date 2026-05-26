@@ -15,6 +15,7 @@ dependencies = [
     "psycopg[binary]>=3.2",
     "tenacity>=8",
     "lxml>=5",
+    "google-genai>=1.0",
 ]
 
 [project.scripts]
@@ -51,6 +52,10 @@ ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 module = ["lxml.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["google.genai.*", "google.genai"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
