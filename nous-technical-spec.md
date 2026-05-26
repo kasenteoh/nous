@@ -115,10 +115,11 @@ nous/
 
 #### Filtering software companies
 
-Form D uses an `industryGroupType` field. Filter to:
-- `Technology - Computers`
-- `Technology - Other`
-- (Optionally) `Technology - Telecommunications` if it overlaps with software meaningfully
+Form D uses an `industryGroupType` field. The XSD enum values are bare nouns
+(not the "Technology - X" labels surfaced in the EDGAR UI). Filter to:
+- `Computers`
+- `Other Technology`
+- (Optionally) `Telecommunications` if it overlaps with software meaningfully
 
 Implementation should make this filter list configurable.
 
