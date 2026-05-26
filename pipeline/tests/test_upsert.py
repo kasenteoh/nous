@@ -18,8 +18,13 @@ import pytest_asyncio
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from nous.db.models import RelatedPerson
-from nous.db.upsert import insert_filing_if_new, replace_related_persons, upsert_company
+from nous.db.models import Company, RawPage, RelatedPerson
+from nous.db.upsert import (
+    insert_filing_if_new,
+    replace_related_persons,
+    upsert_company,
+    upsert_raw_page,
+)
 from nous.sources.form_d import FormD, FormDAddress, FormDRelatedPerson
 
 # ---------------------------------------------------------------------------
@@ -322,3 +327,81 @@ async def test_replace_related_persons_empty_list(db: AsyncSession) -> None:
     rows = list(result.scalars().all())
     assert count == 0
     assert len(rows) == 0
+
+
+# ---------------------------------------------------------------------------
+# upsert_raw_page
+# ---------------------------------------------------------------------------
+
+
+def _make_test_company(slug_suffix: str = "upsert") -> Company:
+    return Company(
+        name=f"TestCo {slug_suffix}",
+        slug=f"testco-{slug_suffix}",
+        normalized_name=f"testco {slug_suffix}",
+        hq_country="US",
+    )
+
+
+async def test_upsert_raw_page_inserts_new_row(db: AsyncSession) -> None:
+    """upsert_raw_page inserts a new RawPage and returns a populated ORM object."""
+    company = _make_test_company("new")
+    db.add(company)
+    await db.flush()
+
+    page = await upsert_raw_page(db, company.id, "https://example.com/", "<html>hello</html>")
+
+    assert page.id is not None
+    assert page.company_id == company.id
+    assert page.url == "https://example.com/"
+    assert page.content == "<html>hello</html>"
+    assert page.fetched_at is not None
+
+
+async def test_upsert_raw_page_updates_existing_row(db: AsyncSession) -> None:
+    """upsert_raw_page with same (company_id, url) updates content in-place, leaving one row."""
+    company = _make_test_company("update")
+    db.add(company)
+    await db.flush()
+
+    url = "https://example.com/about"
+
+    # First upsert.
+    page1 = await upsert_raw_page(db, company.id, url, "<html>original</html>")
+    await db.flush()
+
+    # Second upsert — same key, different content.
+    page2 = await upsert_raw_page(db, company.id, url, "<html>updated</html>")
+    await db.flush()
+
+    # Same UUID, content changed.
+    assert page1.id == page2.id
+    assert page2.content == "<html>updated</html>"
+
+    # Only one row in the DB.
+    result = await db.execute(
+        select(RawPage).where(
+            RawPage.company_id == company.id,
+            RawPage.url == url,
+        )
+    )
+    rows = result.scalars().all()
+    assert len(rows) == 1
+    assert rows[0].content == "<html>updated</html>"
+
+
+async def test_upsert_raw_page_different_urls_are_separate_rows(db: AsyncSession) -> None:
+    """Different URLs for the same company produce distinct RawPage rows."""
+    company = _make_test_company("multi-url")
+    db.add(company)
+    await db.flush()
+
+    await upsert_raw_page(db, company.id, "https://example.com/", "<html>home</html>")
+    await upsert_raw_page(db, company.id, "https://example.com/about", "<html>about</html>")
+    await db.flush()
+
+    result = await db.execute(
+        select(RawPage).where(RawPage.company_id == company.id)
+    )
+    rows = result.scalars().all()
+    assert len(rows) == 2
