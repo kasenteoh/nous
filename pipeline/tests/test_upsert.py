@@ -14,9 +14,8 @@ from datetime import date
 from decimal import Decimal
 
 import pytest
-import pytest_asyncio
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from nous.db.models import Company, RawPage, RelatedPerson
 from nous.db.upsert import (
@@ -31,35 +30,10 @@ from nous.sources.form_d import FormD, FormDAddress, FormDRelatedPerson
 # Skip guard
 # ---------------------------------------------------------------------------
 
-DATABASE_URL = os.environ.get("DATABASE_URL", "")
-
 pytestmark = pytest.mark.skipif(
-    not DATABASE_URL,
+    not os.environ.get("DATABASE_URL"),
     reason="DATABASE_URL not set — skipping DB integration tests",
 )
-
-# ---------------------------------------------------------------------------
-# Session fixtures (mirrors test_db_models.py pattern)
-# ---------------------------------------------------------------------------
-
-
-@pytest_asyncio.fixture(scope="session")
-async def session_factory() -> async_sessionmaker[AsyncSession]:
-    engine = create_async_engine(DATABASE_URL, echo=False)
-    factory: async_sessionmaker[AsyncSession] = async_sessionmaker(
-        bind=engine, expire_on_commit=False
-    )
-    return factory
-
-
-@pytest_asyncio.fixture()
-async def db(session_factory: async_sessionmaker[AsyncSession]) -> AsyncSession:
-    """Yield a session, rolling back after each test."""
-    async with session_factory() as session:
-        await session.begin_nested()
-        yield session
-        await session.rollback()
-
 
 # ---------------------------------------------------------------------------
 # Helpers

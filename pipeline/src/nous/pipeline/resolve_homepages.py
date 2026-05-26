@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from nous.db.models import Company
 from nous.sources.homepage import HomepageClient, resolve_homepage
-from nous.util.slugify import normalize_name
+from nous.util.slugify import slugify
 
 logger = logging.getLogger(__name__)
 
@@ -64,10 +64,10 @@ async def run_resolve_homepages(
     for company in companies:
         summary.companies_seen += 1
 
-        slug_base = normalize_name(company.name)
-        # Protect against companies whose normalized name is empty (edge case).
+        slug_base = slugify(company.name)
+        # Protect against companies whose slugified name is empty (edge case).
         if not slug_base:
-            logger.warning("Company %s has empty normalized name — skipping resolve", company.id)
+            logger.warning("Company %s has empty slugified name — skipping resolve", company.id)
             summary.errors += 1
             continue
 
