@@ -2,7 +2,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from uuid import UUID
 
-from sqlalchemy import ForeignKey, Numeric
+from sqlalchemy import DateTime, ForeignKey, Numeric
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column
@@ -43,7 +43,7 @@ class Company(Base):
     employee_count_source: Mapped[str | None]
 
     # Tracks when LLM enrichment last ran for this company
-    last_enriched_at: Mapped[datetime | None]
+    last_enriched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class Filing(Base):
