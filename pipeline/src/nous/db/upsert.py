@@ -88,11 +88,18 @@ async def upsert_company(session: AsyncSession, form_d: FormD) -> tuple[Company,
         company = await _find_by_cik(session, cik)
 
     # -- Step 1b: if CIK lookup missed, check by normalized name --
+    # Only accept a name match when it's safe: either we have no incoming CIK,
+    # or the existing row has no CIK (in which case we backfill). If the
+    # existing row has a *different* non-empty CIK, these are two distinct
+    # companies that happen to share a name — fall through to INSERT.
     if company is None:
-        company = await _find_by_normalized_name(session, norm)
-        if company is not None and cik and not company.cik:
-            # Backfill CIK onto an existing name-matched row.
-            company.cik = cik
+        candidate = await _find_by_normalized_name(session, norm)
+        if candidate is not None:
+            if not cik:
+                company = candidate
+            elif not candidate.cik:
+                company = candidate
+                company.cik = cik  # backfill
 
     # -- Step 2: update or insert --
     if company is not None:

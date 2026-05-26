@@ -195,10 +195,8 @@ async def test_filing_accession_number_unique_constraint(db: AsyncSession) -> No
 
 
 async def test_uuid_assigned_automatically(db: AsyncSession) -> None:
-    """UUID primary key is auto-generated on insert."""
+    """UUID primary key is auto-generated on insert (applied at flush time)."""
     company = make_company(slug="uuid-test", normalized_name="uuid test")
-    # id is set by Python default (uuid4) before flush
-    assert isinstance(company.id, UUID)
     db.add(company)
     await db.flush()
     assert isinstance(company.id, UUID)
