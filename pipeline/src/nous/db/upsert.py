@@ -214,7 +214,10 @@ async def upsert_raw_page(
     assert row is not None, "upsert_raw_page: no row returned — this is a logic bug"
 
     raw_page_id: UUID = row[0]
-    fetched = await session.get(RawPage, raw_page_id)
+    # populate_existing=True forces a refresh from the DB so the returned object
+    # reflects the freshly-upserted content, not whatever is in the identity map
+    # from a prior call within the same session.
+    fetched = await session.get(RawPage, raw_page_id, populate_existing=True)
     assert fetched is not None, f"RawPage {raw_page_id} missing after upsert"
     return fetched
 
