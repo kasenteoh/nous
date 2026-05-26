@@ -23,6 +23,7 @@ jobs:
     env:
       DATABASE_URL: ${{ secrets.DATABASE_URL }}
       SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
     steps:
       - uses: actions/checkout@v4
 
@@ -45,5 +46,18 @@ jobs:
           if [ -n "${{ inputs.since }}" ]; then ARGS+=(--since "${{ inputs.since }}"); fi
           if [ -n "${{ inputs.until }}" ]; then ARGS+=(--until "${{ inputs.until }}"); fi
           uv run nous ingest-filings "${ARGS[@]}"
+
+      - name: Resolve homepages
+        run: uv run nous resolve-homepages
+
+      - name: Scrape homepages
+        run: uv run nous scrape-homepages
+
+      - name: Enrich companies
+        # --limit 800 keeps us under Gemini's free tier (~1500 req/day) with headroom.
+        # continue-on-error so a Gemini quota exhaustion doesn't fail the whole run —
+        # the next weekly run picks up the unfinished companies.
+        run: uv run nous enrich-companies --limit 800
+        continue-on-error: true
 
       # Note: Vercel deploy-hook POST is deferred to M6 per spec §9.
