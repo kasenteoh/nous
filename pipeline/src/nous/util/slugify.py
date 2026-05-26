@@ -37,6 +37,21 @@ def _strip_suffixes(name: str) -> str:
     return result
 
 
+def strip_corporate_suffix(name: str) -> str:
+    """Public alias for :func:`_strip_suffixes`.
+
+    Strips common corporate suffixes (Inc., LLC, Corp., Co., Ltd., Holdings,
+    Corporation, LP, LLP, Incorporated) from *name* repeatedly until stable.
+    Preserves original capitalisation and spacing.
+
+    Examples:
+        "Acme, Inc."         → "Acme"
+        "Foo Bar Holdings"   → "Foo Bar"
+        "Baz LLC"            → "Baz"
+    """
+    return _strip_suffixes(name)
+
+
 def slugify(name: str) -> str:
     """Return a URL-safe slug from a company name.
 
