@@ -1,4 +1,5 @@
 import os
+import sys
 from logging.config import fileConfig
 
 from dotenv import load_dotenv
@@ -7,6 +8,10 @@ from sqlalchemy import engine_from_config, pool
 from alembic import context
 
 load_dotenv()
+
+# Ensure the pipeline src/ directory is on sys.path so nous.* imports resolve
+# when alembic is invoked from the pipeline/ directory (where alembic.ini lives).
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
@@ -22,11 +27,12 @@ config.set_main_option("sqlalchemy.url", database_url)
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-# add your model's MetaData object here
-# for 'autogenerate' support
-# from myapp import mymodel
-# target_metadata = mymodel.Base.metadata
-target_metadata = None
+# Wire Base.metadata so alembic --autogenerate can detect schema changes.
+# These imports must come after sys.path and DATABASE_URL setup, hence E402.
+from nous.db import models  # noqa: E402, F401 — registers all models on Base.metadata
+from nous.db.base import Base  # noqa: E402
+
+target_metadata = Base.metadata
 
 # other values from the config, defined by the needs of env.py,
 # can be acquired:
