@@ -7,6 +7,8 @@ import type {
   CompanyDetail,
   CompanyListRow,
   CompanyRow,
+  CompetitorRow,
+  CompetitorWithResolved,
   FilingRow,
   FundingRound,
   FundingRoundWithInvestors,
@@ -26,6 +28,15 @@ interface NestedFundingRoundInvestor {
 
 type FundingRoundJoin = FundingRound & {
   funding_round_investors: NestedFundingRoundInvestor[] | null;
+};
+
+interface NestedResolvedCompany {
+  slug: string | null;
+  name: string | null;
+}
+
+type CompetitorJoin = CompetitorRow & {
+  competitor_company: NestedResolvedCompany | NestedResolvedCompany[] | null;
 };
 
 /**
@@ -157,30 +168,32 @@ export async function getCompanyBySlug(
 
   const companyId = company.id as string;
 
-  // 2, 3 & 4: fetch filings, related persons, and funding rounds (with nested
-  // investor joins) in parallel.
-  const [filingsResult, personsResult, roundsResult] = await Promise.all([
-    supabase
-      .from("filings")
-      .select("*")
-      .eq("company_id", companyId)
-      .order("filing_date", { ascending: false }),
+  // 2, 3, 4 & 5: fetch filings, related persons, funding rounds (with nested
+  // investor joins), and competitors (with resolved company) in parallel.
+  const [filingsResult, personsResult, roundsResult, competitorsResult] =
+    await Promise.all([
+      supabase
+        .from("filings")
+        .select("*")
+        .eq("company_id", companyId)
+        .order("filing_date", { ascending: false }),
 
-    supabase
-      .from("related_persons")
-      .select("*")
-      .eq("company_id", companyId),
+      supabase
+        .from("related_persons")
+        .select("*")
+        .eq("company_id", companyId),
 
-    // Nested select: pull each funding round with its join rows, and from each
-    // join row pull the investor's display name. Sort handled in JS below
-    // because we need a custom "nulls last" ordering on announced_date.
-    supabase
-      .from("funding_rounds")
-      .select(
-        "*, funding_round_investors(is_lead, investors(name))",
-      )
-      .eq("company_id", companyId),
-  ]);
+      supabase
+        .from("funding_rounds")
+        .select("*, funding_round_investors(is_lead, investors(name))")
+        .eq("company_id", companyId),
+
+      supabase
+        .from("competitors")
+        .select("*, competitor_company:companies!competitor_company_id(slug, name)")
+        .eq("company_id", companyId)
+        .order("rank", { ascending: true }),
+    ]);
 
   if (filingsResult.error) {
     console.error(
@@ -198,6 +211,12 @@ export async function getCompanyBySlug(
     console.error(
       "[getCompanyBySlug] funding_rounds query failed:",
       roundsResult.error.message,
+    );
+  }
+  if (competitorsResult.error) {
+    console.error(
+      "[getCompanyBySlug] competitors query failed:",
+      competitorsResult.error.message,
     );
   }
 
@@ -255,10 +274,25 @@ export async function getCompanyBySlug(
       return b.announced_date.localeCompare(a.announced_date);
     });
 
+  const rawCompetitors = (competitorsResult.data ?? []) as CompetitorJoin[];
+  const competitors: CompetitorWithResolved[] = rawCompetitors.map((row) => {
+    const nested = Array.isArray(row.competitor_company)
+      ? row.competitor_company[0]
+      : row.competitor_company;
+    const resolved =
+      nested && nested.slug && nested.name
+        ? { slug: nested.slug, name: nested.name }
+        : null;
+    const { competitor_company: _competitor_company, ...rest } = row;
+    void _competitor_company;
+    return { ...rest, resolved };
+  });
+
   return {
     company: company as unknown as CompanyRow,
     filings,
     relatedPersons,
     fundingRounds,
+    competitors,
   };
 }
