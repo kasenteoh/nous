@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -255,3 +255,97 @@ async def replace_related_persons(
     ]
     session.add_all(rows)
     return len(rows)
+
+
+# ---------------------------------------------------------------------------
+# M3: auto-create + fuzzy match (used by VC portfolio refresh + news ingest)
+# ---------------------------------------------------------------------------
+
+
+async def find_company_by_name(
+    session: AsyncSession,
+    name: str,
+    *,
+    similarity_threshold: float = 0.85,
+) -> Company | None:
+    """Find an existing Company by name. Exact normalized match first, then
+    pg_trgm trigram similarity (uses the GIN index from migration 0003).
+
+    Returns the highest-similarity match when multiple rows clear the
+    threshold; returns None when no match.
+
+    The trigram path requires the pg_trgm extension to be installed (handled
+    by migration 0003). If the extension is unavailable, the similarity()
+    call will raise — callers should treat that as a deployment problem,
+    not an "unknown company" signal.
+    """
+    norm = normalize_name(name)
+    if not norm:
+        return None
+
+    exact = await _find_by_normalized_name(session, norm)
+    if exact is not None:
+        return exact
+
+    similarity = func.similarity(Company.normalized_name, norm)
+    stmt = (
+        select(Company)
+        .where(similarity >= similarity_threshold)
+        .order_by(similarity.desc())
+        .limit(1)
+    )
+    result = await session.execute(stmt)
+    return result.scalar_one_or_none()
+
+
+async def auto_create_company(
+    session: AsyncSession,
+    *,
+    name: str,
+    website: str | None,
+    discovered_via: str,
+    similarity_threshold: float = 0.85,
+) -> tuple[Company, bool]:
+    """Find-or-create a Company from a non-Form-D source (VC portfolio, news,
+    TechCrunch). Match via find_company_by_name; insert if not found.
+
+    Returns ``(company, created)`` where ``created`` is True only on insert.
+
+    Behavior on match:
+    - If the existing row has no website but the caller passed one, fill it
+      in opportunistically (never overwrite an already-resolved website).
+    - discovered_via on the existing row is left alone — first-discovery
+      wins (Open Question §6 in the M3 plan).
+
+    Behavior on insert:
+    - cik is NULL (non-Form-D rows don't have a CIK)
+    - hq_country defaults to "US" (consistent with the M1 Form D path)
+    - slug is built via the same _build_slug helper used by upsert_company,
+      with disambiguation via the os.urandom branch since cik is None
+    - description_short stays NULL — M2's enrich-companies stage will fill
+      it from the scraped homepage, which is more authoritative than any
+      VC-portfolio one-liner.
+    """
+    existing = await find_company_by_name(
+        session, name, similarity_threshold=similarity_threshold
+    )
+    if existing is not None:
+        if existing.website is None and website:
+            existing.website = website
+            session.add(existing)
+        return existing, False
+
+    norm = normalize_name(name)
+    slug = await _build_slug(session, name, None, None)
+    company = Company(
+        cik=None,
+        name=name,
+        slug=slug,
+        normalized_name=norm,
+        hq_country="US",
+        website=website,
+        discovered_via=discovered_via,
+    )
+    session.add(company)
+    await session.flush()
+    return company, True

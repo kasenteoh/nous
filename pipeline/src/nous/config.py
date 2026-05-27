@@ -35,3 +35,14 @@ class Settings(BaseSettings):
     # Maximum EDGAR requests per second.  SEC's stated ceiling is 10 req/s;
     # we default to 5.0 to stay comfortably below it.
     EDGAR_REQUESTS_PER_SECOND: float = 5.0
+
+    # ---------------------------------------------------------------------------
+    # M3: auto-create + fuzzy match
+    # ---------------------------------------------------------------------------
+
+    # pg_trgm similarity threshold for fuzzy company-name matching during
+    # auto-create (VC portfolios, news, TechCrunch). 0.85 is the confirmed M3
+    # default; lower it to catch more near-misses, raise it to reduce false
+    # positives. Open Question §5 in the M3 plan flags this for revisit after
+    # the first monthly refresh produces real near-miss data.
+    COMPANY_FUZZY_MATCH_THRESHOLD: float = 0.85
