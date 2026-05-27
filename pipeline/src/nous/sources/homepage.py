@@ -172,6 +172,12 @@ class HomepageClient:
             RobotsBlockedError: if robots.txt disallows the URL.
             httpx.HTTPStatusError: on 4xx (non-429) after retries exhausted.
             httpx.RequestError: on network errors after retries exhausted.
+
+        On HTTP 403 from the httpx path, transparently retries with curl_cffi
+        impersonating Chrome 120 — bypasses Cloudflare/WAF that fingerprint
+        at the TLS layer (e.g. adquick.com 403s every UA from plain httpx but
+        returns 200 to a real Chrome TLS handshake). robots.txt is always
+        checked first; the fallback never sidesteps the robots policy.
         """
         _, robots = self._assert_open()
 
@@ -179,10 +185,88 @@ class HomepageClient:
         if not allowed:
             raise RobotsBlockedError(f"robots.txt disallows: {url}")
 
-        resp = await self._get_with_retry(url)
+        try:
+            resp = await self._get_with_retry(url)
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 403:
+                logger.info(
+                    "fetch: httpx got 403 for %s — retrying with Chrome impersonation",
+                    url,
+                )
+                try:
+                    return await self._fetch_with_chrome_impersonation(url)
+                except Exception as inner:
+                    logger.info(
+                        "fetch: Chrome impersonation also failed for %s: %s: %s",
+                        url,
+                        type(inner).__name__,
+                        inner,
+                    )
+                    # Re-raise the original 403 so the caller's metrics still
+                    # categorize this as "blocked", not "Chrome client crash".
+                    raise exc from None
+            raise
 
         content_type = resp.headers.get("content-type", "")
         # Strip charset suffix if present: "text/html; charset=utf-8" → "text/html"
+        content_type_clean = content_type.split(";")[0].strip()
+
+        return FetchResult(
+            url=str(resp.url),
+            status_code=resp.status_code,
+            content=resp.text,
+            content_type=content_type_clean,
+        )
+
+    async def _fetch_with_chrome_impersonation(self, url: str) -> FetchResult:
+        """Fallback fetcher using curl_cffi with a real Chrome 120 TLS+HTTP2
+        fingerprint. Bypasses Cloudflare/WAF that block requests at the TLS
+        layer rather than via User-Agent string.
+
+        Reuses the per-domain throttle (we still want to be polite even when
+        switching transports). Raises httpx.HTTPStatusError on non-2xx so the
+        caller's existing error handling treats it the same as the primary
+        path.
+        """
+        # Imported lazily so the dependency isn't required at module-load time
+        # — useful for environments where curl_cffi isn't installed yet (older
+        # branches in CI, local dev without `uv sync`, etc.).
+        from curl_cffi.requests import AsyncSession
+
+        parsed = urlparse(url)
+        domain = parsed.netloc
+
+        domain_lock = await self._get_domain_lock(domain)
+        async with domain_lock:
+            now = time.monotonic()
+            last = self._domain_last_request.get(domain, 0.0)
+            wait = self._min_interval - (now - last)
+            if wait > 0:
+                await asyncio.sleep(wait)
+
+            async with AsyncSession() as session:
+                resp = await session.get(
+                    url,
+                    impersonate="chrome120",
+                    timeout=30,
+                    allow_redirects=True,
+                )
+            self._domain_last_request[domain] = time.monotonic()
+
+        if resp.status_code >= 400:
+            # Synthesize an httpx-like exception so the caller's except chain
+            # matches what it expects from the primary fetcher.
+            raise httpx.HTTPStatusError(
+                f"HTTP {resp.status_code} from Chrome-impersonation fetch",
+                request=httpx.Request("GET", url),
+                response=httpx.Response(
+                    resp.status_code,
+                    content=resp.content,
+                    request=httpx.Request("GET", url),
+                ),
+            )
+
+        content_type = resp.headers.get("content-type", "")
         content_type_clean = content_type.split(";")[0].strip()
 
         return FetchResult(
