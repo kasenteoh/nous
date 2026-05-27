@@ -30,6 +30,7 @@ from nous.db.models import (
 )
 from nous.llm.prompts.funding_extraction import FundingExtraction
 from nous.pipeline.extract_funding import run_extract_funding
+from nous.util.slugify import normalize_name
 
 pytestmark = pytest.mark.skipif(
     not os.environ.get("DATABASE_URL"),
@@ -46,7 +47,7 @@ def _make_company(name: str = "TestCo") -> Company:
     return Company(
         name=name,
         slug=f"{name.lower()}-{os.urandom(3).hex()}",
-        normalized_name=name.lower(),
+        normalized_name=normalize_name(name),
         hq_country="US",
     )
 
@@ -166,9 +167,11 @@ async def test_low_confidence_skipped_by_default(
     company = _make_company()
     db.add(company)
     await db.flush()
-    db.add(_make_article(company.id, url="https://news.example.com/low-conf"))
+    article = _make_article(company.id, url="https://news.example.com/low-conf")
+    db.add(article)
     await db.flush()
     await db.commit()
+    article_id = article.id
 
     async def _fake_complete_json(prompt: str, schema: type) -> FundingExtraction:
         return _make_extraction(confidence="low")
@@ -180,6 +183,13 @@ async def test_low_confidence_skipped_by_default(
     summary = await run_extract_funding(db, limit=10, skip_low_confidence=True)
     assert summary.skipped_low_confidence == 1
     assert summary.funding_rounds_created == 0
+
+    # The article must remain processed=False so a future run with a
+    # tightened prompt (or --include-low-confidence) can retry. A low-
+    # confidence extraction is a transient skip, not a terminal one.
+    refetched = await db.get(NewsArticle, article_id)
+    assert refetched is not None
+    assert refetched.processed is False
 
 
 async def test_low_confidence_included_with_opt_in(
