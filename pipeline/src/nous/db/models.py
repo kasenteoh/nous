@@ -227,3 +227,36 @@ class FundingRoundInvestor(Base):
     is_lead: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default="false"
     )
+
+
+class Competitor(Base):
+    """Ranked competitor entry for a company, produced by the M4 analyze-competitors stage.
+
+    Replace-style writes: each monthly run for a company DELETEs existing rows
+    for that company_id then INSERTs the new ranked set inside one transaction.
+    """
+
+    __tablename__ = "competitors"
+
+    company_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("companies.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    # Nullable: many competitors won't match a row in our DB. Resolved via
+    # exact normalized_name lookup in the stage.
+    competitor_company_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("companies.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    competitor_name: Mapped[str] = mapped_column(String, nullable=False)
+    description: Mapped[str | None] = mapped_column(String, nullable=True)
+    reasoning: Mapped[str | None] = mapped_column(String, nullable=True)
+    rank: Mapped[int] = mapped_column(nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("company_id", "rank", name="uq_competitors_company_rank"),
+    )
