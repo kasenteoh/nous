@@ -233,7 +233,9 @@ async def test_happy_path_writes_competitors_and_resolves_links(
     db: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     target = _make_company("Target", industry_group="SaaS")
-    rival = _make_company("RivalCo", industry_group="SaaS")
+    # description_long=None makes RivalCo ineligible for analysis; it only
+    # needs to exist as a resolution target for the LLM-named "RivalCo".
+    rival = _make_company("RivalCo", industry_group="SaaS", description_long=None)
     db.add_all([target, rival])
     await db.flush()
 
@@ -372,7 +374,9 @@ async def test_parse_error_skips_company_and_continues(
 
     async def _fake_complete_json(prompt: str, schema: type) -> CompetitorAnalysis:
         # First call (sorted by name: "Bad" before "Good" alphabetically) raises.
-        if "Bad" in prompt:
+        # Discriminate on the target header "Name: Bad" — not bare "Bad", which
+        # also appears in Good's prompt as a peer entry.
+        if "Name: Bad" in prompt:
             raise LLMParseError("schema mismatch")
         return _fixture_extraction(["X"])
 
