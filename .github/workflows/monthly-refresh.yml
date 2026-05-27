@@ -1,9 +1,10 @@
-name: monthly-vc-refresh
+name: monthly-refresh
 
 on:
   schedule:
-    # 09:00 UTC on the 1st of each month. VC portfolio pages change slowly;
-    # monthly keeps the weekly pipeline lean and respects the firms' sites.
+    # 09:00 UTC on the 1st of each month. Both VC portfolios and competitor
+    # analysis move slowly; one monthly job keeps the weekly pipeline lean
+    # and respects external sites + Gemini quota.
     - cron: "0 9 1 * *"
   workflow_dispatch:
     inputs:
@@ -15,9 +16,13 @@ on:
         description: "Optional pg_trgm threshold for fuzzy match. Default: Settings.COMPANY_FUZZY_MATCH_THRESHOLD (0.85)."
         required: false
         type: string
+      competitor_limit:
+        description: "Max companies analyze-competitors will process this run. Default: 500."
+        required: false
+        type: string
 
 jobs:
-  refresh-vc-portfolios:
+  monthly-refresh:
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -25,6 +30,9 @@ jobs:
     env:
       DATABASE_URL: ${{ secrets.DATABASE_URL }}
       SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+      LLM_PROVIDER: ${{ secrets.LLM_PROVIDER }}
     steps:
       - uses: actions/checkout@v4
 
@@ -54,3 +62,9 @@ jobs:
             ARGS+=(--similarity-threshold "${{ inputs.similarity_threshold }}")
           fi
           uv run nous refresh-vc-portfolios "${ARGS[@]}"
+
+      - name: Analyze competitors
+        run: |
+          LIMIT="${{ inputs.competitor_limit }}"
+          if [ -z "$LIMIT" ]; then LIMIT=500; fi
+          uv run nous analyze-competitors --limit "$LIMIT"
