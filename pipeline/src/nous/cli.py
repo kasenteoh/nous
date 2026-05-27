@@ -121,9 +121,16 @@ def resolve_homepages(limit: int | None, refetch_after_days: int) -> None:
     show_default=True,
     help="Re-scrape companies whose pages are older than N days.",
 )
+@click.option(
+    "--no-browser-fallback",
+    is_flag=True,
+    default=False,
+    help="Disable the headless-Chromium fallback for JS-shell pages.",
+)
 def scrape_homepages(
     limit: int | None,
     refetch_after_days: int,
+    no_browser_fallback: bool,
 ) -> None:
     """Fetch each company's homepage and store raw HTML in raw_pages."""
     import asyncio
@@ -131,6 +138,7 @@ def scrape_homepages(
     from nous.config import Settings
     from nous.db.session import AsyncSessionLocal
     from nous.pipeline.scrape_homepages import run_scrape_homepages
+    from nous.sources.headless_browser import HeadlessBrowserClient
     from nous.sources.homepage import HomepageClient
 
     settings = Settings()
@@ -143,13 +151,22 @@ def scrape_homepages(
             ) as homepage_client,
             AsyncSessionLocal() as session,
         ):
-            summary = await run_scrape_homepages(
-                session,
-                homepage_client,
-                refetch_after_days=refetch_after_days,
-                limit=limit,
-            )
-            click.echo(summary.model_dump_json(indent=2))
+            browser_client: HeadlessBrowserClient | None = None
+            if not no_browser_fallback:
+                browser_client = HeadlessBrowserClient(user_agent=settings.SEC_USER_AGENT)
+                await browser_client.__aenter__()
+            try:
+                summary = await run_scrape_homepages(
+                    session,
+                    homepage_client,
+                    refetch_after_days=refetch_after_days,
+                    limit=limit,
+                    browser_client=browser_client,
+                )
+                click.echo(summary.model_dump_json(indent=2))
+            finally:
+                if browser_client is not None:
+                    await browser_client.__aexit__(None, None, None)
 
     asyncio.run(_run())
 
