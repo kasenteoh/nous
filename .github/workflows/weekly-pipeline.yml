@@ -17,6 +17,10 @@ on:
         description: "Resolve: re-resolve companies whose website_resolved_at is older than N days. 0 = re-resolve everything. Default: 90."
         required: false
         type: string
+      scrape_refetch_after_days:
+        description: "Scrape: re-scrape companies whose raw_pages are older than N days. 0 = re-scrape everything. Default: 90."
+        required: false
+        type: string
       skip_ingest:
         description: "Skip the Ingest filings stage. Useful when you just want to re-run scrape/enrich on existing data."
         required: false
@@ -119,7 +123,12 @@ jobs:
 
       - name: Scrape homepages
         if: ${{ inputs.skip_scrape != true }}
-        run: uv run nous scrape-homepages
+        run: |
+          ARGS=()
+          if [ -n "${{ inputs.scrape_refetch_after_days }}" ]; then
+            ARGS+=(--refetch-after-days "${{ inputs.scrape_refetch_after_days }}")
+          fi
+          uv run nous scrape-homepages "${ARGS[@]}"
 
       - name: Enrich companies
         if: ${{ inputs.skip_enrich != true }}
