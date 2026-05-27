@@ -354,8 +354,44 @@ def extract_funding(limit: int, include_low_confidence: bool) -> None:
 
 
 @cli.command("analyze-competitors")
-def analyze_competitors() -> None:
-    _stub("analyze-competitors")
+@click.option(
+    "--limit",
+    type=int,
+    default=500,
+    show_default=True,
+    help="Maximum number of companies to analyze per run (monthly Gemini budget).",
+)
+@click.option(
+    "--ttl-days",
+    type=int,
+    default=25,
+    show_default=True,
+    help="Skip companies whose competitors were updated within this many days.",
+)
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    default=False,
+    help="Run eligibility + LLM calls but skip the DB write.",
+)
+def analyze_competitors(limit: int, ttl_days: int, dry_run: bool) -> None:
+    """Run the competitor-analysis LLM over eligible companies."""
+    import asyncio
+
+    from nous.db.session import AsyncSessionLocal
+    from nous.pipeline.analyze_competitors import run_analyze_competitors
+
+    async def _run() -> None:
+        async with AsyncSessionLocal() as session:
+            summary = await run_analyze_competitors(
+                session,
+                limit=limit,
+                ttl_days=ttl_days,
+                dry_run=dry_run,
+            )
+            click.echo(summary.model_dump_json(indent=2))
+
+    asyncio.run(_run())
 
 
 @cli.command("estimate-employees")
