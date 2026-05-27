@@ -258,16 +258,25 @@ async def test_auto_create_trigram_match_avoids_duplicate(
 # ---------------------------------------------------------------------------
 
 
-async def test_three_source_arrivals_produce_one_canonical_row(
+async def test_tc_and_vc_arrivals_merge_form_d_arrives_separately(
     db: AsyncSession,
 ) -> None:
-    """Sequence B from the audit playbook: TC first, then VC, then Form D.
+    """Three-source dedup under the post-audit semantics.
 
-    Asserts:
-    - One Company row at the end (not three).
-    - ``discovered_via`` stays ``"techcrunch"`` (first discovery wins).
-    - ``name`` stays ``"OpenAI"`` (first-seen casing wins, not the SEC shouting form).
-    - Form D's CIK is backfilled onto the same row.
+    Step 1 (TC) and step 2 (VC) collapse to one row via ``auto_create_company``'s
+    fuzzy matching — that's the legitimate cross-source merge case.
+
+    Step 3 (Form D) intentionally does NOT merge with the TC/VC row even
+    though the normalized_name matches: the hostile-takeover guard in
+    ``upsert_company`` (see Task 1 of the pre-M5 plan) refuses to backfill
+    a CIK onto a row whose ``discovered_via`` is not ``'form_d'``. The
+    accepted trade-off: an occasional cross-source duplicate is safer than
+    silently merging two distinct real-world entities that happen to share
+    a normalized name.
+
+    End state: two rows. The TC/VC row keeps its identity (name "OpenAI",
+    discovered_via "techcrunch", cik NULL). A separate Form D row carries
+    the SEC entity name and CIK.
     """
     from nous.db.upsert import upsert_company
     from nous.sources.form_d import FormD, FormDAddress
@@ -293,7 +302,8 @@ async def test_three_source_arrivals_produce_one_canonical_row(
     assert vc_created is False
     assert vc_company.id == canonical_id
 
-    # 3. Form D ingest: SEC entity_name "OPENAI, INC." with CIK.
+    # 3. Form D ingest: SEC entity_name "OPENAI, INC." with CIK. Refuses to
+    #    hijack the non-Form-D row — inserts a new row instead.
     form_d = FormD(
         accession_number="0001000999-26-000001",
         cik="0001234567",
@@ -307,22 +317,26 @@ async def test_three_source_arrivals_produce_one_canonical_row(
         related_persons=[],
     )
     fd_company, fd_created = await upsert_company(db, form_d)
-    assert fd_created is False
-    assert fd_company.id == canonical_id
+    assert fd_created is True
+    assert fd_company.id != canonical_id
 
-    # CIK backfilled, but identity preserved.
+    # The new Form D row carries the SEC entity name and CIK.
     assert fd_company.cik == "0001234567"
-    assert fd_company.name == "OpenAI"
-    assert fd_company.discovered_via == "techcrunch"
+    assert fd_company.discovered_via == "form_d"
 
-    # The row count for this name-cluster is exactly one.
+    # The TC/VC row was left untouched.
+    tc_refetched = await db.get(Company, canonical_id, populate_existing=True)
+    assert tc_refetched is not None
+    assert tc_refetched.cik is None
+    assert tc_refetched.name == "OpenAI"
+    assert tc_refetched.discovered_via == "techcrunch"
+
+    # Both rows share the same normalized_name (the audit's accepted duplicate).
     matches = await db.execute(
-        select(Company).where(
-            Company.normalized_name == "openai",
-            Company.id == canonical_id,
-        )
+        select(Company).where(Company.normalized_name == "openai")
     )
-    assert matches.scalar_one_or_none() is not None
+    rows = matches.scalars().all()
+    assert {r.id for r in rows} == {canonical_id, fd_company.id}
 
 
 async def test_auto_create_upgrades_lowercase_display_name(db: AsyncSession) -> None:
