@@ -137,10 +137,13 @@ async def test_auto_create_inserts_new_row(db: AsyncSession) -> None:
 async def test_auto_create_returns_existing_on_exact_match(
     db: AsyncSession,
 ) -> None:
+    # Use "Company" not "Co" — "Co" is in slugify._SUFFIX_PATTERN, so
+    # normalize_name("Existing Co") == "existing" (not "existing co"), which
+    # would defeat the exact-match path for this test.
     existing = make_company(
-        name="Existing Co",
-        slug=f"existing-co-{os.urandom(3).hex()}",
-        normalized_name="existing co",
+        name="Existing Company",
+        slug=f"existing-company-{os.urandom(3).hex()}",
+        normalized_name="existing company",
     )
     db.add(existing)
     await db.flush()
@@ -148,7 +151,7 @@ async def test_auto_create_returns_existing_on_exact_match(
 
     company, created = await auto_create_company(
         db,
-        name="Existing Co",
+        name="Existing Company",
         website="https://new-website.example/",
         discovered_via="vc_portfolio",
     )
@@ -161,9 +164,9 @@ async def test_auto_create_backfills_website_when_missing(
 ) -> None:
     """An existing row with no website gets the auto-create's URL filled in."""
     existing = make_company(
-        name="No Site Co",
-        slug=f"no-site-co-{os.urandom(3).hex()}",
-        normalized_name="no site co",
+        name="No Site Company",
+        slug=f"no-site-company-{os.urandom(3).hex()}",
+        normalized_name="no site company",
         website=None,
     )
     db.add(existing)
@@ -172,7 +175,7 @@ async def test_auto_create_backfills_website_when_missing(
 
     _, created = await auto_create_company(
         db,
-        name="No Site Co",
+        name="No Site Company",
         website="https://nosite.example/",
         discovered_via="vc_portfolio",
     )
@@ -188,9 +191,9 @@ async def test_auto_create_does_not_overwrite_existing_website(
     db: AsyncSession,
 ) -> None:
     existing = make_company(
-        name="Has Site Co",
-        slug=f"has-site-co-{os.urandom(3).hex()}",
-        normalized_name="has site co",
+        name="Has Site Company",
+        slug=f"has-site-company-{os.urandom(3).hex()}",
+        normalized_name="has site company",
         website="https://resolved-by-m2.example/",
     )
     db.add(existing)
@@ -199,7 +202,7 @@ async def test_auto_create_does_not_overwrite_existing_website(
 
     await auto_create_company(
         db,
-        name="Has Site Co",
+        name="Has Site Company",
         website="https://vc-claimed-url.example/",
         discovered_via="vc_portfolio",
     )

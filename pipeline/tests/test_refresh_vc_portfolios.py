@@ -180,12 +180,15 @@ async def test_rerun_is_idempotent(
 ) -> None:
     """Second run matches the first run's inserts; nothing new is created."""
     suffix = os.urandom(3).hex()
+    # Use trigram-dissimilar base names. "Idempotent Co A" vs "...Co B" share
+    # too many trigrams (>0.85) and the fuzzy-match path collapses them into
+    # one row. Distinct base names defeat that.
     fakes = {
         "idemfirm": FakeAdapter(
             firm="idemfirm",
             entries=[
-                _entry("idemfirm", f"Idempotent Co A {suffix}"),
-                _entry("idemfirm", f"Idempotent Co B {suffix}"),
+                _entry("idemfirm", f"Aurora Health {suffix}"),
+                _entry("idemfirm", f"Pinecone Robotics {suffix}"),
             ],
         ),
     }
