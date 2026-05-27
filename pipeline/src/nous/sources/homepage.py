@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from collections.abc import Iterable
 from urllib.parse import urlparse
@@ -22,6 +23,8 @@ from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponen
 from nous.sources.duckduckgo import DuckDuckGoSearch, is_aggregator
 from nous.sources.robots import RobotsCache
 from nous.util.slugify import strip_corporate_suffix
+
+logger = logging.getLogger(__name__)
 
 
 class FetchResult(BaseModel):
@@ -235,9 +238,21 @@ async def resolve_homepage(
         if slug_base.replace("-", " ") in visible_text or slug_base in visible_text:
             return result.url  # final URL after any redirects
 
-    # Phase 2: DuckDuckGo search fallback
+    # Phase 2: DuckDuckGo search fallback. Treat any failure (network error,
+    # captcha interstitial, malformed HTML, missing context-manager state) as
+    # "no candidates" rather than letting the stage record an error — DDG is
+    # supplementary; a broken fallback shouldn't reclassify a no-match as an
+    # error and prevent website_resolved_at from being set.
     query = f'"{company_name}" startup'
-    candidates = await client.search_companies(query, limit=10)
+    try:
+        candidates = await client.search_companies(query, limit=10)
+    except Exception:
+        logger.warning(
+            "DDG search fallback failed for %s; treating as no candidates",
+            company_name,
+            exc_info=True,
+        )
+        candidates = []
 
     name_lower = company_name.lower()
     # Strip corporate suffixes for a more lenient page-text match.
