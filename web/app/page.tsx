@@ -6,7 +6,10 @@ import { listCompanies } from "@/lib/queries";
 import { formatDate, formatLocation, formatUsd } from "@/lib/format";
 
 export default async function Home() {
-  const companies = await listCompanies({ limit: 50, offset: 0 });
+  // Stopgap until the M5 search/filter/pagination UI lands (spec §7.2).
+  // The hard 50-row cap was hiding everything past "Censys" alphabetically,
+  // including all VC-portfolio-discovered companies named D–Z.
+  const companies = await listCompanies({ limit: 500, offset: 0 });
 
   return (
     <main className="flex-1 px-6 py-12 max-w-6xl mx-auto w-full">
