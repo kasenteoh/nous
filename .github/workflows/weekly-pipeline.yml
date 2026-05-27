@@ -81,6 +81,22 @@ jobs:
       - name: Install pipeline dependencies
         run: uv sync
 
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          # Playwright caches Chromium under ~/.cache/ms-playwright. Pinning
+          # by playwright version in pyproject.toml gives a clean cache-busting
+          # signal whenever we bump the dep.
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('pipeline/uv.lock') }}
+          restore-keys: |
+            playwright-${{ runner.os }}-
+
+      - name: Install Playwright Chromium
+        # `--with-deps` would also install OS-level libs (libnss3 etc.) but
+        # GitHub-hosted ubuntu-latest already ships them, so skip the apt step.
+        run: uv run playwright install chromium
+
       - name: Apply migrations
         run: uv run alembic upgrade head
 

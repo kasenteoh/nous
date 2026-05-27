@@ -18,12 +18,14 @@ never had. The discovery approach below uses what the site actually links to:
 So a typical company contributes 1 (homepage) + ≤3 (discovered) = ≤4
 real-existing pages. No 404 noise.
 
-Commit cadence: one commit per company so a mid-run crash leaves a clean state.
+JS-shell fallback: if the httpx-fetched HTML extracts to less than
+``_BROWSER_FALLBACK_TEXT_THRESHOLD`` chars of visible text (a sign that the
+page is a React/Next.js shell waiting for hydration), the optional
+``browser_client`` is used to re-fetch via headless Chromium, replacing the
+stored content with the JS-rendered DOM. This recovers sites like
+anspect-technologies.com that have no static body content at all.
 
-Known limitation (~21% of companies): sites behind Cloudflare/WAF that
-fingerprint at the TLS/IP layer (e.g. adquick.com) reject the GitHub Actions
-runner outright with 403, regardless of User-Agent. Recovering those would
-require a headless browser (Playwright) or residential proxy — left to M5.
+Commit cadence: one commit per company so a mid-run crash leaves a clean state.
 """
 
 from __future__ import annotations
@@ -41,7 +43,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from nous.db.models import Company, RawPage
 from nous.db.upsert import upsert_raw_page
+from nous.sources.headless_browser import HeadlessBrowserClient
 from nous.sources.homepage import FetchResult, HomepageClient, RobotsBlockedError
+from nous.util.text import extract_visible_text
+
+# Below this many chars of extracted visible text, the page is almost
+# certainly a JS-only SPA shell — trigger the headless-browser fallback if
+# one is configured.
+_BROWSER_FALLBACK_TEXT_THRESHOLD: int = 200
 
 logger = logging.getLogger(__name__)
 
@@ -131,6 +140,10 @@ class ScrapeSummary(BaseModel):
     pages_skipped_robots: int = 0
     pages_failed: int = 0
     companies_with_no_pages: int = 0
+    # Count of pages where the static httpx HTML was too thin to enrich and
+    # the headless-browser fallback produced richer content that we stored
+    # instead. Useful signal for "how much JS-shell content are we rescuing?"
+    pages_via_browser_fallback: int = 0
 
 
 async def _fetch_one(
@@ -166,18 +179,67 @@ async def _fetch_one(
 
 
 async def _persist_fetched_page(
-    session: AsyncSession, company_id: object, result: FetchResult
+    session: AsyncSession,
+    company_id: object,
+    *,
+    url: str,
+    content: str,
 ) -> None:
     """Sanitize + upsert the page. Postgres TEXT rejects NUL bytes; some sites
     serve binary disguised as text/html, so strip them defensively.
     """
-    sanitized_content = result.content.replace("\x00", "")
+    sanitized_content = content.replace("\x00", "")
     await upsert_raw_page(
         session,
         company_id=company_id,  # type: ignore[arg-type]
-        url=result.url,  # final URL after redirects
+        url=url,
         content=sanitized_content,
     )
+
+
+async def _resolve_content_with_fallback(
+    static_result: FetchResult,
+    browser_client: HeadlessBrowserClient | None,
+) -> tuple[str, bool]:
+    """Return ``(content, used_browser_fallback)`` for a fetched page.
+
+    If the static HTML extracts to too little visible text AND a browser
+    client is configured, fetch the same URL via headless Chromium and
+    return that instead. Falls back to the static content when the browser
+    path fails or returns no improvement.
+    """
+    if browser_client is None:
+        return static_result.content, False
+
+    static_text_len = len(extract_visible_text(static_result.content))
+    if static_text_len >= _BROWSER_FALLBACK_TEXT_THRESHOLD:
+        return static_result.content, False
+
+    logger.info(
+        "scrape: static HTML too thin (%d chars) for %s — trying browser fallback",
+        static_text_len,
+        static_result.url,
+    )
+    rendered = await browser_client.fetch_rendered_html(static_result.url)
+    if rendered is None:
+        return static_result.content, False
+    rendered_text_len = len(extract_visible_text(rendered))
+    if rendered_text_len <= static_text_len:
+        # Browser didn't actually help (still empty, or worse). Keep static.
+        logger.info(
+            "scrape: browser fallback for %s returned %d chars (≤ static %d) — keeping static",
+            static_result.url,
+            rendered_text_len,
+            static_text_len,
+        )
+        return static_result.content, False
+    logger.info(
+        "scrape: browser fallback for %s recovered %d chars (was %d static)",
+        static_result.url,
+        rendered_text_len,
+        static_text_len,
+    )
+    return rendered, True
 
 
 async def run_scrape_homepages(
@@ -187,12 +249,17 @@ async def run_scrape_homepages(
     refetch_after_days: int = 90,
     limit: int | None = None,
     max_extra_pages: int = 3,
+    browser_client: HeadlessBrowserClient | None = None,
 ) -> ScrapeSummary:
     """For each company with website set AND no recent raw_pages:
-    1. Fetch the homepage.
-    2. Discover up to ``max_extra_pages`` relevant internal links from it
-       (about / team / product / etc., scored against page link text + path).
-    3. Fetch and persist each.
+    1. Fetch the homepage via the static httpx client.
+    2. If the page extracts to too few chars of visible text and a
+       ``browser_client`` was supplied, re-fetch via headless Chromium and
+       store the JS-rendered DOM instead.
+    3. Discover up to ``max_extra_pages`` relevant internal links from the
+       fetched HTML (about / team / product / etc., scored against link text
+       + path).
+    4. Fetch and persist each.
 
     A company is eligible when:
     - company.website IS NOT NULL, AND
@@ -252,18 +319,26 @@ async def run_scrape_homepages(
             continue
         assert isinstance(homepage, FetchResult)
 
-        await _persist_fetched_page(session, company.id, homepage)
+        homepage_content, used_browser = await _resolve_content_with_fallback(
+            homepage, browser_client
+        )
+        if used_browser:
+            summary.pages_via_browser_fallback += 1
+        await _persist_fetched_page(
+            session, company.id, url=homepage.url, content=homepage_content
+        )
         summary.pages_fetched += 1
 
-        # Step 2: discover relevant subpages from the homepage HTML.
-        # Use the post-redirect URL as the base so relative links resolve correctly.
+        # Step 2: discover relevant subpages from whichever HTML we ended up
+        # storing (JS-rendered version contains the real <a> tags too).
         discovered = _extract_relevant_links(
-            homepage.content,
+            homepage_content,
             base_url=homepage.url,
             max_links=max_extra_pages,
         )
 
-        # Step 3: fetch each discovered link.
+        # Step 3: fetch each discovered link. Browser fallback applies the
+        # same way for sub-pages — many SPAs render every route via JS.
         for sub_url in discovered:
             sub = await _fetch_one(client, sub_url)
             if sub == "robots":
@@ -273,7 +348,14 @@ async def run_scrape_homepages(
                 summary.pages_failed += 1
                 continue
             assert isinstance(sub, FetchResult)
-            await _persist_fetched_page(session, company.id, sub)
+            sub_content, sub_used_browser = await _resolve_content_with_fallback(
+                sub, browser_client
+            )
+            if sub_used_browser:
+                summary.pages_via_browser_fallback += 1
+            await _persist_fetched_page(
+                session, company.id, url=sub.url, content=sub_content
+            )
             summary.pages_fetched += 1
 
         await session.commit()
