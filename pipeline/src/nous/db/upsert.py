@@ -474,6 +474,11 @@ async def reconcile_funding_round(
             and extraction.valuation_post_money_usd is not None
         ):
             existing.valuation_post_money = extraction.valuation_post_money_usd
+        if (
+            existing.valuation_source is None
+            and extraction.valuation_source is not None
+        ):
+            existing.valuation_source = extraction.valuation_source
         if existing.announced_date is None and extraction.announced_date is not None:
             existing.announced_date = extraction.announced_date
         if _is_more_confident(extraction.confidence, existing.extraction_confidence):
@@ -487,6 +492,7 @@ async def reconcile_funding_round(
         round_type=extraction.round_type,
         amount_raised=extraction.amount_raised_usd,
         valuation_post_money=extraction.valuation_post_money_usd,
+        valuation_source=extraction.valuation_source,
         announced_date=extraction.announced_date,
         primary_news_url=primary_news_url,
         extraction_confidence=extraction.confidence,
