@@ -4,6 +4,7 @@ from uuid import UUID
 
 from sqlalchemy import (
     Boolean,
+    CheckConstraint,
     Date,
     DateTime,
     ForeignKey,
@@ -171,6 +172,13 @@ class FundingRound(Base):
     """
 
     __tablename__ = "funding_rounds"
+    __table_args__ = (
+        CheckConstraint(
+            "extraction_confidence IN ('low', 'medium', 'high') "
+            "OR extraction_confidence IS NULL",
+            name="ck_funding_rounds_extraction_confidence",
+        ),
+    )
 
     company_id: Mapped[UUID] = mapped_column(
         PG_UUID(as_uuid=True),
