@@ -14,10 +14,19 @@ the alt is missing.
 
 from __future__ import annotations
 
+import re
+
 from selectolax.parser import HTMLParser
 
 from nous.sources.homepage import HomepageClient
 from nous.sources.vc_portfolios.base import PortfolioEntry
+
+# Greylock logo alts carry inconsistent decorated suffixes — "<Name> Logo",
+# "<Name> Logo Grey", "<Name> Logo NEW", "<Name> Logo NEW 2" — so we strip from
+# the first whitespace-delimited "logo" token onward rather than only an exact
+# trailing " Logo". Requires whitespace before "logo" so a name like "Cologo"
+# is left intact.
+_LOGO_SUFFIX_RE = re.compile(r"\s+logo\b.*$", re.IGNORECASE)
 
 
 class GreylockAdapter:
@@ -61,11 +70,9 @@ def _extract_name(modal: object, slug: str) -> str | None:
     if logo_img is not None:
         alt = (logo_img.attributes.get("alt") or "").strip()
         if alt:
-            # Greylock alts are uniformly "<Name> Logo".
-            if alt.lower().endswith(" logo"):
-                alt = alt[: -len(" logo")].strip()
-            if alt:
-                return alt
+            cleaned = _LOGO_SUFFIX_RE.sub("", alt).strip()
+            if cleaned:
+                return cleaned
     # Fallback: derive from id slug (e.g. "palo-alto-networks" -> "Palo Alto Networks").
     return slug.replace("-", " ").title() if slug else None
 

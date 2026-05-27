@@ -309,6 +309,22 @@ async def find_company_by_name(
     return result.scalar_one_or_none()
 
 
+def _is_lowercase_variant_of(new: str, existing: str) -> bool:
+    """True when ``existing`` is exactly the all-lowercase form of ``new``.
+
+    Used to cross-reference casing across sources: the same company often
+    appears in several VC portfolios (and news) with different casing —
+    e.g. Greylock's logo alt yields ``airbnb`` while a16z yields ``Airbnb``.
+    Since they dedupe to one row, we let a properly-cased name upgrade an
+    all-lowercase display name regardless of which source landed first.
+
+    The condition is intentionally strict — ``existing == new.lower()`` — so
+    it only fires on pure casing differences, never swapping in a different
+    (fuzzy-matched) name.
+    """
+    return new != existing and existing == new.lower()
+
+
 async def auto_create_company(
     session: AsyncSession,
     *,
@@ -325,6 +341,9 @@ async def auto_create_company(
     Behavior on match:
     - If the existing row has no website but the caller passed one, fill it
       in opportunistically (never overwrite an already-resolved website).
+    - If the existing display name is the all-lowercase form of the incoming
+      name, upgrade it to the better-cased version (cross-source casing fix).
+      The slug/normalized_name are unaffected (both already lowercased).
     - discovered_via on the existing row is left alone — first-discovery
       wins (Open Question §6 in the M3 plan).
 
@@ -343,6 +362,9 @@ async def auto_create_company(
     if existing is not None:
         if existing.website is None and website:
             existing.website = website
+            session.add(existing)
+        if _is_lowercase_variant_of(name, existing.name):
+            existing.name = name
             session.add(existing)
         return existing, False
 

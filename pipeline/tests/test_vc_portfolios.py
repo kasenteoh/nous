@@ -251,6 +251,26 @@ async def test_khosla_adapter_aggregates_categories() -> None:
 
 
 @pytest.mark.asyncio
+async def test_greylock_strips_logo_suffixes_from_names() -> None:
+    """Greylock logo alts carry decorated suffixes ("X Logo Grey", "X Logo NEW
+    2"); none of them should leak into the company name."""
+    adapter = ADAPTERS["greylock"]
+    routes = _html_routes(adapter.PORTFOLIO_URL, FIXTURES / "greylock.html")  # type: ignore[attr-defined]
+    async with HomepageClient(user_agent=USER_AGENT) as client:
+        _inject_transport(client, _MockTransport(routes))
+        entries = await adapter.fetch(client)
+
+    offenders = [e.name for e in entries if "logo" in e.name.lower()]
+    assert not offenders, f"Greylock names still contain 'logo': {offenders}"
+
+    names = {e.name for e in entries}
+    # Known decorated-suffix cases from the fixture collapse to the clean name.
+    assert "Ava" in names
+    assert "Atomic AI" in names
+    assert "Ramp" in names
+
+
+@pytest.mark.asyncio
 async def test_lightspeed_yields_no_websites() -> None:
     adapter = ADAPTERS["lightspeed"]
     routes = _html_routes(adapter.PORTFOLIO_URL, FIXTURES / "lightspeed.html")  # type: ignore[attr-defined]

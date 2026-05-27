@@ -254,3 +254,52 @@ async def test_auto_create_trigram_match_avoids_duplicate(
         discovered_via="news",
     )
     assert created is False
+
+
+async def test_auto_create_upgrades_lowercase_display_name(db: AsyncSession) -> None:
+    """An all-lowercase name (e.g. from Greylock) is upgraded when the same
+    company arrives properly-cased from another source."""
+    existing = make_company(
+        name="airbnb",
+        slug=f"airbnb-{os.urandom(3).hex()}",
+        normalized_name="airbnb",
+        discovered_via="vc_portfolio",
+    )
+    db.add(existing)
+    await db.flush()
+    await db.commit()
+
+    company, created = await auto_create_company(
+        db,
+        name="Airbnb",
+        website=None,
+        discovered_via="vc_portfolio",
+    )
+    assert created is False
+    assert company.id == existing.id
+    await db.commit()
+
+    refetched = await db.get(Company, existing.id)
+    assert refetched is not None
+    assert refetched.name == "Airbnb"
+
+
+async def test_auto_create_does_not_downgrade_cased_name(db: AsyncSession) -> None:
+    """A properly-cased existing name is never overwritten by a lowercase one."""
+    existing = make_company(
+        name="Airbnb",
+        slug=f"airbnb-{os.urandom(3).hex()}",
+        normalized_name="airbnb",
+    )
+    db.add(existing)
+    await db.flush()
+    await db.commit()
+
+    await auto_create_company(
+        db, name="airbnb", website=None, discovered_via="news"
+    )
+    await db.commit()
+
+    refetched = await db.get(Company, existing.id)
+    assert refetched is not None
+    assert refetched.name == "Airbnb"
