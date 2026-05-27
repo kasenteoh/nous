@@ -1,8 +1,8 @@
 """Tests for the ingest-news stage.
 
-Unit tests (always run) cover the TC title parser.
-DB-integration tests (skipped without DATABASE_URL) cover persistence,
-idempotency, and the TC broad-ingest auto-create path.
+Unit tests (always run) cover the LLM-backed TC company extractor with
+``complete_json`` mocked. DB-integration tests (skipped without DATABASE_URL)
+cover persistence, idempotency, and the TC broad-ingest auto-create path.
 """
 
 from __future__ import annotations
@@ -16,62 +16,80 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from nous.db.models import Company, NewsArticle
+from nous.llm.prompts.news_company import HeadlineCompany
 from nous.pipeline.ingest_news import (
-    _extract_company_name_from_tc_title,
+    _extract_company_from_tc_result,
     run_ingest_news,
 )
 from nous.sources.news import NewsArticleResult
 
+
+def _tc_result(title: str, snippet: str = "snippet") -> NewsArticleResult:
+    return NewsArticleResult(
+        url="https://techcrunch.com/x",
+        title=title,
+        source="techcrunch.com",
+        published_date=None,
+        raw_content=snippet,
+    )
+
+
+def _mock_headline(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    is_funding: bool,
+    name: str | None,
+) -> None:
+    """Patch complete_json in the ingest-news module to return a canned HeadlineCompany."""
+
+    async def _fake(prompt: str, schema: type) -> HeadlineCompany:
+        assert schema is HeadlineCompany
+        return HeadlineCompany(is_funding_announcement=is_funding, company_name=name)
+
+    monkeypatch.setattr("nous.pipeline.ingest_news.complete_json", _fake)
+
+
 # ---------------------------------------------------------------------------
-# Unit tests for the TC title parser
+# Unit tests for the LLM-backed TC company extractor
 # ---------------------------------------------------------------------------
 
 
-class TestExtractCompanyNameFromTcTitle:
-    def test_simple_raises(self) -> None:
-        assert _extract_company_name_from_tc_title("Stord raises $250M") == "Stord"
-
-    def test_closes_seed(self) -> None:
-        assert (
-            _extract_company_name_from_tc_title("Acme Inc closes $5M seed round")
-            == "Acme Inc"
+class TestExtractCompanyFromTcResult:
+    async def test_returns_clean_name_for_funding(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _mock_headline(monkeypatch, is_funding=True, name="Stord")
+        name = await _extract_company_from_tc_result(
+            _tc_result("Amazon fulfillment competitor Stord raises $250M")
         )
+        assert name == "Stord"
 
-    def test_secures_series_a(self) -> None:
-        assert (
-            _extract_company_name_from_tc_title("Foo Bar secures $50M Series A")
-            == "Foo Bar"
+    async def test_non_funding_returns_none(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _mock_headline(monkeypatch, is_funding=False, name=None)
+        name = await _extract_company_from_tc_result(
+            _tc_result("The state of AI in 2026")
         )
+        assert name is None
 
-    def test_multiword_company(self) -> None:
-        assert (
-            _extract_company_name_from_tc_title("Ricursive Intelligence raises $300M")
-            == "Ricursive Intelligence"
+    async def test_funding_but_no_name_returns_none(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _mock_headline(monkeypatch, is_funding=True, name=None)
+        name = await _extract_company_from_tc_result(
+            _tc_result("An unnamed startup raised a big round")
         )
+        assert name is None
 
-    def test_compound_with_and_returned_as_is(self) -> None:
-        # "Foo and Bar raises $10M" is ambiguous (could be two companies or
-        # a single company named "Foo and Bar"). We return the full candidate
-        # and let the funding-extraction LLM verify whether the article is
-        # actually about that name.
-        result = _extract_company_name_from_tc_title("Foo and Bar raises $10M")
-        assert result == "Foo and Bar"
-
-    def test_no_verb_returns_none(self) -> None:
-        assert _extract_company_name_from_tc_title("The state of AI in 2026") is None
-
-    def test_too_short_returns_none(self) -> None:
-        assert _extract_company_name_from_tc_title("X raises $5M") is None
-
-    def test_implausibly_long_returns_none(self) -> None:
-        long_name = "A" + "b" * 100 + " raises $5M"
-        assert _extract_company_name_from_tc_title(long_name) is None
-
-    def test_announces_variant(self) -> None:
-        assert (
-            _extract_company_name_from_tc_title("Globex announces $20M Series B")
-            == "Globex"
+    async def test_blank_name_returns_none(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _mock_headline(monkeypatch, is_funding=True, name="   ")
+        name = await _extract_company_from_tc_result(
+            _tc_result("Something raises money")
         )
+        assert name is None
 
 
 # ---------------------------------------------------------------------------
@@ -216,6 +234,7 @@ async def test_tc_broad_auto_creates_company(
     monkeypatch.setattr(
         "nous.pipeline.ingest_news.fetch_techcrunch_funding_articles", _tc
     )
+    _mock_headline(monkeypatch, is_funding=True, name="NewCo")
 
     client = _MockNewsClient(
         rss_results={},
@@ -234,11 +253,11 @@ async def test_tc_broad_auto_creates_company(
 
 
 @pytestmark_db
-async def test_tc_unparseable_title_is_skipped(
+async def test_tc_non_funding_is_skipped(
     db: AsyncSession,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A TC article whose title doesn't match the pattern is counted but not inserted."""
+    """A TC item the LLM judges as not-a-funding-announcement is counted, not inserted."""
     bad_article = NewsArticleResult(
         url="https://techcrunch.com/2026/05/01/the-future-of-ai",
         title="The future of AI in 2026",
@@ -253,10 +272,11 @@ async def test_tc_unparseable_title_is_skipped(
     monkeypatch.setattr(
         "nous.pipeline.ingest_news.fetch_techcrunch_funding_articles", _tc
     )
+    _mock_headline(monkeypatch, is_funding=False, name=None)
 
     client = _MockNewsClient(rss_results={}, bodies={})
     summary = await run_ingest_news(db, client, include_techcrunch_broad=True)
-    assert summary.tc_skipped_unparseable_title == 1
+    assert summary.tc_skipped_no_company == 1
     assert summary.articles_inserted == 0
     assert summary.auto_created_companies == 0
 
