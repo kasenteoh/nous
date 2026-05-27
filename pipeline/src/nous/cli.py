@@ -355,6 +355,86 @@ def estimate_employees() -> None:
     _stub("estimate-employees")
 
 
+@cli.command("diagnose-gemini")
+@click.option(
+    "--n",
+    type=int,
+    default=3,
+    show_default=True,
+    help="Number of tiny back-to-back test requests to fire.",
+)
+def diagnose_gemini(n: int) -> None:
+    """Hit Gemini with N tiny requests and dump per-call timing + raw errors.
+
+    Use this to see exactly which quota dimension trips (per-minute RPM,
+    per-day RPD, or token-per-minute TPM) when the enrich-companies stage
+    appears to rate-limit early. Reads GEMINI_API_KEY from your local .env.
+    """
+    import asyncio
+    import time
+    from datetime import UTC, datetime
+
+    from pydantic import BaseModel
+
+    from nous.config import Settings
+    from nous.llm.client import (
+        LLMError,
+        LLMParseError,
+        LLMRateLimitError,
+        complete_json,
+    )
+
+    settings = Settings()
+    if not settings.GEMINI_API_KEY:
+        click.echo("ERROR: GEMINI_API_KEY is not set in your environment / .env")
+        raise SystemExit(1)
+
+    class TinyResponse(BaseModel):
+        word: str
+
+    prompt = (
+        "Reply with a JSON object {\"word\": \"<a single random English noun>\"}. "
+        "Return ONLY the JSON object, no surrounding text."
+    )
+
+    async def _run() -> None:
+        click.echo(f"Started at {datetime.now(tz=UTC).isoformat()} UTC")
+        click.echo(f"Firing {n} requests against gemini-2.5-flash with a ~3-token prompt.")
+        click.echo("---")
+        for i in range(1, n + 1):
+            t0 = time.monotonic()
+            try:
+                result = await complete_json(prompt, TinyResponse)
+                elapsed_ms = int((time.monotonic() - t0) * 1000)
+                click.echo(
+                    f"[{i}/{n}] OK in {elapsed_ms}ms — word={result.word!r}"
+                )
+            except LLMRateLimitError as exc:
+                elapsed_ms = int((time.monotonic() - t0) * 1000)
+                click.echo(
+                    f"[{i}/{n}] RATE LIMIT (HTTP 429) in {elapsed_ms}ms"
+                )
+                click.echo(f"        Raw error: {exc}")
+                click.echo(
+                    "        ^ Check the message above for the specific quota"
+                    " dimension (per-minute RPM / per-day RPD / TPM)."
+                )
+                break
+            except LLMParseError as exc:
+                elapsed_ms = int((time.monotonic() - t0) * 1000)
+                click.echo(f"[{i}/{n}] PARSE ERROR in {elapsed_ms}ms: {exc}")
+            except LLMError as exc:
+                elapsed_ms = int((time.monotonic() - t0) * 1000)
+                click.echo(f"[{i}/{n}] LLM ERROR in {elapsed_ms}ms: {exc}")
+        click.echo("---")
+        click.echo(
+            "Next step: open https://aistudio.google.com/rate-limit?timeRange=last-28-days"
+            " to see your account's current quota usage."
+        )
+
+    asyncio.run(_run())
+
+
 def main() -> None:
     cli()
 

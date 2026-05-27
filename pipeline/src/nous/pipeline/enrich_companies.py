@@ -111,11 +111,15 @@ async def run_enrich_companies(
 
         try:
             description: CompanyDescription = await complete_json(prompt, CompanyDescription)
-        except LLMRateLimitError:
+        except LLMRateLimitError as exc:
+            # Surface the full 429 body so we can see *which* quota tripped
+            # (per-minute RPM vs per-day RPD vs token-per-minute TPM) instead
+            # of guessing from the bare "rate limit" signal.
             logger.warning(
-                "Gemini rate limit hit while enriching %s — stopping loop to avoid"
-                " further quota exhaustion.",
+                "Gemini rate limit hit while enriching %s — stopping loop to"
+                " avoid further quota exhaustion. Raw error: %s",
                 company.name,
+                exc,
             )
             summary.skipped_rate_limited += 1
             # Stop the entire loop — don't keep hammering the free tier.
