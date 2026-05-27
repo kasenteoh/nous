@@ -119,9 +119,10 @@ async def run_extract_funding(
 
         if skip_low_confidence and extraction.confidence == "low":
             summary.skipped_low_confidence += 1
-            article.processed = True
-            session.add(article)
-            await session.commit()
+            # Leave processed=False so a future run with a tightened prompt
+            # (or `--include-low-confidence`) can retry. "Not a funding
+            # announcement" is terminal-skip above; "low confidence" is a
+            # transient-skip pending better extraction.
             continue
 
         funding_round, created = await reconcile_funding_round(

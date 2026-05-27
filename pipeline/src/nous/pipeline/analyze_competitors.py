@@ -37,6 +37,7 @@ from nous.llm.prompts.competitor_analysis import (
     Target,
     build_prompt,
 )
+from nous.util.slugify import normalize_name
 
 logger = logging.getLogger(__name__)
 
@@ -135,11 +136,14 @@ async def resolve_competitor_company_id(
 ) -> UUID | None:
     """Look up an indexed company by exact normalized_name match.
 
-    The Company.normalized_name column is populated by M1/M3 upsert paths
-    using the same lowercase strategy applied here. Fuzzy match is
-    deliberately deferred — spec §10 lists it as out-of-scope for M4.
+    Uses ``normalize_name`` from ``nous.util.slugify`` — the same helper that
+    populates ``Company.normalized_name`` at insert/upsert time. This is what
+    lets an LLM-emitted "OpenAI, Inc." resolve to the row whose stored
+    normalized_name is "openai" (corporate suffix stripped, whitespace
+    collapsed). Fuzzy match is deliberately deferred — spec §10 lists it as
+    out-of-scope for M4.
     """
-    normalized = name.strip().lower()
+    normalized = normalize_name(name)
     if not normalized:
         return None
     stmt = select(Company.id).where(Company.normalized_name == normalized).limit(1)

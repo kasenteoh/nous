@@ -77,22 +77,22 @@ def slugify(name: str) -> str:
 
 
 def normalize_name(name: str) -> str:
-    """Return a match key for de-duplication: lowercase, suffix-stripped, collapsed whitespace.
+    """Return a match key: lowercase, suffix-stripped, no whitespace or punctuation.
 
-    Like slugify but uses spaces instead of hyphens — used as a secondary
-    match key when CIK is absent.
+    Used purely as a comparison key — never shown to users.  Stripping internal
+    whitespace lets "OpenAI" and "Open AI Inc" collide on the same key so the
+    same real company isn't split into two rows by stylization.
 
     Examples:
-        "Acme, Inc."  → "acme"
-        "Foo Bar LLC" → "foo bar"
-        "Café Co."    → "cafe"
+        "Acme, Inc."   → "acme"
+        "Foo Bar LLC"  → "foobar"
+        "Open AI Inc"  → "openai"
+        "Café Co."     → "cafe"
     """
     cleaned = _normalize_unicode(name)
     cleaned = _strip_suffixes(cleaned)
     cleaned = cleaned.lower()
-    # Collapse any sequence of whitespace/punctuation to a single space.
-    cleaned = re.sub(r"[^a-z0-9]+", " ", cleaned)
-    return cleaned.strip()
+    return re.sub(r"[^a-z0-9]+", "", cleaned)
 
 
 def slug_with_disambiguator(base: str, cik: str | None) -> str:

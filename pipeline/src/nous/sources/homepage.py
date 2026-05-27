@@ -21,8 +21,13 @@ from selectolax.parser import HTMLParser
 from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
 
 from nous.sources.duckduckgo import DuckDuckGoSearch, is_aggregator
-from nous.sources.robots import RobotsCache
+from nous.sources.robots import RobotsBlockedError, RobotsCache
 from nous.util.slugify import strip_corporate_suffix
+
+# Re-export for backwards compatibility — callers that did
+# `from nous.sources.homepage import RobotsBlockedError` continue to work,
+# but the canonical home is now nous.sources.robots.
+__all__ = ["FetchResult", "HomepageClient", "RobotsBlockedError"]
 
 logger = logging.getLogger(__name__)
 
@@ -32,11 +37,6 @@ class FetchResult(BaseModel):
     status_code: int
     content: str
     content_type: str   # e.g. "text/html"
-
-
-class RobotsBlockedError(Exception):
-    """Raised when robots.txt forbids the URL — caller decides what to do."""
-
 
 CANDIDATE_TLDS: tuple[str, ...] = (".com", ".io", ".ai", ".co")
 CANDIDATE_PATHS: tuple[str, ...] = (

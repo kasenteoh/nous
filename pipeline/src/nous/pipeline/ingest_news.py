@@ -168,6 +168,23 @@ async def run_ingest_news(
             if candidate is None:
                 summary.tc_skipped_no_company += 1
                 continue
+            # Fetch the body BEFORE auto-creating a company. A failed fetch
+            # (robots block, 4xx, thin content) should not leave an orphan
+            # company row with discovered_via='techcrunch' and zero supporting
+            # articles. If the body succeeds the URL is dedupable next run;
+            # if not, the worst case is one wasted feed read per week.
+            try:
+                body = await client.fetch_article_body(result.url)
+            except Exception:
+                logger.exception(
+                    "TC body fetch raised for %r (candidate=%r)",
+                    result.title,
+                    candidate,
+                )
+                continue
+            if body is None:
+                summary.articles_skipped_thin += 1
+                continue
             try:
                 company, created = await auto_create_company(
                     session,
@@ -178,7 +195,17 @@ async def run_ingest_news(
                 if created:
                     summary.auto_created_companies += 1
                 summary.articles_kept += 1
-                await _ingest_one_article(session, client, company.id, result, summary)
+                article = NewsArticle(
+                    company_id=company.id,
+                    url=result.url,
+                    title=result.title,
+                    source=result.source,
+                    published_date=result.published_date,
+                    raw_content=body,
+                )
+                session.add(article)
+                await session.commit()
+                summary.articles_inserted += 1
             except Exception:
                 logger.exception(
                     "TC broad-ingest failed for %r (candidate=%r)",
