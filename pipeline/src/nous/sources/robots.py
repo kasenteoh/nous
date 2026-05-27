@@ -16,6 +16,15 @@ import httpx
 ROBOTS_CACHE_TTL_SECONDS: int = 86400
 
 
+class RobotsBlockedError(Exception):
+    """Raised when a fetch is disallowed by the site's robots.txt.
+
+    Defined here (rather than per-client) so a caller catching this exception
+    can rely on a single class regardless of whether the fetch came from
+    HomepageClient, NewsClient, or any future source client.
+    """
+
+
 class RobotsCache:
     """Async cache for robots.txt parsers, keyed by domain.
 

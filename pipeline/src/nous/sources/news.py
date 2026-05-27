@@ -33,8 +33,18 @@ from pydantic import BaseModel
 from selectolax.parser import HTMLParser
 from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
 
-from nous.sources.robots import RobotsCache
+from nous.sources.robots import RobotsBlockedError, RobotsCache
 from nous.util.url import canonical_url, hostname
+
+# Re-export so callers that did ``from nous.sources.news import RobotsBlockedError``
+# continue to work. The canonical definition lives in ``nous.sources.robots``.
+__all__ = [
+    "FUNDING_KEYWORDS",
+    "MIN_BODY_CHARS",
+    "NewsArticleResult",
+    "NewsClient",
+    "RobotsBlockedError",
+]
 
 logger = logging.getLogger(__name__)
 
@@ -95,14 +105,6 @@ class NewsArticleResult(BaseModel):
     source: str  # hostname (e.g. "techcrunch.com")
     published_date: date | None
     raw_content: str
-
-
-class RobotsBlockedError(Exception):
-    """Raised by the low-level fetcher when robots.txt forbids the URL.
-
-    ``fetch_article_body`` swallows this and returns None — callers don't
-    need to catch it. Other call sites may surface it.
-    """
 
 
 def _is_retryable(exc: BaseException) -> bool:

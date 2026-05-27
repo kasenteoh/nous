@@ -22,6 +22,7 @@ from nous.pipeline.ingest_news import (
     run_ingest_news,
 )
 from nous.sources.news import NewsArticleResult
+from nous.util.slugify import normalize_name
 
 
 def _tc_result(title: str, snippet: str = "snippet") -> NewsArticleResult:
@@ -107,7 +108,7 @@ def _make_company(name: str, slug: str | None = None) -> Company:
     return Company(
         name=name,
         slug=slug or f"{name.lower().replace(' ', '-')}-{os.urandom(3).hex()}",
-        normalized_name=name.lower(),
+        normalized_name=normalize_name(name),
         hq_country="US",
     )
 
@@ -313,3 +314,45 @@ async def test_skips_articles_with_thin_body(
     summary = await run_ingest_news(db, client, include_techcrunch_broad=False)
     assert summary.articles_skipped_thin == 1
     assert summary.articles_inserted == 0
+
+
+@pytestmark_db
+async def test_tc_broad_failed_body_does_not_auto_create(
+    db: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """If the TC body fetch returns None, do NOT auto-create the company.
+
+    Pre-fix behavior was to auto-create the row first, then attempt the body
+    fetch. A robots-block/4xx/thin-content body left an orphan company with
+    discovered_via='techcrunch' and zero supporting articles, and the same
+    URL was refetched every weekly run forever.
+    """
+    tc_article = NewsArticleResult(
+        url="https://techcrunch.com/2026/05/01/ghostco-raises-100m",
+        title="GhostCo raises $100M Series B",
+        source="techcrunch.com",
+        published_date=date(2026, 5, 1),
+        raw_content="snippet",
+    )
+
+    async def _tc(*args: Any, **kwargs: Any) -> list[NewsArticleResult]:
+        return [tc_article]
+
+    monkeypatch.setattr(
+        "nous.pipeline.ingest_news.fetch_techcrunch_funding_articles", _tc
+    )
+    _mock_headline(monkeypatch, is_funding=True, name="GhostCo")
+
+    # Body fetch returns None (robots-block, thin content, 4xx, etc.)
+    client = _MockNewsClient(rss_results={}, bodies={tc_article.url: None})
+
+    summary = await run_ingest_news(db, client, include_techcrunch_broad=True)
+    assert summary.articles_skipped_thin == 1
+    assert summary.auto_created_companies == 0
+    assert summary.articles_inserted == 0
+
+    rows = (
+        await db.execute(select(Company).where(Company.name == "GhostCo"))
+    ).scalars().all()
+    assert len(rows) == 0
