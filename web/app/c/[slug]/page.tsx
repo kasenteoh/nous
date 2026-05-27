@@ -7,6 +7,7 @@ import { getCompanyBySlug } from "@/lib/queries";
 import { formatDate, formatLocation, formatUsd } from "@/lib/format";
 import { Markdown } from "@/components/Markdown";
 import { FundingHistory } from "@/components/FundingHistory";
+import { Competitors } from "@/components/Competitors";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -80,7 +81,7 @@ export default async function CompanyPage({ params }: Props) {
     notFound();
   }
 
-  const { company, filings, relatedPersons, fundingRounds } = detail;
+  const { company, filings, relatedPersons, fundingRounds, competitors } = detail;
 
   // ── M3 key-facts derivations ──────────────────────────────────────────────
   // totalRaised = sum of non-null amount_raised across all funding rounds.
@@ -220,6 +221,9 @@ export default async function CompanyPage({ params }: Props) {
 
       {/* ── Funding history (M3) ───────────────────────────────────────── */}
       <FundingHistory rounds={fundingRounds} />
+
+      {/* ── Competitors (M4) ───────────────────────────────────────────── */}
+      <Competitors competitors={competitors} />
 
       {/* ── Filings table ──────────────────────────────────────────────── */}
       <section className="mb-12">
