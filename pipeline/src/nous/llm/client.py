@@ -1,12 +1,12 @@
 """Provider-agnostic LLM wrapper. All LLM calls in nous go through complete_json().
 
 Two backends, selected via Settings.LLM_PROVIDER:
-- "gemini" (default): google.genai SDK, JSON mode via response_schema. Free
-  tier is 20 RPD on gemini-2.5-flash (verified in-prod).
-- "deepseek": OpenAI-compatible chat-completions API at api.deepseek.com.
-  Paid (≈$0.27/1M input, $1.10/1M output as of 2026). Much higher rate
-  limits than Gemini free tier. Spec rule "free tier first" is intentionally
-  bypassed when this provider is chosen — flag it in code review.
+- "deepseek" (default): OpenAI-compatible chat-completions API at
+  api.deepseek.com. Paid (≈$0.27/1M input, $1.10/1M output as of 2026). Much
+  higher rate limits than Gemini's free tier. Spec rule "free tier first" is
+  intentionally bypassed in production — a deliberate cost-incurring choice.
+- "gemini": google.genai SDK, JSON mode via response_schema. Free tier is
+  20 RPD on gemini-2.5-flash (verified in-prod). Retained as a fallback.
 
 Both backends honor:
 - Pydantic schema validation on the response
@@ -71,9 +71,9 @@ async def complete_json(
     """Send `prompt` to the configured LLM provider, validate response against
     `schema`, return T.
 
-    Provider is selected at call time from Settings().LLM_PROVIDER. If `model`
-    is None, the provider's default model is used (gemini-2.5-flash for
-    Gemini, deepseek-chat for DeepSeek).
+    Provider is selected at call time from Settings().LLM_PROVIDER (defaults
+    to deepseek). If `model` is None, the provider's default model is used
+    (deepseek-chat for DeepSeek, gemini-2.5-flash for Gemini).
 
     Common semantics across providers:
     - ValidationError → retry exactly once with the same prompt

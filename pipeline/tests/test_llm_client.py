@@ -29,6 +29,13 @@ VALID_JSON = """{
 INVALID_JSON = '{"description_long": "only long"}'  # missing required fields
 
 
+@pytest.fixture(autouse=True)
+def _force_gemini_provider(monkeypatch: pytest.MonkeyPatch) -> None:
+    """These tests exercise the Gemini backend specifically. The production
+    default is now deepseek, so pin the provider rather than rely on it."""
+    monkeypatch.setenv("LLM_PROVIDER", "gemini")
+
+
 def _make_response(text: str) -> MagicMock:
     """Build a fake generate_content response object."""
     mock = MagicMock()

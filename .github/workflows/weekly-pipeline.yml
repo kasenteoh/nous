@@ -65,13 +65,14 @@ jobs:
     env:
       DATABASE_URL: ${{ secrets.DATABASE_URL }}
       SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}
-      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-      # Optional. Set as a repo secret to swap to DeepSeek when LLM_PROVIDER=deepseek.
+      # Production LLM provider. DeepSeek is the default (see Settings); set
+      # DEEPSEEK_API_KEY as a repo secret.
       DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
-      # Optional. Defaults to "gemini" in Settings. Set as a repo variable
-      # (Settings → Secrets and variables → Actions → Variables) to switch
-      # providers without code changes.
-      LLM_PROVIDER: ${{ vars.LLM_PROVIDER || 'gemini' }}
+      # Optional fallback. Only needed if you override LLM_PROVIDER=gemini.
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      # Defaults to "deepseek" in Settings. Set the LLM_PROVIDER repo variable
+      # (Settings → Secrets and variables → Actions → Variables) to override.
+      LLM_PROVIDER: ${{ vars.LLM_PROVIDER || 'deepseek' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -132,9 +133,9 @@ jobs:
 
       - name: Enrich companies
         if: ${{ inputs.skip_enrich != true }}
-        # --limit 800 keeps us under Gemini's free tier (~1500 req/day) with headroom.
-        # continue-on-error so a Gemini quota exhaustion doesn't fail the whole run —
-        # the next weekly run picks up the unfinished companies.
+        # --limit 800 caps per-run LLM spend (DeepSeek is paid). continue-on-error
+        # so a provider rate-limit / 5xx doesn't fail the whole run — the next
+        # weekly run picks up the unfinished companies.
         run: uv run nous enrich-companies --limit 800
         continue-on-error: true
 
@@ -152,9 +153,8 @@ jobs:
 
       - name: Extract funding
         if: ${{ inputs.skip_funding != true }}
-        # --limit 1000 is the M3 weekly Gemini budget (~1500/day × 7 = 10,500
-        # headroom; we reserve the rest for M4 competitor analysis later).
-        # continue-on-error per the same rate-limit logic as enrich-companies.
+        # --limit 1000 caps per-run LLM spend on DeepSeek. continue-on-error
+        # per the same rate-limit logic as enrich-companies.
         run: uv run nous extract-funding --limit 1000
         continue-on-error: true
 

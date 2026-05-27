@@ -18,15 +18,15 @@ class Settings(BaseSettings):
     # ---------------------------------------------------------------------------
 
     # Selects the backend in nous.llm.client.complete_json().
-    # - "gemini" (default): google-genai. Free tier = 20 requests/day per
-    #   project on gemini-2.5-flash. Hits the wall fast on bulk enrichment.
-    # - "deepseek": OpenAI-compatible API at api.deepseek.com. Paid
-    #   (~$0.27/1M input, $1.10/1M output as of 2026). Use when you need
-    #   throughput beyond Gemini's free tier — flag explicitly that this
-    #   breaks the spec rule "free tier first."
-    LLM_PROVIDER: Literal["gemini", "deepseek"] = "gemini"
+    # - "deepseek" (default): OpenAI-compatible API at api.deepseek.com. Paid
+    #   (~$0.27/1M input, $1.10/1M output as of 2026), but Gemini's 20 RPD free
+    #   tier was too low for bulk enrichment so we run on DeepSeek. This breaks
+    #   the spec rule "free tier first" — a deliberate, cost-incurring choice.
+    # - "gemini": google-genai, free tier = 20 requests/day per project on
+    #   gemini-2.5-flash. Retained as a fallback but not used in production.
+    LLM_PROVIDER: Literal["gemini", "deepseek"] = "deepseek"
 
-    # Required when LLM_PROVIDER="deepseek". Get one at
+    # Required when LLM_PROVIDER="deepseek" (the default). Get one at
     # https://platform.deepseek.com/api_keys
     DEEPSEEK_API_KEY: str = ""
 

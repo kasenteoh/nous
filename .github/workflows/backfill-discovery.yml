@@ -1,28 +1,39 @@
-name: monthly-refresh
+name: backfill-discovery
 
+# On-demand only. Runs the two company-discovery stages — VC portfolio refresh
+# and news ingestion (which includes the TechCrunch venture-feed broad sweep) —
+# so you can populate companies discovered from VC sites + TechCrunch without
+# waiting for the weekly/monthly crons. Idempotent: re-running creates no
+# duplicate rows (everything routes through auto_create_company).
 on:
-  schedule:
-    # 09:00 UTC on the 1st of each month. Both VC portfolios and competitor
-    # analysis move slowly; one monthly job keeps the weekly pipeline lean
-    # and respects external sites + Gemini quota.
-    - cron: "0 9 1 * *"
   workflow_dispatch:
     inputs:
       firms:
-        description: "Optional comma-separated firm slugs (e.g. 'yc,a16z'). Default: all 7."
+        description: "VC: optional comma-separated firm slugs (e.g. 'yc,a16z'). Default: all 7."
         required: false
         type: string
       similarity_threshold:
-        description: "Optional pg_trgm threshold for fuzzy match. Default: Settings.COMPANY_FUZZY_MATCH_THRESHOLD (0.85)."
+        description: "VC/news: pg_trgm fuzzy-match threshold. Default: Settings (0.85)."
         required: false
         type: string
-      competitor_limit:
-        description: "Max companies analyze-competitors will process this run. Default: 500."
+      news_lookback_days:
+        description: "News/TechCrunch: lookback window in days. Default: 30."
         required: false
         type: string
+        default: "30"
+      skip_vc:
+        description: "Skip the VC portfolio refresh stage."
+        required: false
+        type: boolean
+        default: false
+      skip_news:
+        description: "Skip the news ingestion (incl. TechCrunch) stage."
+        required: false
+        type: boolean
+        default: false
 
 jobs:
-  monthly-refresh:
+  backfill-discovery:
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -31,9 +42,7 @@ jobs:
       DATABASE_URL: ${{ secrets.DATABASE_URL }}
       SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}
       DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
-      # Optional fallback. Only needed if you override LLM_PROVIDER=gemini.
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-      # Defaults to "deepseek" in Settings; set the LLM_PROVIDER repo variable to override.
       LLM_PROVIDER: ${{ vars.LLM_PROVIDER || 'deepseek' }}
     steps:
       - uses: actions/checkout@v4
@@ -52,6 +61,7 @@ jobs:
         run: uv run alembic upgrade head
 
       - name: Refresh VC portfolios
+        if: ${{ inputs.skip_vc != true }}
         run: |
           ARGS=()
           if [ -n "${{ inputs.firms }}" ]; then
@@ -65,8 +75,11 @@ jobs:
           fi
           uv run nous refresh-vc-portfolios "${ARGS[@]}"
 
-      - name: Analyze competitors
+      - name: Ingest news (incl. TechCrunch broad sweep)
+        if: ${{ inputs.skip_news != true }}
         run: |
-          LIMIT="${{ inputs.competitor_limit }}"
-          if [ -z "$LIMIT" ]; then LIMIT=500; fi
-          uv run nous analyze-competitors --limit "$LIMIT"
+          ARGS=()
+          if [ -n "${{ inputs.news_lookback_days }}" ]; then
+            ARGS+=(--lookback-days "${{ inputs.news_lookback_days }}")
+          fi
+          uv run nous ingest-news "${ARGS[@]}"
