@@ -121,19 +121,11 @@ def resolve_homepages(limit: int | None, refetch_after_days: int) -> None:
     show_default=True,
     help="Re-scrape companies whose pages are older than N days.",
 )
-@click.option(
-    "--max-pages-per-company",
-    type=int,
-    default=4,
-    show_default=True,
-    help="Maximum number of pages to fetch per company.",
-)
 def scrape_homepages(
     limit: int | None,
     refetch_after_days: int,
-    max_pages_per_company: int,
 ) -> None:
-    """Fetch homepage + subpages and store raw HTML in raw_pages."""
+    """Fetch each company's homepage and store raw HTML in raw_pages."""
     import asyncio
 
     from nous.config import Settings
@@ -156,7 +148,6 @@ def scrape_homepages(
                 homepage_client,
                 refetch_after_days=refetch_after_days,
                 limit=limit,
-                max_pages_per_company=max_pages_per_company,
             )
             click.echo(summary.model_dump_json(indent=2))
 
