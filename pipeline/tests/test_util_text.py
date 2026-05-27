@@ -7,6 +7,109 @@ import pytest
 from nous.util.text import STRIP_TAGS, extract_visible_text, truncate_to_chars
 
 # ---------------------------------------------------------------------------
+# Meta-tag fallback (covers the JS-only SPA case where the body is empty
+# but SEO meta tags carry the description signal)
+# ---------------------------------------------------------------------------
+
+
+def test_meta_description_extracted_when_body_empty() -> None:
+    """A pure JS-shell page with no body text still yields its meta description."""
+    desc = "Build your closet seamlessly, and find the best prices instantly."
+    html = f"""
+    <html><head>
+      <title>Phia: Your Personal Shopping Assistant</title>
+      <meta name="description" content="{desc}">
+    </head><body><div id="__next"></div></body></html>
+    """
+    result = extract_visible_text(html)
+    assert "Phia" in result
+    assert "Build your closet" in result
+
+
+def test_og_description_extracted_when_body_empty() -> None:
+    """og:description survives even when meta[name=description] is absent."""
+    html = """
+    <html><head>
+      <title>Some App</title>
+      <meta property="og:description" content="The fastest way to do the thing.">
+    </head><body></body></html>
+    """
+    result = extract_visible_text(html)
+    assert "fastest way" in result
+
+
+def test_title_only_still_extracted() -> None:
+    """A page with literally only <title> (like anspect-technologies) yields the title."""
+    html = "<html><head><title>ANSpect Technologies</title></head><body></body></html>"
+    result = extract_visible_text(html)
+    assert "ANSpect Technologies" in result
+
+
+def test_meta_deduped_against_body() -> None:
+    """If the title appears in the body text, the meta copy isn't duplicated."""
+    html = """
+    <html><head>
+      <title>Acme Inc</title>
+      <meta name="description" content="We build widgets.">
+    </head><body>
+      <h1>Acme Inc</h1>
+      <p>We are a company that does things.</p>
+    </body></html>
+    """
+    result = extract_visible_text(html)
+    # "Acme Inc" appears in body — should not duplicate.
+    assert result.count("Acme Inc") == 1
+    # But the meta description (not in body) should still come through.
+    assert "We build widgets." in result
+    # Body content stays present.
+    assert "company that does things" in result
+
+
+def test_duplicated_og_and_meta_description_deduped() -> None:
+    """og:description and meta[description] commonly hold the same string;
+    only one copy ends up in the output.
+    """
+    same_desc = "A unique description that appears twice in head tags."
+    html = f"""
+    <html><head>
+      <title>Test</title>
+      <meta name="description" content="{same_desc}">
+      <meta property="og:description" content="{same_desc}">
+      <meta name="twitter:description" content="{same_desc}">
+    </head><body></body></html>
+    """
+    result = extract_visible_text(html)
+    assert result.count(same_desc) == 1
+
+
+def test_no_meta_no_body_returns_empty() -> None:
+    """No title, no meta, no body — still returns empty string, no crash."""
+    html = "<html><head></head><body></body></html>"
+    result = extract_visible_text(html)
+    assert result == ""
+
+
+def test_rich_body_still_dominates_output() -> None:
+    """A normal content-rich page is barely affected — meta lines are tiny."""
+    html = """
+    <html><head>
+      <title>Blog Post Title</title>
+      <meta name="description" content="A short summary.">
+    </head><body>
+      <article>
+        <p>This is paragraph one with a lot of meaningful content.</p>
+        <p>This is paragraph two with even more meaningful content.</p>
+      </article>
+    </body></html>
+    """
+    result = extract_visible_text(html)
+    # Body content present
+    assert "paragraph one" in result
+    assert "paragraph two" in result
+    # Meta description also present (rescue path doesn't hurt rich pages)
+    assert "short summary" in result
+
+# ---------------------------------------------------------------------------
 # extract_visible_text
 # ---------------------------------------------------------------------------
 
