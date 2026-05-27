@@ -158,3 +158,17 @@ def test_build_prompt_forbids_fabrication_language() -> None:
     lowered = prompt.lower()
     assert "do not invent" in lowered or "do not fabricate" in lowered
     assert "empty list" in lowered or "return an empty" in lowered
+
+
+def test_out_of_order_ranks_are_normalized() -> None:
+    """Gemini may return competitors out of rank order in the JSON array.
+    The validator must sort them before checking, not reject them."""
+    ca = CompetitorAnalysis(
+        competitors=[
+            Competitor(name="B", description="d", reasoning="r", rank=2),
+            Competitor(name="A", description="d", reasoning="r", rank=1),
+            Competitor(name="C", description="d", reasoning="r", rank=3),
+        ]
+    )
+    assert [c.rank for c in ca.competitors] == [1, 2, 3]
+    assert [c.name for c in ca.competitors] == ["A", "B", "C"]

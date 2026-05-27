@@ -48,6 +48,9 @@ class CompetitorAnalysis(BaseModel):
 
     @model_validator(mode="after")
     def _ranks_must_be_one_through_n(self) -> CompetitorAnalysis:
+        # Sort by rank so out-of-order LLM responses don't get falsely rejected.
+        # The stage iterates the list in order to write rank=rank to the DB.
+        self.competitors.sort(key=lambda c: c.rank)
         ranks = [c.rank for c in self.competitors]
         expected = list(range(1, len(ranks) + 1))
         if ranks != expected:
