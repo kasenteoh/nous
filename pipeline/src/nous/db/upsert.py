@@ -6,14 +6,25 @@ All functions operate on an open ``AsyncSession``.  Callers (i.e. the
 
 from __future__ import annotations
 
+from datetime import timedelta
 from uuid import UUID
 
-from sqlalchemy import delete, select
+from sqlalchemy import and_, delete, func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from nous.db.models import Company, Filing, RawPage, RelatedPerson
+from nous.db.models import (
+    Company,
+    Filing,
+    FundingRound,
+    FundingRoundInvestor,
+    Investor,
+    RawPage,
+    RelatedPerson,
+)
+from nous.llm.prompts.funding_extraction import FundingExtraction
 from nous.sources.form_d import FormD, FormDRelatedPerson
+from nous.util.investor_name import canonicalize_investor_name
 from nous.util.slugify import normalize_name, slug_with_disambiguator, slugify
 
 
@@ -255,3 +266,257 @@ async def replace_related_persons(
     ]
     session.add_all(rows)
     return len(rows)
+
+
+# ---------------------------------------------------------------------------
+# M3: auto-create + fuzzy match (used by VC portfolio refresh + news ingest)
+# ---------------------------------------------------------------------------
+
+
+async def find_company_by_name(
+    session: AsyncSession,
+    name: str,
+    *,
+    similarity_threshold: float = 0.85,
+) -> Company | None:
+    """Find an existing Company by name. Exact normalized match first, then
+    pg_trgm trigram similarity (uses the GIN index from migration 0003).
+
+    Returns the highest-similarity match when multiple rows clear the
+    threshold; returns None when no match.
+
+    The trigram path requires the pg_trgm extension to be installed (handled
+    by migration 0003). If the extension is unavailable, the similarity()
+    call will raise — callers should treat that as a deployment problem,
+    not an "unknown company" signal.
+    """
+    norm = normalize_name(name)
+    if not norm:
+        return None
+
+    exact = await _find_by_normalized_name(session, norm)
+    if exact is not None:
+        return exact
+
+    similarity = func.similarity(Company.normalized_name, norm)
+    stmt = (
+        select(Company)
+        .where(similarity >= similarity_threshold)
+        .order_by(similarity.desc())
+        .limit(1)
+    )
+    result = await session.execute(stmt)
+    return result.scalar_one_or_none()
+
+
+async def auto_create_company(
+    session: AsyncSession,
+    *,
+    name: str,
+    website: str | None,
+    discovered_via: str,
+    similarity_threshold: float = 0.85,
+) -> tuple[Company, bool]:
+    """Find-or-create a Company from a non-Form-D source (VC portfolio, news,
+    TechCrunch). Match via find_company_by_name; insert if not found.
+
+    Returns ``(company, created)`` where ``created`` is True only on insert.
+
+    Behavior on match:
+    - If the existing row has no website but the caller passed one, fill it
+      in opportunistically (never overwrite an already-resolved website).
+    - discovered_via on the existing row is left alone — first-discovery
+      wins (Open Question §6 in the M3 plan).
+
+    Behavior on insert:
+    - cik is NULL (non-Form-D rows don't have a CIK)
+    - hq_country defaults to "US" (consistent with the M1 Form D path)
+    - slug is built via the same _build_slug helper used by upsert_company,
+      with disambiguation via the os.urandom branch since cik is None
+    - description_short stays NULL — M2's enrich-companies stage will fill
+      it from the scraped homepage, which is more authoritative than any
+      VC-portfolio one-liner.
+    """
+    existing = await find_company_by_name(
+        session, name, similarity_threshold=similarity_threshold
+    )
+    if existing is not None:
+        if existing.website is None and website:
+            existing.website = website
+            session.add(existing)
+        return existing, False
+
+    norm = normalize_name(name)
+    slug = await _build_slug(session, name, None, None)
+    company = Company(
+        cik=None,
+        name=name,
+        slug=slug,
+        normalized_name=norm,
+        hq_country="US",
+        website=website,
+        discovered_via=discovered_via,
+    )
+    session.add(company)
+    await session.flush()
+    return company, True
+
+
+# ---------------------------------------------------------------------------
+# M3: funding round reconciliation + investor upsert (used by extract-funding)
+# ---------------------------------------------------------------------------
+
+
+_CONFIDENCE_RANK = {"low": 0, "medium": 1, "high": 2}
+
+
+def _is_more_confident(new: str | None, existing: str | None) -> bool:
+    """True if ``new`` confidence outranks ``existing``."""
+    if new is None:
+        return False
+    if existing is None:
+        return True
+    return _CONFIDENCE_RANK.get(new, -1) > _CONFIDENCE_RANK.get(existing, -1)
+
+
+async def reconcile_funding_round(
+    session: AsyncSession,
+    *,
+    company_id: UUID,
+    extraction: FundingExtraction,
+    primary_news_url: str,
+    proximity_days: int = 60,
+) -> tuple[FundingRound, bool]:
+    """Find an existing FundingRound for ``company_id`` whose round_type matches
+    and announced_date is within ``±proximity_days``; merge into it if found,
+    otherwise insert a new row.
+
+    Match rules (intentionally strict to avoid false merges):
+    - round_type matches case-insensitively when both sides are non-None.
+      Both None also matches (round of unknown type).
+    - announced_date matches when both sides are non-None and within the
+      window. Both None also matches. Mismatched null-ness does not match
+      (one side knows the date, the other doesn't — too uncertain to merge).
+
+    Merge behavior on match:
+    - Fill nulls: amount_raised, valuation_post_money, valuation_source,
+      announced_date are populated when the existing row lacks them.
+    - Confidence: keep the higher (low < medium < high). Never downgrade.
+    - primary_news_url: first one wins — don't overwrite. The earliest
+      attribution is the most stable reference.
+
+    Returns ``(row, created)`` where ``created`` is True on insert.
+    """
+    candidates_stmt = select(FundingRound).where(FundingRound.company_id == company_id)
+
+    if extraction.round_type is not None:
+        candidates_stmt = candidates_stmt.where(
+            func.lower(FundingRound.round_type) == extraction.round_type.lower()
+        )
+    else:
+        candidates_stmt = candidates_stmt.where(FundingRound.round_type.is_(None))
+
+    if extraction.announced_date is not None:
+        low = extraction.announced_date - timedelta(days=proximity_days)
+        high = extraction.announced_date + timedelta(days=proximity_days)
+        candidates_stmt = candidates_stmt.where(
+            and_(
+                FundingRound.announced_date.is_not(None),
+                FundingRound.announced_date >= low,
+                FundingRound.announced_date <= high,
+            )
+        )
+    else:
+        candidates_stmt = candidates_stmt.where(FundingRound.announced_date.is_(None))
+
+    existing_result = await session.execute(candidates_stmt.limit(1))
+    existing = existing_result.scalar_one_or_none()
+
+    if existing is not None:
+        if existing.amount_raised is None and extraction.amount_raised_usd is not None:
+            existing.amount_raised = extraction.amount_raised_usd
+        if (
+            existing.valuation_post_money is None
+            and extraction.valuation_post_money_usd is not None
+        ):
+            existing.valuation_post_money = extraction.valuation_post_money_usd
+        if existing.announced_date is None and extraction.announced_date is not None:
+            existing.announced_date = extraction.announced_date
+        if _is_more_confident(extraction.confidence, existing.extraction_confidence):
+            existing.extraction_confidence = extraction.confidence
+        # primary_news_url: first-write-wins; do not overwrite.
+        session.add(existing)
+        return existing, False
+
+    new_round = FundingRound(
+        company_id=company_id,
+        round_type=extraction.round_type,
+        amount_raised=extraction.amount_raised_usd,
+        valuation_post_money=extraction.valuation_post_money_usd,
+        announced_date=extraction.announced_date,
+        primary_news_url=primary_news_url,
+        extraction_confidence=extraction.confidence,
+    )
+    session.add(new_round)
+    await session.flush()
+    return new_round, True
+
+
+async def upsert_investor(
+    session: AsyncSession, *, name: str
+) -> tuple[Investor, bool]:
+    """Find or create an Investor by canonicalized name.
+
+    Display name (preserved on ``Investor.name``) keeps the first-seen casing;
+    re-using an existing row does not rewrite the display name even if a later
+    article uses a different casing.
+
+    Returns ``(row, created)``.
+    """
+    canonical = canonicalize_investor_name(name)
+    if not canonical:
+        raise ValueError(f"investor name canonicalizes to empty: {name!r}")
+
+    existing_result = await session.execute(
+        select(Investor).where(Investor.name_normalized == canonical)
+    )
+    existing = existing_result.scalar_one_or_none()
+    if existing is not None:
+        return existing, False
+
+    investor = Investor(name=name.strip(), name_normalized=canonical)
+    session.add(investor)
+    await session.flush()
+    return investor, True
+
+
+async def link_round_investor(
+    session: AsyncSession,
+    *,
+    funding_round_id: UUID,
+    investor_id: UUID,
+    is_lead: bool,
+) -> None:
+    """Upsert a (round, investor) link. Sticky `is_lead`: once True, stays True
+    even if a later article lists the same investor as a participant. This
+    handles the case where one article identifies the lead and another lists
+    all participants without distinguishing.
+
+    Implemented via INSERT ... ON CONFLICT DO UPDATE on the (funding_round_id,
+    investor_id) unique constraint.
+    """
+    stmt = (
+        pg_insert(FundingRoundInvestor)
+        .values(
+            funding_round_id=funding_round_id,
+            investor_id=investor_id,
+            is_lead=is_lead,
+        )
+        .on_conflict_do_update(
+            constraint="uq_funding_round_investors_round_investor",
+            set_={
+                "is_lead": FundingRoundInvestor.is_lead.op("OR")(is_lead),
+            },
+        )
+    )
+    await session.execute(stmt)

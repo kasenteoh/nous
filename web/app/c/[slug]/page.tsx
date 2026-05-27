@@ -6,6 +6,7 @@ import { notFound } from "next/navigation";
 import { getCompanyBySlug } from "@/lib/queries";
 import { formatDate, formatLocation, formatUsd } from "@/lib/format";
 import { Markdown } from "@/components/Markdown";
+import { FundingHistory } from "@/components/FundingHistory";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -79,15 +80,40 @@ export default async function CompanyPage({ params }: Props) {
     notFound();
   }
 
-  const { company, filings, relatedPersons } = detail;
+  const { company, filings, relatedPersons, fundingRounds } = detail;
+
+  // ── M3 key-facts derivations ──────────────────────────────────────────────
+  // totalRaised = sum of non-null amount_raised across all funding rounds.
+  // Sources = count of distinct primary_news_url across funding rounds.
+  // Both fall back to "—" when there are zero rounds (never fabricate).
+  const totalRaisedAmount = fundingRounds.reduce<number>((acc, r) => {
+    return r.amount_raised != null ? acc + Number(r.amount_raised) : acc;
+  }, 0);
+  const hasAnyRaised = fundingRounds.some((r) => r.amount_raised != null);
+  const distinctNewsSources = new Set(
+    fundingRounds
+      .map((r) => r.primary_news_url)
+      .filter((u): u is string => u !== null),
+  );
 
   return (
     <main className="flex-1 px-6 py-12 max-w-4xl mx-auto w-full">
       {/* ── Company header ─────────────────────────────────────────────── */}
       <header className="mb-10">
-        <h1 className="text-4xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-100">
-          {company.name}
-        </h1>
+        <div className="flex flex-wrap items-center gap-3">
+          <h1 className="text-4xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-100">
+            {company.name}
+          </h1>
+          {/* M3 discovery badge — every company has a discovered_via value
+              (default 'form_d'); makes VC-portfolio-discovered companies
+              visually distinct from Form-D-discovered ones. */}
+          <span
+            className="bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300 text-xs px-2 py-0.5 rounded"
+            title="How nous first discovered this company"
+          >
+            Discovered via {company.discovered_via}
+          </span>
+        </div>
 
         <dl className="mt-4 flex flex-wrap gap-x-8 gap-y-2 text-sm text-zinc-500 dark:text-zinc-400">
           {(company.hq_city || company.hq_state) && (
@@ -116,6 +142,29 @@ export default async function CompanyPage({ params }: Props) {
             {company.description_short}
           </p>
         )}
+
+        {/* M3 key-facts strip — anchors the page with a tangible "total raised"
+            number sourced from public news, attributed inline. Per spec §11,
+            unattributed numbers are forbidden; "from N news sources" makes the
+            attribution visible at a glance. */}
+        <dl className="mt-6 flex flex-wrap gap-x-10 gap-y-3 text-sm">
+          <div>
+            <dt className="text-xs font-medium uppercase tracking-wider text-zinc-400 dark:text-zinc-500">
+              Total raised
+            </dt>
+            <dd className="mt-1 text-base font-semibold text-zinc-900 dark:text-zinc-100">
+              {hasAnyRaised ? formatUsd(totalRaisedAmount) : "—"}
+            </dd>
+            {fundingRounds.length > 0 && (
+              <dd className="text-xs text-zinc-400 dark:text-zinc-500">
+                from {distinctNewsSources.size}{" "}
+                {distinctNewsSources.size === 1
+                  ? "news source"
+                  : "news sources"}
+              </dd>
+            )}
+          </div>
+        </dl>
       </header>
 
       {/* ── About ──────────────────────────────────────────────────────── */}
@@ -168,6 +217,9 @@ export default async function CompanyPage({ params }: Props) {
           )}
         </section>
       )}
+
+      {/* ── Funding history (M3) ───────────────────────────────────────── */}
+      <FundingHistory rounds={fundingRounds} />
 
       {/* ── Filings table ──────────────────────────────────────────────── */}
       <section className="mb-12">

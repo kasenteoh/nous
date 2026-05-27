@@ -196,14 +196,153 @@ def enrich_companies(limit: int | None, refetch_after_days: int) -> None:
     asyncio.run(_run())
 
 
+@cli.command("refresh-vc-portfolios")
+@click.option(
+    "--firm",
+    "firms",
+    multiple=True,
+    default=(),
+    help=(
+        "Restrict the run to one or more firm slugs (matches keys in "
+        "nous.sources.vc_portfolios.ADAPTERS, e.g. 'yc', 'a16z'). "
+        "Repeatable. Default: run every registered adapter."
+    ),
+)
+@click.option(
+    "--similarity-threshold",
+    type=float,
+    default=None,
+    help=(
+        "pg_trgm similarity threshold for fuzzy company-name matching. "
+        "Default: Settings.COMPANY_FUZZY_MATCH_THRESHOLD."
+    ),
+)
+def refresh_vc_portfolios_cmd(
+    firms: tuple[str, ...], similarity_threshold: float | None
+) -> None:
+    """Refresh companies from registered VC firm portfolio pages."""
+    import asyncio
+    import logging
+
+    from nous.config import Settings
+    from nous.db.session import AsyncSessionLocal
+    from nous.pipeline.refresh_vc_portfolios import run_refresh_vc_portfolios
+    from nous.sources.homepage import HomepageClient
+
+    settings = Settings()
+    threshold = (
+        similarity_threshold
+        if similarity_threshold is not None
+        else settings.COMPANY_FUZZY_MATCH_THRESHOLD
+    )
+    firms_list: list[str] | None = list(firms) if firms else None
+
+    logger = logging.getLogger("nous.cli.refresh_vc_portfolios")
+
+    async def _run() -> None:
+        async with (
+            HomepageClient(
+                settings.SEC_USER_AGENT,
+                requests_per_second_per_domain=1.0,
+            ) as homepage_client,
+            AsyncSessionLocal() as session,
+        ):
+            summary = await run_refresh_vc_portfolios(
+                session,
+                homepage_client,
+                firms=firms_list,
+                similarity_threshold=threshold,
+            )
+            logger.info(
+                "refresh-vc-portfolios summary: %s", summary.model_dump_json()
+            )
+            click.echo(summary.model_dump_json(indent=2))
+
+    asyncio.run(_run())
+
+
 @cli.command("ingest-news")
-def ingest_news() -> None:
-    _stub("ingest-news")
+@click.option(
+    "--lookback-days",
+    type=int,
+    default=7,
+    show_default=True,
+    help="Lookback window for Google News + TC venture feed.",
+)
+@click.option(
+    "--no-techcrunch",
+    is_flag=True,
+    default=False,
+    help="Skip the TechCrunch venture-tag broad sweep.",
+)
+@click.option(
+    "--limit",
+    type=int,
+    default=None,
+    help="Maximum number of companies to query (per-company Google News path).",
+)
+def ingest_news(lookback_days: int, no_techcrunch: bool, limit: int | None) -> None:
+    """Pull funding-keyword news articles into the news_articles table."""
+    import asyncio
+
+    from nous.config import Settings
+    from nous.db.session import AsyncSessionLocal
+    from nous.pipeline.ingest_news import run_ingest_news
+    from nous.sources.news import NewsClient
+
+    settings = Settings()
+
+    async def _run() -> None:
+        async with (
+            NewsClient(
+                settings.SEC_USER_AGENT,
+                requests_per_second_per_domain=1.0,
+            ) as news_client,
+            AsyncSessionLocal() as session,
+        ):
+            summary = await run_ingest_news(
+                session,
+                news_client,
+                lookback_days=lookback_days,
+                include_techcrunch_broad=not no_techcrunch,
+                max_companies=limit,
+            )
+            click.echo(summary.model_dump_json(indent=2))
+
+    asyncio.run(_run())
 
 
 @cli.command("extract-funding")
-def extract_funding() -> None:
-    _stub("extract-funding")
+@click.option(
+    "--limit",
+    type=int,
+    default=1000,
+    show_default=True,
+    help="Maximum number of articles to process per run (weekly Gemini budget).",
+)
+@click.option(
+    "--include-low-confidence",
+    is_flag=True,
+    default=False,
+    help="Persist rounds the LLM tagged as low-confidence (default: skip).",
+)
+def extract_funding(limit: int, include_low_confidence: bool) -> None:
+    """Run the funding-extraction LLM over unprocessed news_articles."""
+    import asyncio
+
+    from nous.db.session import AsyncSessionLocal
+    from nous.pipeline.extract_funding import run_extract_funding
+
+    async def _run() -> None:
+        async with AsyncSessionLocal() as session:
+            summary = await run_extract_funding(
+                session,
+                limit=limit,
+                skip_low_confidence=not include_low_confidence,
+            )
+            click.echo(summary.model_dump_json(indent=2))
+
+    asyncio.run(_run())
 
 
 @cli.command("analyze-competitors")

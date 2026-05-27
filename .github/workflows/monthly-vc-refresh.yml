@@ -1,0 +1,56 @@
+name: monthly-vc-refresh
+
+on:
+  schedule:
+    # 09:00 UTC on the 1st of each month. VC portfolio pages change slowly;
+    # monthly keeps the weekly pipeline lean and respects the firms' sites.
+    - cron: "0 9 1 * *"
+  workflow_dispatch:
+    inputs:
+      firms:
+        description: "Optional comma-separated firm slugs (e.g. 'yc,a16z'). Default: all 7."
+        required: false
+        type: string
+      similarity_threshold:
+        description: "Optional pg_trgm threshold for fuzzy match. Default: Settings.COMPANY_FUZZY_MATCH_THRESHOLD (0.85)."
+        required: false
+        type: string
+
+jobs:
+  refresh-vc-portfolios:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: pipeline
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+
+      - name: Install pipeline dependencies
+        run: uv sync
+
+      - name: Apply migrations
+        run: uv run alembic upgrade head
+
+      - name: Refresh VC portfolios
+        run: |
+          ARGS=()
+          if [ -n "${{ inputs.firms }}" ]; then
+            IFS=',' read -ra FIRMS <<< "${{ inputs.firms }}"
+            for firm in "${FIRMS[@]}"; do
+              ARGS+=(--firm "$firm")
+            done
+          fi
+          if [ -n "${{ inputs.similarity_threshold }}" ]; then
+            ARGS+=(--similarity-threshold "${{ inputs.similarity_threshold }}")
+          fi
+          uv run nous refresh-vc-portfolios "${ARGS[@]}"
