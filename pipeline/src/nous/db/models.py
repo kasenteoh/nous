@@ -61,6 +61,11 @@ class Company(Base):
     tags: Mapped[list[str] | None] = mapped_column(ARRAY(String))
     last_enriched_payload: Mapped[dict | None] = mapped_column(JSONB)  # type: ignore[type-arg]
     website_resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_scrape_attempt_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        index=True,
+    )
 
     # M3 — how this company first entered the DB.
     # 'form_d' | 'vc_portfolio' | 'news' | 'techcrunch'.
