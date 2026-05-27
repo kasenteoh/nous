@@ -17,6 +17,26 @@ on:
         description: "Resolve: re-resolve companies whose website_resolved_at is older than N days. 0 = re-resolve everything. Default: 90."
         required: false
         type: string
+      skip_ingest:
+        description: "Skip the Ingest filings stage. Useful when you just want to re-run scrape/enrich on existing data."
+        required: false
+        type: boolean
+        default: false
+      skip_resolve:
+        description: "Skip the Resolve homepages stage."
+        required: false
+        type: boolean
+        default: false
+      skip_scrape:
+        description: "Skip the Scrape homepages stage."
+        required: false
+        type: boolean
+        default: false
+      skip_enrich:
+        description: "Skip the Enrich companies stage."
+        required: false
+        type: boolean
+        default: false
 
 jobs:
   run-pipeline:
@@ -45,6 +65,7 @@ jobs:
         run: uv run alembic upgrade head
 
       - name: Ingest filings
+        if: ${{ inputs.skip_ingest != true }}
         run: |
           ARGS=()
           if [ -n "${{ inputs.since }}" ]; then ARGS+=(--since "${{ inputs.since }}"); fi
@@ -52,6 +73,7 @@ jobs:
           uv run nous ingest-filings "${ARGS[@]}"
 
       - name: Resolve homepages
+        if: ${{ inputs.skip_resolve != true }}
         run: |
           ARGS=()
           if [ -n "${{ inputs.resolve_refetch_after_days }}" ]; then
@@ -60,9 +82,11 @@ jobs:
           uv run nous resolve-homepages "${ARGS[@]}"
 
       - name: Scrape homepages
+        if: ${{ inputs.skip_scrape != true }}
         run: uv run nous scrape-homepages
 
       - name: Enrich companies
+        if: ${{ inputs.skip_enrich != true }}
         # --limit 800 keeps us under Gemini's free tier (~1500 req/day) with headroom.
         # continue-on-error so a Gemini quota exhaustion doesn't fail the whole run —
         # the next weekly run picks up the unfinished companies.
