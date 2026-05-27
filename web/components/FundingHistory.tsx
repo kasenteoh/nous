@@ -81,10 +81,17 @@ export function FundingHistory({ rounds }: Props) {
                     <td className="py-3 pr-6 text-right text-zinc-700 dark:text-zinc-300">
                       {round.valuation_post_money != null ? (
                         <>
-                          {formatUsd(round.valuation_post_money)}
-                          <span className="ml-1 text-xs text-zinc-400 dark:text-zinc-500">
-                            (post-money)
-                          </span>
+                          <div>
+                            {formatUsd(round.valuation_post_money)}
+                            <span className="ml-1 text-xs text-zinc-400 dark:text-zinc-500">
+                              (post-money)
+                            </span>
+                          </div>
+                          {round.valuation_source && (
+                            <div className="mt-1 text-xs text-zinc-400 dark:text-zinc-500">
+                              via {round.valuation_source}
+                            </div>
+                          )}
                         </>
                       ) : (
                         EM_DASH

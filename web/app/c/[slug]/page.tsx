@@ -71,6 +71,19 @@ function secCompanyUrl(cik: string | null): string {
   return `https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=${cik}&type=D`;
 }
 
+/** Render-friendly hostname for a website URL — strips protocol, "www.", and
+ * trailing slash. Returns null on a malformed URL so the caller can fall back
+ * to showing the raw string. */
+function websiteHostname(url: string | null | undefined): string | null {
+  if (!url) return null;
+  try {
+    const host = new URL(url).host.toLowerCase();
+    return host.startsWith("www.") ? host.slice(4) : host;
+  } catch {
+    return null;
+  }
+}
+
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default async function CompanyPage({ params }: Props) {
@@ -117,6 +130,21 @@ export default async function CompanyPage({ params }: Props) {
         </div>
 
         <dl className="mt-4 flex flex-wrap gap-x-8 gap-y-2 text-sm text-zinc-500 dark:text-zinc-400">
+          {company.website && (
+            <div>
+              <dt className="sr-only">Website</dt>
+              <dd>
+                <a
+                  href={company.website}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-zinc-700 hover:text-zinc-900 dark:text-zinc-300 dark:hover:text-zinc-100 underline underline-offset-2 decoration-zinc-300 dark:decoration-zinc-600"
+                >
+                  {websiteHostname(company.website) ?? company.website}
+                </a>
+              </dd>
+            </div>
+          )}
           {(company.hq_city || company.hq_state) && (
             <div>
               <dt className="sr-only">Location</dt>
