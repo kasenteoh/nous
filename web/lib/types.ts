@@ -121,10 +121,38 @@ export interface FundingRoundWithInvestors extends FundingRound {
   otherInvestors: string[];
 }
 
-/** Full company detail assembled from three DB queries. */
+// ─── M4: competitors ──────────────────────────────────────────────────────────
+
+/**
+ * Row from the `competitors` table. `competitor_company_id` is non-null when
+ * the LLM-named competitor resolves to an indexed company via exact
+ * normalized_name match; otherwise the competitor is stored text-only.
+ */
+export interface CompetitorRow {
+  id: string;
+  company_id: string;
+  competitor_company_id: string | null;
+  competitor_name: string;
+  description: string | null;
+  reasoning: string | null;
+  rank: number;
+  created_at: string;
+  updated_at: string;
+}
+
+/**
+ * A competitor joined with the resolved company's slug + name, when present.
+ * Built in `getCompanyBySlug` from the nested-select.
+ */
+export interface CompetitorWithResolved extends CompetitorRow {
+  resolved: { slug: string; name: string } | null;
+}
+
+/** Full company detail assembled from four DB queries. */
 export interface CompanyDetail {
   company: CompanyRow;
   filings: FilingRow[]; // sorted by filing_date desc
   relatedPersons: RelatedPersonRow[]; // most recent filing's people first
   fundingRounds: FundingRoundWithInvestors[]; // sorted by announced_date desc (nulls last)
+  competitors: CompetitorWithResolved[]; // sorted by rank ascending
 }
