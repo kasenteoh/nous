@@ -16,6 +16,7 @@ dependencies = [
     "tenacity>=8",
     "lxml>=5",
     "google-genai>=1.0",
+    "feedparser>=6.0",
 ]
 
 [project.scripts]
@@ -56,6 +57,10 @@ ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 module = ["google.genai.*", "google.genai"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["feedparser", "feedparser.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
