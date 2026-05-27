@@ -32,6 +32,7 @@ from nous.pipeline.analyze_competitors import (
     resolve_competitor_company_id,
     run_analyze_competitors,
 )
+from nous.util.slugify import normalize_name
 
 pytestmark = pytest.mark.skipif(
     not os.environ.get("DATABASE_URL"),
@@ -53,7 +54,7 @@ def _make_company(
     return Company(
         name=name,
         slug=f"{name.lower().replace(' ', '-')}-{os.urandom(3).hex()}",
-        normalized_name=name.lower(),
+        normalized_name=normalize_name(name),
         description_short=f"{name} short.",
         description_long=description_long,
         industry_group=industry_group,

@@ -78,7 +78,7 @@ async def test_upsert_company_insert_new_with_cik(db: AsyncSession) -> None:
     assert company.cik == "0001000001"
     assert company.name == "Alpha Tech Inc."
     assert company.slug  # non-empty
-    assert company.normalized_name == "alpha tech"
+    assert company.normalized_name == "alphatech"
 
 
 async def test_upsert_company_update_existing_by_cik(db: AsyncSession) -> None:
@@ -154,6 +154,77 @@ async def test_upsert_company_backfills_cik_via_normalized_name(db: AsyncSession
     assert created_2 is False
     assert company_1.id == company_2.id
     assert company_2.cik == "0001000004"
+
+
+async def test_upsert_company_preserves_first_seen_name_casing(
+    db: AsyncSession,
+) -> None:
+    """Once a Company is created, the display ``name`` is sticky.
+
+    SEC entity names are often ALL CAPS ("OPENAI, INC."). Overwriting a
+    nicely-cased "OpenAI" would degrade the user-visible label. The fix
+    leaves ``name`` and ``slug`` untouched on update and only refreshes
+    ``normalized_name`` so future dedup keeps finding the row.
+    """
+    form_d_1 = _make_form_d(
+        cik="0001234001",
+        entity_name="OpenAI, Inc.",
+        accession_number="0001234001-21-000001",
+    )
+    company_1, _ = await upsert_company(db, form_d_1)
+    await db.flush()
+    original_slug = company_1.slug
+
+    form_d_2 = _make_form_d(
+        cik="0001234001",
+        entity_name="OPENAI, INC.",  # uppercase variant from a later SEC filing
+        accession_number="0001234001-22-000001",
+    )
+    company_2, created_2 = await upsert_company(db, form_d_2)
+
+    assert created_2 is False
+    assert company_2.id == company_1.id
+    # Name is preserved as first-seen, not downgraded to the shouting variant.
+    assert company_2.name == "OpenAI, Inc."
+    # Slug is sticky so URLs don't shift between weekly runs.
+    assert company_2.slug == original_slug
+
+
+async def test_upsert_company_preserves_non_form_d_name(
+    db: AsyncSession,
+) -> None:
+    """When a VC-portfolio row already exists, a later Form D match must NOT
+    overwrite ``name`` or ``discovered_via``. Only ``normalized_name`` and
+    mutable fields (hq/industry) refresh."""
+    from nous.util.slugify import normalize_name, slugify
+
+    seeded = Company(
+        cik=None,
+        name="Stripe",
+        slug=slugify("Stripe"),
+        normalized_name=normalize_name("Stripe"),
+        hq_country="US",
+        discovered_via="vc_portfolio",
+    )
+    db.add(seeded)
+    await db.flush()
+    seeded_id = seeded.id
+    seeded_slug = seeded.slug
+
+    form_d = _make_form_d(
+        cik="0001234500",
+        entity_name="STRIPE, INC.",
+        accession_number="0001234500-21-000001",
+    )
+    company, created = await upsert_company(db, form_d)
+
+    assert created is False
+    assert company.id == seeded_id
+    # Form D backfilled CIK, but did NOT touch name/slug/discovered_via.
+    assert company.cik == "0001234500"
+    assert company.name == "Stripe"
+    assert company.slug == seeded_slug
+    assert company.discovered_via == "vc_portfolio"
 
 
 async def test_upsert_company_slug_collision_disambiguation(db: AsyncSession) -> None:

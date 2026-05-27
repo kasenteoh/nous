@@ -104,8 +104,8 @@ class TestNormalizeName:
     def test_strip_inc(self) -> None:
         assert normalize_name("Acme, Inc.") == "acme"
 
-    def test_spaces_not_hyphens(self) -> None:
-        assert normalize_name("Foo Bar LLC") == "foo bar"
+    def test_spaces_collapsed(self) -> None:
+        assert normalize_name("Foo Bar LLC") == "foobar"
 
     def test_unicode(self) -> None:
         assert normalize_name("Café Co.") == "cafe"
@@ -117,7 +117,15 @@ class TestNormalizeName:
         assert normalize_name("   ") == ""
 
     def test_collapse_whitespace(self) -> None:
-        assert normalize_name("Foo   Bar  Baz") == "foo bar baz"
+        assert normalize_name("Foo   Bar  Baz") == "foobarbaz"
+
+    def test_stylization_variants_collide(self) -> None:
+        # "OpenAI", "Open AI", and "Open AI, Inc." must produce the same key
+        # so cross-source dedup catches them as the same company.
+        assert normalize_name("OpenAI") == "openai"
+        assert normalize_name("Open AI") == "openai"
+        assert normalize_name("Open AI, Inc.") == "openai"
+        assert normalize_name("OPENAI, INC.") == "openai"
 
 
 class TestSlugWithDisambiguator:

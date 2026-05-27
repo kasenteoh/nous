@@ -24,6 +24,7 @@ from nous.pipeline.refresh_vc_portfolios import (
     run_refresh_vc_portfolios,
 )
 from nous.sources.homepage import HomepageClient
+from nous.util.slugify import normalize_name
 
 pytestmark = pytest.mark.skipif(
     not os.environ.get("DATABASE_URL"),
@@ -216,7 +217,7 @@ async def test_form_d_company_match_preserves_discovered_via(
     seeded = Company(
         name=name,
         slug=f"formd-originated-{suffix}",
-        normalized_name=name.lower(),
+        normalized_name=normalize_name(name),
         hq_country="US",
         discovered_via="form_d",
     )

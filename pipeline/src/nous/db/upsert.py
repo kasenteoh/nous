@@ -76,14 +76,23 @@ async def upsert_company(session: AsyncSession, form_d: FormD) -> tuple[Company,
     2. If ``form_d.cik`` is empty → query by normalized_name only.
     3. If still no match → insert new row.
 
-    Fields that are NEVER overwritten on update (M2+ enrichment territory):
-    ``description_short``, ``description_long``, ``website``, ``logo_url``,
-    ``employee_count_min``, ``employee_count_max``, ``employee_count_source``,
-    ``last_enriched_at``.
+    Fields that are NEVER overwritten on update:
+    - ``name``: first-discovery wins. SEC entity names are frequently
+      ALL-CAPS ("OPENAI, INC.") and would degrade a nicer "OpenAI" already
+      set by an earlier VC or news ingest. Preserved as the display name.
+      (The casing-upgrade path in ``auto_create_company`` handles the
+      opposite case — properly-cased VC entry replacing a lowercase name.)
+    - ``slug``: URL identity. Stable across ingests so external links don't
+      break when a Form D amendment changes the legal name.
+    - M2 enrichment: ``description_short``, ``description_long``, ``website``,
+      ``logo_url``, ``employee_count_*``, ``last_enriched_at``.
+    - ``discovered_via``: source provenance.
 
     Fields that ARE updated on every ingest (most-recent-filing wins):
-    ``name``, ``normalized_name``, ``hq_city``, ``hq_state``, ``hq_country``,
-    ``year_incorporated``, ``industry_group``.  (Per spec open question #6.)
+    ``normalized_name``, ``hq_city``, ``hq_state``, ``hq_country``,
+    ``year_incorporated``, ``industry_group``. ``normalized_name`` is the
+    matching key, so it tracks the latest stylization to keep dedup working
+    if the helper's rules ever change.
 
     Returns:
         ``(company, created)`` where *created* is True only on a fresh insert.
@@ -114,16 +123,15 @@ async def upsert_company(session: AsyncSession, form_d: FormD) -> tuple[Company,
 
     # -- Step 2: update or insert --
     if company is not None:
-        # Update always-overwritten fields.
-        company.name = form_d.entity_name
+        # name and slug are first-discovery-wins; do not overwrite them.
+        # normalized_name stays in sync so future matching catches new
+        # stylizations even if the canonical name was set by a non-Form-D source.
         company.normalized_name = norm
         company.hq_city = addr.city
         company.hq_state = addr.state
         company.hq_country = addr.country or "US"
         company.year_incorporated = form_d.year_of_incorporation
         company.industry_group = form_d.industry_group_type or None
-        # Refresh slug in case name changed.
-        company.slug = await _build_slug(session, form_d.entity_name, cik or None, company.id)
         session.add(company)
         return company, False
 

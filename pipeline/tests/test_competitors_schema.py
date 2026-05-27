@@ -10,6 +10,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from nous.db.models import Company, Competitor
+from nous.util.slugify import normalize_name
 
 pytestmark = pytest.mark.skipif(
     not os.environ.get("DATABASE_URL"),
@@ -21,7 +22,7 @@ def _make_company(name: str) -> Company:
     return Company(
         name=name,
         slug=f"{name.lower().replace(' ', '-')}-{os.urandom(3).hex()}",
-        normalized_name=name.lower(),
+        normalized_name=normalize_name(name),
         hq_country="US",
     )
 

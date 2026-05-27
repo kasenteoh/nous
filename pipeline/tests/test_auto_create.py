@@ -14,12 +14,16 @@ Requires DATABASE_URL pointing at a Postgres with pg_trgm + migration 0003.
 from __future__ import annotations
 
 import os
+from datetime import date
+from decimal import Decimal
 
 import pytest
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from nous.db.models import Company
 from nous.db.upsert import auto_create_company, find_company_by_name
+from nous.util.slugify import normalize_name
 
 pytestmark = pytest.mark.skipif(
     not os.environ.get("DATABASE_URL"),
@@ -43,7 +47,7 @@ def make_company(
     return Company(
         name=name,
         slug=slug,
-        normalized_name=normalized_name or name.lower(),
+        normalized_name=normalized_name if normalized_name is not None else normalize_name(name),
         hq_country="US",
         website=website,
         discovered_via=discovered_via,
@@ -59,7 +63,6 @@ async def test_find_by_name_exact_match(db: AsyncSession) -> None:
     existing = make_company(
         name="Ricursive Intelligence",
         slug=f"ricursive-intelligence-{os.urandom(3).hex()}",
-        normalized_name="ricursive intelligence",
     )
     db.add(existing)
     await db.flush()
@@ -75,7 +78,6 @@ async def test_find_by_name_trigram_above_threshold(db: AsyncSession) -> None:
     existing = make_company(
         name="Ricursive Intelligence Inc.",
         slug=f"ricursive-intelligence-{os.urandom(3).hex()}",
-        normalized_name="ricursive intelligence",
     )
     db.add(existing)
     await db.flush()
@@ -97,7 +99,6 @@ async def test_find_by_name_trigram_below_threshold_returns_none(
         make_company(
             name="Acme Corp",
             slug=f"acme-corp-{os.urandom(3).hex()}",
-            normalized_name="acme corp",
         )
     )
     await db.flush()
@@ -138,12 +139,11 @@ async def test_auto_create_returns_existing_on_exact_match(
     db: AsyncSession,
 ) -> None:
     # Use "Company" not "Co" — "Co" is in slugify._SUFFIX_PATTERN, so
-    # normalize_name("Existing Co") == "existing" (not "existing co"), which
+    # normalize_name("Existing Co") == "existing" (not "existingcompany"), which
     # would defeat the exact-match path for this test.
     existing = make_company(
         name="Existing Company",
         slug=f"existing-company-{os.urandom(3).hex()}",
-        normalized_name="existing company",
     )
     db.add(existing)
     await db.flush()
@@ -166,7 +166,6 @@ async def test_auto_create_backfills_website_when_missing(
     existing = make_company(
         name="No Site Company",
         slug=f"no-site-company-{os.urandom(3).hex()}",
-        normalized_name="no site company",
         website=None,
     )
     db.add(existing)
@@ -193,7 +192,6 @@ async def test_auto_create_does_not_overwrite_existing_website(
     existing = make_company(
         name="Has Site Company",
         slug=f"has-site-company-{os.urandom(3).hex()}",
-        normalized_name="has site company",
         website="https://resolved-by-m2.example/",
     )
     db.add(existing)
@@ -241,7 +239,6 @@ async def test_auto_create_trigram_match_avoids_duplicate(
     existing = make_company(
         name="Ricursive Intelligence",
         slug=f"ricursive-intelligence-{os.urandom(3).hex()}",
-        normalized_name="ricursive intelligence",
     )
     db.add(existing)
     await db.flush()
@@ -254,6 +251,78 @@ async def test_auto_create_trigram_match_avoids_duplicate(
         discovered_via="news",
     )
     assert created is False
+
+
+# ---------------------------------------------------------------------------
+# Cross-source dedup — the canonical OpenAI scenario
+# ---------------------------------------------------------------------------
+
+
+async def test_three_source_arrivals_produce_one_canonical_row(
+    db: AsyncSession,
+) -> None:
+    """Sequence B from the audit playbook: TC first, then VC, then Form D.
+
+    Asserts:
+    - One Company row at the end (not three).
+    - ``discovered_via`` stays ``"techcrunch"`` (first discovery wins).
+    - ``name`` stays ``"OpenAI"`` (first-seen casing wins, not the SEC shouting form).
+    - Form D's CIK is backfilled onto the same row.
+    """
+    from nous.db.upsert import upsert_company
+    from nous.sources.form_d import FormD, FormDAddress
+
+    # 1. TechCrunch broad-sweep auto-creates the row.
+    tc_company, tc_created = await auto_create_company(
+        db,
+        name="OpenAI",
+        website=None,
+        discovered_via="techcrunch",
+    )
+    assert tc_created is True
+    canonical_id = tc_company.id
+
+    # 2. VC portfolio refresh: same company, slight stylization. Matches via
+    #    normalize_name → returns the existing row, leaves name alone.
+    vc_company, vc_created = await auto_create_company(
+        db,
+        name="Open AI",  # spacing variant — must collide on the same match key
+        website="https://openai.com",
+        discovered_via="vc_portfolio",
+    )
+    assert vc_created is False
+    assert vc_company.id == canonical_id
+
+    # 3. Form D ingest: SEC entity_name "OPENAI, INC." with CIK.
+    form_d = FormD(
+        accession_number="0001000999-26-000001",
+        cik="0001234567",
+        entity_name="OPENAI, INC.",
+        industry_group_type="Technology - Computers",
+        principal_place_of_business=FormDAddress(
+            city="San Francisco", state="CA", country="US"
+        ),
+        filing_date=date(2026, 5, 1),
+        total_offering_amount=Decimal("100000000"),
+        related_persons=[],
+    )
+    fd_company, fd_created = await upsert_company(db, form_d)
+    assert fd_created is False
+    assert fd_company.id == canonical_id
+
+    # CIK backfilled, but identity preserved.
+    assert fd_company.cik == "0001234567"
+    assert fd_company.name == "OpenAI"
+    assert fd_company.discovered_via == "techcrunch"
+
+    # The row count for this name-cluster is exactly one.
+    matches = await db.execute(
+        select(Company).where(
+            Company.normalized_name == "openai",
+            Company.id == canonical_id,
+        )
+    )
+    assert matches.scalar_one_or_none() is not None
 
 
 async def test_auto_create_upgrades_lowercase_display_name(db: AsyncSession) -> None:
