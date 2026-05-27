@@ -54,7 +54,7 @@ async def test_complete_json_happy_path(monkeypatch: pytest.MonkeyPatch) -> None
     """complete_json returns a validated CompanyDescription on success."""
     client_mock = _make_client_mock([_make_response(VALID_JSON)])
 
-    with patch("nous.llm.client._build_client", return_value=client_mock):
+    with patch("nous.llm.client._build_gemini_client", return_value=client_mock):
         result = await complete_json("some prompt", CompanyDescription)
 
     assert isinstance(result, CompanyDescription)
@@ -78,7 +78,7 @@ async def test_complete_json_retry_on_parse_failure(monkeypatch: pytest.MonkeyPa
         [_make_response(INVALID_JSON), _make_response(VALID_JSON)]
     )
 
-    with patch("nous.llm.client._build_client", return_value=client_mock):
+    with patch("nous.llm.client._build_gemini_client", return_value=client_mock):
         result = await complete_json("some prompt", CompanyDescription)
 
     assert isinstance(result, CompanyDescription)
@@ -99,7 +99,7 @@ async def test_complete_json_parse_failure_persistent(monkeypatch: pytest.Monkey
     )
 
     with (
-        patch("nous.llm.client._build_client", return_value=client_mock),
+        patch("nous.llm.client._build_gemini_client", return_value=client_mock),
         pytest.raises(LLMParseError),
     ):
         await complete_json("some prompt", CompanyDescription)
@@ -123,7 +123,7 @@ async def test_complete_json_rate_limit(monkeypatch: pytest.MonkeyPatch) -> None
     client_mock = _make_client_mock([rate_limit_exc])
 
     with (
-        patch("nous.llm.client._build_client", return_value=client_mock),
+        patch("nous.llm.client._build_gemini_client", return_value=client_mock),
         pytest.raises(LLMRateLimitError),
     ):
         await complete_json("some prompt", CompanyDescription)
@@ -160,7 +160,7 @@ async def test_complete_json_transient_server_error(monkeypatch: pytest.MonkeyPa
         [server_exc, server_exc, _make_response(VALID_JSON)]
     )
 
-    with patch("nous.llm.client._build_client", return_value=client_mock):
+    with patch("nous.llm.client._build_gemini_client", return_value=client_mock):
         result = await complete_json("some prompt", CompanyDescription)
 
     assert isinstance(result, CompanyDescription)
