@@ -227,6 +227,50 @@ async def test_upsert_company_preserves_non_form_d_name(
     assert company.discovered_via == "vc_portfolio"
 
 
+async def test_upsert_company_does_not_hijack_non_form_d_row(
+    db: AsyncSession,
+) -> None:
+    """Form D must NOT backfill CIK onto a row discovered by another source.
+
+    Scenario: a VC-portfolio row exists for "Acme" (no CIK, discovered_via=
+    'vc_portfolio'). SEC Form D arrives for a *different* "Acme" with a real
+    CIK. Pre-fix, the CIK was backfilled onto the VC row, silently merging
+    two distinct entities. After the fix, Form D inserts a new row.
+    """
+    from nous.util.slugify import normalize_name, slugify
+
+    vc_row = Company(
+        cik=None,
+        name="Acme",
+        slug=slugify("Acme"),
+        normalized_name=normalize_name("Acme"),
+        hq_country="US",
+        discovered_via="vc_portfolio",
+    )
+    db.add(vc_row)
+    await db.flush()
+    vc_id = vc_row.id
+
+    form_d = _make_form_d(
+        cik="0009999001",
+        entity_name="Acme",  # same normalized name
+        accession_number="0009999001-26-000001",
+    )
+    company, created = await upsert_company(db, form_d)
+
+    # A new row was inserted; the VC row is left alone.
+    assert created is True
+    assert company.id != vc_id
+    assert company.cik == "0009999001"
+    assert company.discovered_via == "form_d"
+
+    # Verify VC row is untouched.
+    refetched = await db.get(Company, vc_id)
+    assert refetched is not None
+    assert refetched.cik is None
+    assert refetched.discovered_via == "vc_portfolio"
+
+
 async def test_upsert_company_slug_collision_disambiguation(db: AsyncSession) -> None:
     """Two companies with the same normalized name get disambiguated slugs."""
     form_d_1 = _make_form_d(
