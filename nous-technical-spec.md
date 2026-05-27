@@ -150,10 +150,26 @@ Implementation should make this filter list configurable.
 ### 3.3 News articles
 
 - Use Google News RSS: `https://news.google.com/rss/search?q=%22{company_name}%22+funding&hl=en-US&gl=US`
-- Restrict to last 12 months.
+- Restrict to last 12 months (default lookback in the weekly pipeline: 7 days, configurable via `news_lookback_days` workflow input).
 - Fetch and store article content via `httpx` + `selectolax`.
 - For valuation extraction, prioritize reputable sources: TechCrunch, Axios, Reuters, Bloomberg (when accessible), The Information (public posts), Forbes, Business Insider, Fortune, Wired.
-- Deduplicate articles by URL canonical form.
+- Deduplicate articles by URL canonical form (`pipeline/src/nous/util/url.py:canonical_url`).
+- M3 also pulls the **TechCrunch venture-tag broad RSS** (`https://techcrunch.com/category/venture/feed/`) — articles whose titles parse to a candidate company name are auto-created with `discovered_via='techcrunch'` if not already in the DB.
+
+### 3.3.1 VC portfolio pages (M3 addition)
+
+Form D misses big-name AI rounds that flow through SPVs (classified as
+"Pooled Investment Fund" and filtered out of Form D) or offshore Reg S
+vehicles that don't file at all. M3 supplements Form D with structured
+portfolio scraping from 7 VC firms — companies become candidates for
+homepage scraping, LLM enrichment, and funding extraction identically to
+Form-D-discovered rows.
+
+- **Firms covered in M3:** YC, a16z, Sequoia, Lightspeed, Founders Fund, Greylock, Khosla.
+- **Deferred to M5:** Bessemer, Index, Accel, Benchmark, Felicis, Kleiner, General Catalyst.
+- **YC pre-seed filter:** YC's Algolia index is filtered to drop `stage == "Pre-Seed"` at fetch time — ~half of YC's ~5K portfolio is pre-seed and below the tracking threshold.
+- **Lightspeed exception:** Lightspeed's portfolio cards do not expose website URLs. Those companies enter the DB with `website=NULL` and `resolve-homepages` finds their site on the next cycle.
+- **Cadence:** monthly cron (`.github/workflows/monthly-vc-refresh.yml`) rather than weekly, respecting the firms' update cadence.
 
 ### 3.4 Employee count signals
 
@@ -200,6 +216,7 @@ All tables use UUIDs for primary keys, plus `created_at` and `updated_at` timest
 | employee_count_max | int | nullable |
 | employee_count_source | text | e.g. "wellfound", "theorg", "github_org" |
 | last_enriched_at | timestamptz | When LLM enrichment last ran |
+| discovered_via | text | M3: how the row entered the DB. `'form_d'` (default; backfilled on existing rows), `'vc_portfolio'`, `'news'`, `'techcrunch'`. First-discovery wins — never rewritten by later sources. |
 | created_at | timestamptz | |
 | updated_at | timestamptz | |
 
@@ -233,6 +250,7 @@ A funding round is the user-facing concept. It may be derived from a filing, fro
 | announced_date | date | nullable |
 | filing_id | uuid | FK filings, nullable |
 | primary_news_url | text | The article most relied on |
+| extraction_confidence | text | M3: `'low'` \| `'medium'` \| `'high'` — from the funding-extraction LLM. |
 | created_at | timestamptz | |
 
 ### 4.4 `investors`
@@ -240,7 +258,8 @@ A funding round is the user-facing concept. It may be derived from a filing, fro
 | Column | Type | Notes |
 |---|---|---|
 | id | uuid | PK |
-| name | text | unique on lowercased form |
+| name | text | Display name (preserves first-seen casing) |
+| name_normalized | text | M3: materialized lowercase + suffix-stripped (Capital/Ventures/Partners/Management/Group/Fund/LP/LLC). UNIQUE; the canonical lookup key. |
 | type | text | "institutional" \| "angel" \| "unknown" |
 | description | text | nullable |
 | website | text | nullable |
@@ -547,18 +566,25 @@ Each milestone should be independently shippable.
 - Implement `enrich-companies` stage.
 - Update company page to show short and long descriptions.
 
-### Milestone 3: News + funding extraction
-- Implement Google News RSS client.
-- Implement `ingest-news` and `extract-funding` stages.
-- Add funding history table to the company page.
+### Milestone 3: News + funding extraction + VC portfolio discovery
+- Implement Google News RSS client + TechCrunch venture-tag broad RSS adapter.
+- Implement VC portfolio adapters for 7 firms (YC, a16z, Sequoia, Lightspeed, Founders Fund, Greylock, Khosla) with the YC pre-seed stage filter.
+- Add `discovered_via` column to `companies` + `auto_create_company` find-or-create primitive (exact + pg_trgm fuzzy match @ 0.85).
+- Add `news_articles`, `funding_rounds`, `investors`, `funding_round_investors` tables + pg_trgm extension + GIN trigram index on `companies.normalized_name`.
+- Implement `ingest-news`, `extract-funding`, `refresh-vc-portfolios` stages.
+- Funding-extraction LLM call capped at 1000/week (within Gemini free tier).
+- Monthly `refresh-vc-portfolios` cron (separate from weekly pipeline).
+- Add funding history table + `discovered_via` badge to the company page.
 
 ### Milestone 4: Competitor analysis
 - Implement `analyze-competitors` stage.
 - Add competitors section to the company page.
 
 ### Milestone 5: Employee estimation + polish
-- Implement employee count signals.
-- Add search, filters, sorting on the index page.
+- Implement employee count signals (Wellfound, theorg, growjo, careers-page job count, GitHub org).
+- Add the remaining 7 VC portfolio adapters: Bessemer, Index, Accel, Benchmark, Felicis, Kleiner, General Catalyst.
+- Add the DuckDuckGo search fallback to `resolve-homepages` (deferred from M2).
+- Add search, filters, sorting on the index page (incl. `discovered_via` filter; pg_trgm GIN index from M3 enables fast partial-name matches).
 - Polish styling.
 - Add `/about` page.
 
