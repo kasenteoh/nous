@@ -47,7 +47,7 @@
 | Frontend styling | Tailwind CSS | Standard, fast iteration |
 | Frontend hosting | Vercel (free tier) | Auto-deploy from GitHub |
 | Scheduling | GitHub Actions (cron) | Free for public repos, 2000 min/month |
-| LLM provider | Google Gemini 2.5 Flash (free tier) | Generous free tier (~1500 req/day), good quality for extraction |
+| LLM provider | DeepSeek (`deepseek-chat`, OpenAI-compatible API) | Paid (~$0.27/1M in, $1.10/1M out); chosen over Gemini because the free tier (20 RPD on gemini-2.5-flash) was too low for bulk enrichment. Intentionally bypasses "free tier first". |
 | LLM client abstraction | LiteLLM or thin custom wrapper | Allows swapping providers via config |
 | HTTP scraping | `httpx` + `selectolax` | Async-capable, fast HTML parsing |
 | News source | Google News RSS | Free, no API key |
@@ -517,7 +517,7 @@ Sections in order:
 - `DATABASE_URL`
 - `SUPABASE_URL`
 - `SUPABASE_SERVICE_ROLE_KEY`
-- `GEMINI_API_KEY`
+- `DEEPSEEK_API_KEY`
 - `SEC_USER_AGENT` (e.g. `nous-project contact@yourdomain.com`)
 - `VERCEL_DEPLOY_HOOK_URL`
 
@@ -562,7 +562,7 @@ Each milestone should be independently shippable.
 
 ### Milestone 2: Homepage scraping + LLM descriptions
 - Implement homepage resolution and scraping.
-- Add LLM client with Gemini.
+- Add LLM client (DeepSeek; originally Gemini, switched out — see §3 table).
 - Implement `enrich-companies` stage.
 - Update company page to show short and long descriptions.
 
@@ -572,7 +572,7 @@ Each milestone should be independently shippable.
 - Add `discovered_via` column to `companies` + `auto_create_company` find-or-create primitive (exact + pg_trgm fuzzy match @ 0.85).
 - Add `news_articles`, `funding_rounds`, `investors`, `funding_round_investors` tables + pg_trgm extension + GIN trigram index on `companies.normalized_name`.
 - Implement `ingest-news`, `extract-funding`, `refresh-vc-portfolios` stages.
-- Funding-extraction LLM call capped at 1000/week (within Gemini free tier).
+- Funding-extraction LLM call capped at 1000/week to bound DeepSeek spend.
 - Monthly `refresh-vc-portfolios` cron (separate from weekly pipeline).
 - Add funding history table + `discovered_via` badge to the company page.
 
@@ -600,7 +600,7 @@ Each milestone should be independently shippable.
 1. **Logos.** Scraping favicons or og:image works but quality is uneven. Worth revisiting in M5.
 2. **Slug collisions.** Two companies named "Acme Inc" need disambiguation. Suggest: `{slug}-{short-hash}` on collision.
 3. **Defunct companies.** A company filed 11 months ago and shut down 2 months ago. We have no signal. Acceptable for v1; revisit later.
-4. **Rate-limit handling for Gemini free tier.** If we hit limits during backfill, the pipeline should resume gracefully on the next run.
+4. **LLM rate-limit handling.** If we hit DeepSeek rate limits during backfill, the pipeline should resume gracefully on the next run.
 5. **Bot detection on news sites.** Some publishers serve different content to scrapers. Acceptable to skip articles we cannot read.
 
 ---

@@ -5,8 +5,8 @@ announcement, and the name of the company we're asking about. Output: a
 Pydantic model capturing the structured round data, or a flagged non-match.
 
 Per CLAUDE.md ("prompts must instruct the model to return null or empty
-rather than fabricate"), the template explicitly tells Gemini to leave fields
-null when a value isn't stated in the article.
+rather than fabricate"), the template explicitly tells the model to leave
+fields null when a value isn't stated in the article.
 
 This module is a drop-in user of `nous.llm.client.complete_json`. The caller
 (Chunk 6a — extract-funding stage) imports `build_prompt` and

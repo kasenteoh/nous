@@ -161,7 +161,7 @@ def test_build_prompt_forbids_fabrication_language() -> None:
 
 
 def test_out_of_order_ranks_are_normalized() -> None:
-    """Gemini may return competitors out of rank order in the JSON array.
+    """The LLM may return competitors out of rank order in the JSON array.
     The validator must sort them before checking, not reject them."""
     ca = CompetitorAnalysis(
         competitors=[

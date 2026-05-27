@@ -1,6 +1,6 @@
 """enrich-companies pipeline stage.
 
-For each company that has raw_pages but no recent LLM enrichment, call Gemini
+For each company that has raw_pages but no recent LLM enrichment, call the LLM
 to generate descriptions and metadata.
 
 Commit cadence: one commit per company so a mid-run crash leaves a clean state.
@@ -116,7 +116,7 @@ async def run_enrich_companies(
             # (per-minute RPM vs per-day RPD vs token-per-minute TPM) instead
             # of guessing from the bare "rate limit" signal.
             logger.warning(
-                "Gemini rate limit hit while enriching %s — stopping loop to"
+                "LLM rate limit hit while enriching %s — stopping loop to"
                 " avoid further quota exhaustion. Raw error: %s",
                 company.name,
                 exc,

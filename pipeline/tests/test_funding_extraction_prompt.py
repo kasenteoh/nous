@@ -1,6 +1,6 @@
 """Tests for nous.llm.prompts.funding_extraction.
 
-Pure prompt-building + Pydantic schema validation. No Gemini call.
+Pure prompt-building + Pydantic schema validation. No LLM call.
 """
 
 from __future__ import annotations

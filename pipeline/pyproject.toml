@@ -15,7 +15,6 @@ dependencies = [
     "psycopg[binary]>=3.2",
     "tenacity>=8",
     "lxml>=5",
-    "google-genai>=1.0",
     "feedparser>=6.0",
     "curl_cffi>=0.7",
     "playwright>=1.40",
@@ -55,10 +54,6 @@ ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 module = ["lxml.*"]
-ignore_missing_imports = true
-
-[[tool.mypy.overrides]]
-module = ["google.genai.*", "google.genai"]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]

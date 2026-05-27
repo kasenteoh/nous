@@ -1,7 +1,7 @@
 """analyze-competitors pipeline stage (M4).
 
 For each enriched, industry-classified company with no recent competitors
-analysis, call Gemini with the target description + a peer list of up to 50
+analysis, call the LLM with the target description + a peer list of up to 50
 same-industry companies, and write the ranked competitor set to the
 `competitors` table.
 
@@ -12,8 +12,8 @@ Idempotency:
   or when MAX(updated_at) is older than the TTL.
 
 Quota discipline (spec §11):
-- Hard cap on companies processed per run (default 500 = monthly Gemini budget;
-  Gemini 2.5 Flash free tier = 1500 RPD).
+- Hard cap on companies processed per run (default 500) to bound per-run
+  LLM spend on DeepSeek.
 - On LLMRateLimitError, stop the loop immediately — same pattern as
   extract-funding.
 """
@@ -180,7 +180,7 @@ async def run_analyze_competitors(
             )
         except LLMRateLimitError:
             logger.warning(
-                "Gemini rate limit hit while analyzing competitors for %s — "
+                "LLM rate limit hit while analyzing competitors for %s — "
                 "stopping loop to avoid further quota exhaustion.",
                 company.name,
             )

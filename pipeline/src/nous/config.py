@@ -1,5 +1,3 @@
-from typing import Literal
-
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -9,25 +7,18 @@ class Settings(BaseSettings):
     DATABASE_URL: str = ""
     SUPABASE_URL: str = ""
     SUPABASE_SERVICE_ROLE_KEY: str = ""
-    GEMINI_API_KEY: str = ""
     SEC_USER_AGENT: str = ""
     VERCEL_DEPLOY_HOOK_URL: str = ""
 
     # ---------------------------------------------------------------------------
-    # LLM provider selection
+    # LLM
     # ---------------------------------------------------------------------------
 
-    # Selects the backend in nous.llm.client.complete_json().
-    # - "deepseek" (default): OpenAI-compatible API at api.deepseek.com. Paid
-    #   (~$0.27/1M input, $1.10/1M output as of 2026), but Gemini's 20 RPD free
-    #   tier was too low for bulk enrichment so we run on DeepSeek. This breaks
-    #   the spec rule "free tier first" — a deliberate, cost-incurring choice.
-    # - "gemini": google-genai, free tier = 20 requests/day per project on
-    #   gemini-2.5-flash. Retained as a fallback but not used in production.
-    LLM_PROVIDER: Literal["gemini", "deepseek"] = "deepseek"
-
-    # Required when LLM_PROVIDER="deepseek" (the default). Get one at
-    # https://platform.deepseek.com/api_keys
+    # All LLM calls go through nous.llm.client.complete_json(), backed by
+    # DeepSeek's OpenAI-compatible API. Paid (~$0.27/1M input, $1.10/1M output
+    # as of 2026) — this intentionally bypasses the spec's "free tier first"
+    # rule because Gemini's free tier (20 RPD) was too low for bulk enrichment.
+    # Get a key at https://platform.deepseek.com/api_keys
     DEEPSEEK_API_KEY: str = ""
 
     # ---------------------------------------------------------------------------

@@ -1,6 +1,6 @@
 """extract-funding pipeline stage.
 
-For each unprocessed NewsArticle, call Gemini with the funding-extraction
+For each unprocessed NewsArticle, call the LLM with the funding-extraction
 prompt and persist the structured round/investor data. Marks the article
 ``processed=true`` either way (success, "not a funding announcement", or
 low-confidence skip) so re-runs only revisit truly-unprocessed rows.
@@ -14,8 +14,8 @@ Idempotency:
 - ``link_round_investor`` uses ON CONFLICT to merge `is_lead` (sticky-true).
 
 Quota discipline (spec §11):
-- Hard cap on articles processed per run (default 1000 = M3 weekly Gemini
-  budget; see plan).
+- Hard cap on articles processed per run (default 1000) to bound per-run
+  LLM spend on DeepSeek.
 - On LLMRateLimitError, stop the loop immediately — same pattern as M2's
   enrich-companies.
 """
@@ -94,7 +94,7 @@ async def run_extract_funding(
             extraction: FundingExtraction = await complete_json(prompt, FundingExtraction)
         except LLMRateLimitError:
             logger.warning(
-                "Gemini rate limit hit while extracting funding for %s — stopping"
+                "LLM rate limit hit while extracting funding for %s — stopping"
                 " loop to avoid further quota exhaustion.",
                 company.name,
             )

@@ -6,7 +6,7 @@ schema already applied via ``alembic upgrade head``.
 Tests are skipped when DATABASE_URL is unset or empty.
 
 ``complete_json`` is monkeypatched to return canned CompanyDescription objects
-so no real Gemini calls are made.
+so no real LLM calls are made.
 """
 
 from __future__ import annotations

@@ -6,7 +6,7 @@ Pydantic model holding up to 6 ranked competitors with descriptions and
 reasoning.
 
 Per CLAUDE.md ("prompts must instruct the model to return null or empty rather
-than fabricate"), the template tells Gemini to return an empty list rather
+than fabricate"), the template tells the model to return an empty list rather
 than invent competitors.
 
 This module is a drop-in user of `nous.llm.client.complete_json`. The caller

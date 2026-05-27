@@ -1,17 +1,15 @@
-"""Provider-agnostic LLM wrapper. All LLM calls in nous go through complete_json().
+"""DeepSeek LLM wrapper. All LLM calls in nous go through complete_json().
 
-Two backends, selected via Settings.LLM_PROVIDER:
-- "deepseek" (default): OpenAI-compatible chat-completions API at
-  api.deepseek.com. Paid (≈$0.27/1M input, $1.10/1M output as of 2026). Much
-  higher rate limits than Gemini's free tier. Spec rule "free tier first" is
-  intentionally bypassed in production — a deliberate cost-incurring choice.
-- "gemini": google.genai SDK, JSON mode via response_schema. Free tier is
-  20 RPD on gemini-2.5-flash (verified in-prod). Retained as a fallback.
+Backend: DeepSeek's OpenAI-compatible chat-completions API at
+api.deepseek.com. Paid (≈$0.27/1M input, $1.10/1M output as of 2026). The
+spec rule "free tier first" is intentionally bypassed — a deliberate,
+cost-incurring choice, made because Gemini's free tier (20 RPD on
+gemini-2.5-flash) was too low for bulk enrichment.
 
-Both backends honor:
+The wrapper honors:
 - Pydantic schema validation on the response
 - One retry on ValidationError (per CLAUDE.md)
-- Tenacity exponential backoff on transient errors
+- Tenacity exponential backoff on transient (5xx) errors
 - LLMRateLimitError on 429 (no retry; caller decides whether to pause)
 """
 
@@ -19,12 +17,9 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import TYPE_CHECKING, Literal, TypeVar
+from typing import TypeVar
 
 import httpx
-from google import genai
-from google.genai import errors as genai_errors
-from google.genai import types as genai_types
 from pydantic import BaseModel, ValidationError
 from tenacity import (
     AsyncRetrying,
@@ -35,19 +30,12 @@ from tenacity import (
 
 from nous.config import Settings
 
-if TYPE_CHECKING:
-    pass
-
 logger = logging.getLogger(__name__)
 
 T = TypeVar("T", bound=BaseModel)
 
-DEFAULT_GEMINI_MODEL = "gemini-2.5-flash"
 DEFAULT_DEEPSEEK_MODEL = "deepseek-chat"
 DEEPSEEK_BASE_URL = "https://api.deepseek.com/v1"
-
-# Backwards-compat alias for any caller that still imports DEFAULT_MODEL.
-DEFAULT_MODEL = DEFAULT_GEMINI_MODEL
 
 
 class LLMError(Exception):
@@ -68,93 +56,19 @@ async def complete_json(
     *,
     model: str | None = None,
 ) -> T:
-    """Send `prompt` to the configured LLM provider, validate response against
-    `schema`, return T.
+    """Send `prompt` to DeepSeek, validate the response against `schema`, return T.
 
-    Provider is selected at call time from Settings().LLM_PROVIDER (defaults
-    to deepseek). If `model` is None, the provider's default model is used
-    (deepseek-chat for DeepSeek, gemini-2.5-flash for Gemini).
+    If `model` is None, the default model (deepseek-chat) is used.
 
-    Common semantics across providers:
+    Semantics:
     - ValidationError → retry exactly once with the same prompt
     - 429 → LLMRateLimitError (no retry — caller decides)
     - 5xx / transient network → tenacity retries up to 3 attempts
     """
     settings = Settings()
-    provider: Literal["gemini", "deepseek"] = settings.LLM_PROVIDER
-    if provider == "deepseek":
-        return await _complete_json_deepseek(
-            prompt, schema, model=model or DEFAULT_DEEPSEEK_MODEL, settings=settings
-        )
-    return await _complete_json_gemini(
-        prompt, schema, model=model or DEFAULT_GEMINI_MODEL, settings=settings
+    return await _complete_json_deepseek(
+        prompt, schema, model=model or DEFAULT_DEEPSEEK_MODEL, settings=settings
     )
-
-
-# ---------------------------------------------------------------------------
-# Gemini backend
-# ---------------------------------------------------------------------------
-
-
-def _build_gemini_client(settings: Settings) -> genai.Client:
-    if not settings.GEMINI_API_KEY:
-        raise LLMError("GEMINI_API_KEY is not set; cannot call Gemini.")
-    return genai.Client(api_key=settings.GEMINI_API_KEY)
-
-
-async def _complete_json_gemini(
-    prompt: str,
-    schema: type[T],
-    *,
-    model: str,
-    settings: Settings,
-) -> T:
-    client = _build_gemini_client(settings)
-    # google-genai accepts Pydantic model classes directly as response_schema,
-    # which instructs the model to produce JSON matching the model's schema.
-    config = genai_types.GenerateContentConfig(
-        response_mime_type="application/json",
-        response_schema=schema,
-    )
-
-    async def _call() -> str:
-        response = await client.aio.models.generate_content(
-            model=model,
-            contents=prompt,
-            config=config,
-        )
-        return response.text or ""
-
-    last_validation_error: ValidationError | None = None
-    for attempt in (1, 2):
-        try:
-            async for retry_attempt in AsyncRetrying(
-                wait=wait_exponential(multiplier=1, min=1, max=10),
-                stop=stop_after_attempt(3),
-                retry=retry_if_exception_type(genai_errors.ServerError),
-                reraise=True,
-            ):
-                with retry_attempt:
-                    raw_text = await _call()
-                    break
-        except genai_errors.ClientError as exc:
-            if exc.code == 429:
-                raise LLMRateLimitError(str(exc)) from exc
-            raise LLMError(str(exc)) from exc
-        except genai_errors.ServerError as exc:
-            raise LLMError(str(exc)) from exc
-
-        try:
-            return schema.model_validate_json(raw_text)
-        except ValidationError as exc:
-            last_validation_error = exc
-            logger.warning(
-                "Gemini JSON did not validate (attempt %d): %s", attempt, exc
-            )
-
-    raise LLMParseError(
-        f"Output failed schema validation after retry: {last_validation_error}"
-    ) from last_validation_error
 
 
 # ---------------------------------------------------------------------------
@@ -172,10 +86,10 @@ async def _complete_json_deepseek(
     if not settings.DEEPSEEK_API_KEY:
         raise LLMError("DEEPSEEK_API_KEY is not set; cannot call DeepSeek.")
 
-    # DeepSeek doesn't accept Pydantic schemas as a parameter the way Gemini
-    # does, so we include the JSON Schema in the system prompt as a hint and
-    # rely on response_format={"type": "json_object"} + post-hoc Pydantic
-    # validation. This pattern is documented in DeepSeek's API guide.
+    # DeepSeek doesn't accept a Pydantic/JSON schema as a request parameter, so
+    # we include the JSON Schema in the system prompt as a hint and rely on
+    # response_format={"type": "json_object"} + post-hoc Pydantic validation.
+    # This pattern is documented in DeepSeek's API guide.
     schema_json = json.dumps(schema.model_json_schema(), separators=(",", ":"))
     system_message = (
         "You output exactly one JSON object that conforms to the schema below.\n"

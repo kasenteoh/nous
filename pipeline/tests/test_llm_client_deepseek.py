@@ -69,9 +69,8 @@ class _ResponsePlan:
 
 
 @pytest.fixture(autouse=True)
-def _force_deepseek_provider(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Every test in this file talks to the DeepSeek backend."""
-    monkeypatch.setenv("LLM_PROVIDER", "deepseek")
+def _set_deepseek_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Provide a dummy key so the client doesn't bail before the mocked call."""
     monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test-key-do-not-use-in-prod")
 
 
