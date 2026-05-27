@@ -244,3 +244,49 @@ async def test_stale_pages_trigger_refetch(db: AsyncSession) -> None:
     s2 = await run_scrape_homepages(db, client, refetch_after_days=90)
     assert s2.companies_seen >= 1
     assert s2.pages_fetched >= 1
+
+
+async def test_failed_scrape_backs_off_on_next_run(
+    db: AsyncSession,
+) -> None:
+    """A company whose homepage fetch is permanently blocked must not be
+    re-attempted within the failure back-off window.
+
+    Pre-fix: scrape-homepages stored nothing on failure, so the eligibility
+    query (no raw_pages OR stale) re-selected the same dead company every
+    weekly run. After the fix, `last_scrape_attempt_at` is set on every
+    attempt and the eligibility query honours `failure_backoff_days`.
+    """
+    company = _make_company(slug="dead-url-co", website="https://dead.example/")
+    db.add(company)
+    await db.flush()
+    await db.commit()
+
+    # First run: every fetch raises RobotsBlockedError.
+    summary_1 = await run_scrape_homepages(
+        db,
+        MockHomepageClient(always_block=True),
+        failure_backoff_days=30,
+    )
+    assert summary_1.companies_seen == 1
+    assert summary_1.companies_with_no_pages == 1
+    await db.commit()
+
+    refetched = await db.get(Company, company.id)
+    assert refetched is not None
+    assert refetched.last_scrape_attempt_at is not None
+    first_attempt = refetched.last_scrape_attempt_at
+
+    # Second run immediately after — must skip this company entirely.
+    summary_2 = await run_scrape_homepages(
+        db,
+        MockHomepageClient(),  # would succeed if called
+        failure_backoff_days=30,
+    )
+    assert summary_2.companies_seen == 0  # eligibility excluded the dead row
+    await db.commit()
+
+    refetched_2 = await db.get(Company, company.id)
+    assert refetched_2 is not None
+    # The row was never selected, so the timestamp is unchanged.
+    assert refetched_2.last_scrape_attempt_at == first_attempt

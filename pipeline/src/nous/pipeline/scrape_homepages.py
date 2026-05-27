@@ -247,6 +247,7 @@ async def run_scrape_homepages(
     client: HomepageClient,
     *,
     refetch_after_days: int = 90,
+    failure_backoff_days: int = 30,
     limit: int | None = None,
     max_extra_pages: int = 3,
     browser_client: HeadlessBrowserClient | None = None,
@@ -263,11 +264,15 @@ async def run_scrape_homepages(
 
     A company is eligible when:
     - company.website IS NOT NULL, AND
-    - it has no raw_pages OR all of its raw_pages.fetched_at < (now - refetch_after_days).
+    - it has at least one raw_page OR last_scrape_attempt_at is NULL/older
+      than ``failure_backoff_days``, AND
+    - it has no raw_pages OR all of its raw_pages.fetched_at <
+      (now - ``refetch_after_days``).
     """
     summary = ScrapeSummary()
 
     cutoff = datetime.now(tz=UTC) - timedelta(days=refetch_after_days)
+    failure_cutoff = datetime.now(tz=UTC) - timedelta(days=failure_backoff_days)
 
     # Find companies with a website that have no recent raw_pages.
     latest_fetch_subq = (
@@ -285,12 +290,19 @@ async def run_scrape_homepages(
             latest_fetch_subq,
             Company.id == latest_fetch_subq.c.company_id,
         )
-        .where(
-            Company.website.is_not(None),
-        )
+        .where(Company.website.is_not(None))
         .where(
             (latest_fetch_subq.c.latest_fetched_at.is_(None))
             | (latest_fetch_subq.c.latest_fetched_at < cutoff)
+        )
+        # Failure back-off: if a company has zero pages on record and was
+        # attempted recently, suppress retry until the back-off elapses.
+        # Companies WITH at least one page stay eligible whenever the
+        # refetch_after_days predicate above fires.
+        .where(
+            (latest_fetch_subq.c.latest_fetched_at.is_not(None))
+            | (Company.last_scrape_attempt_at.is_(None))
+            | (Company.last_scrape_attempt_at < failure_cutoff)
         )
     )
     if limit is not None:
@@ -305,59 +317,62 @@ async def run_scrape_homepages(
         website: str = company.website  # type: ignore[assignment]  # already checked IS NOT NULL
         homepage_url = urljoin(website, "/")
 
-        # Step 1: fetch the homepage.
-        homepage = await _fetch_one(client, homepage_url)
-        if homepage == "robots":
-            summary.pages_skipped_robots += 1
-            summary.companies_with_no_pages += 1
-            await session.commit()
-            continue
-        if homepage is None:
-            summary.pages_failed += 1
-            summary.companies_with_no_pages += 1
-            await session.commit()
-            continue
-        assert isinstance(homepage, FetchResult)
-
-        homepage_content, used_browser = await _resolve_content_with_fallback(
-            homepage, browser_client
-        )
-        if used_browser:
-            summary.pages_via_browser_fallback += 1
-        await _persist_fetched_page(
-            session, company.id, url=homepage.url, content=homepage_content
-        )
-        summary.pages_fetched += 1
-
-        # Step 2: discover relevant subpages from whichever HTML we ended up
-        # storing (JS-rendered version contains the real <a> tags too).
-        discovered = _extract_relevant_links(
-            homepage_content,
-            base_url=homepage.url,
-            max_links=max_extra_pages,
-        )
-
-        # Step 3: fetch each discovered link. Browser fallback applies the
-        # same way for sub-pages — many SPAs render every route via JS.
-        for sub_url in discovered:
-            sub = await _fetch_one(client, sub_url)
-            if sub == "robots":
+        try:
+            # Step 1: fetch the homepage.
+            homepage = await _fetch_one(client, homepage_url)
+            if homepage == "robots":
                 summary.pages_skipped_robots += 1
+                summary.companies_with_no_pages += 1
                 continue
-            if sub is None:
+            if homepage is None:
                 summary.pages_failed += 1
+                summary.companies_with_no_pages += 1
                 continue
-            assert isinstance(sub, FetchResult)
-            sub_content, sub_used_browser = await _resolve_content_with_fallback(
-                sub, browser_client
+            assert isinstance(homepage, FetchResult)
+
+            homepage_content, used_browser = await _resolve_content_with_fallback(
+                homepage, browser_client
             )
-            if sub_used_browser:
+            if used_browser:
                 summary.pages_via_browser_fallback += 1
             await _persist_fetched_page(
-                session, company.id, url=sub.url, content=sub_content
+                session, company.id, url=homepage.url, content=homepage_content
             )
             summary.pages_fetched += 1
 
-        await session.commit()
+            # Step 2: discover relevant subpages from whichever HTML we ended
+            # up storing (JS-rendered version contains the real <a> tags too).
+            discovered = _extract_relevant_links(
+                homepage_content,
+                base_url=homepage.url,
+                max_links=max_extra_pages,
+            )
+
+            # Step 3: fetch each discovered link. Browser fallback applies the
+            # same way for sub-pages — many SPAs render every route via JS.
+            for sub_url in discovered:
+                sub = await _fetch_one(client, sub_url)
+                if sub == "robots":
+                    summary.pages_skipped_robots += 1
+                    continue
+                if sub is None:
+                    summary.pages_failed += 1
+                    continue
+                assert isinstance(sub, FetchResult)
+                sub_content, sub_used_browser = await _resolve_content_with_fallback(
+                    sub, browser_client
+                )
+                if sub_used_browser:
+                    summary.pages_via_browser_fallback += 1
+                await _persist_fetched_page(
+                    session, company.id, url=sub.url, content=sub_content
+                )
+                summary.pages_fetched += 1
+        finally:
+            # Record the attempt regardless of outcome so future runs can
+            # back off on dead URLs instead of re-trying every week.
+            company.last_scrape_attempt_at = datetime.now(tz=UTC)
+            session.add(company)
+            await session.commit()
 
     return summary
