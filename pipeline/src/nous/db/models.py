@@ -4,6 +4,7 @@ from uuid import UUID
 
 from sqlalchemy import (
     Boolean,
+    CheckConstraint,
     Date,
     DateTime,
     ForeignKey,
@@ -60,6 +61,11 @@ class Company(Base):
     tags: Mapped[list[str] | None] = mapped_column(ARRAY(String))
     last_enriched_payload: Mapped[dict | None] = mapped_column(JSONB)  # type: ignore[type-arg]
     website_resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_scrape_attempt_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        index=True,
+    )
 
     # M3 — how this company first entered the DB.
     # 'form_d' | 'vc_portfolio' | 'news' | 'techcrunch'.
@@ -171,6 +177,13 @@ class FundingRound(Base):
     """
 
     __tablename__ = "funding_rounds"
+    __table_args__ = (
+        CheckConstraint(
+            "extraction_confidence IN ('low', 'medium', 'high') "
+            "OR extraction_confidence IS NULL",
+            name="ck_funding_rounds_extraction_confidence",
+        ),
+    )
 
     company_id: Mapped[UUID] = mapped_column(
         PG_UUID(as_uuid=True),
@@ -184,7 +197,7 @@ class FundingRound(Base):
     announced_date: Mapped[date | None] = mapped_column(Date, index=True)
     filing_id: Mapped[UUID | None] = mapped_column(
         PG_UUID(as_uuid=True),
-        ForeignKey("filings.id"),
+        ForeignKey("filings.id", ondelete="SET NULL"),
         nullable=True,
         index=True,
     )

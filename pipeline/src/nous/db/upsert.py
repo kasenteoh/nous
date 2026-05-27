@@ -108,16 +108,20 @@ async def upsert_company(session: AsyncSession, form_d: FormD) -> tuple[Company,
         company = await _find_by_cik(session, cik)
 
     # -- Step 1b: if CIK lookup missed, check by normalized name --
-    # Only accept a name match when it's safe: either we have no incoming CIK,
-    # or the existing row has no CIK (in which case we backfill). If the
-    # existing row has a *different* non-empty CIK, these are two distinct
-    # companies that happen to share a name — fall through to INSERT.
+    # Only accept a name match when both rows are Form-D-sourced (the
+    # original use case: an earlier no-CIK filing matched by name, current
+    # filing supplies the CIK). For non-Form-D rows we fall through to
+    # INSERT — accepting a possible duplicate is safer than hijacking a
+    # VC/news/TC row that may represent a different real-world company.
     if company is None:
         candidate = await _find_by_normalized_name(session, norm)
         if candidate is not None:
             if not cik:
+                # Without an incoming CIK, this is a re-ingest of the same
+                # no-CIK Form D filing — match regardless of source.
                 company = candidate
-            elif not candidate.cik:
+            elif not candidate.cik and candidate.discovered_via == "form_d":
+                # Backfill CIK only onto a prior Form D row that lacked one.
                 company = candidate
                 company.cik = cik  # backfill
 
@@ -470,6 +474,11 @@ async def reconcile_funding_round(
             and extraction.valuation_post_money_usd is not None
         ):
             existing.valuation_post_money = extraction.valuation_post_money_usd
+        if (
+            existing.valuation_source is None
+            and extraction.valuation_source is not None
+        ):
+            existing.valuation_source = extraction.valuation_source
         if existing.announced_date is None and extraction.announced_date is not None:
             existing.announced_date = extraction.announced_date
         if _is_more_confident(extraction.confidence, existing.extraction_confidence):
@@ -483,6 +492,7 @@ async def reconcile_funding_round(
         round_type=extraction.round_type,
         amount_raised=extraction.amount_raised_usd,
         valuation_post_money=extraction.valuation_post_money_usd,
+        valuation_source=extraction.valuation_source,
         announced_date=extraction.announced_date,
         primary_news_url=primary_news_url,
         extraction_confidence=extraction.confidence,

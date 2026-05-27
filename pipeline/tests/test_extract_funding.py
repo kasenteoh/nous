@@ -75,6 +75,7 @@ def _make_extraction(
     round_type: str | None = "Series A",
     amount: Decimal | None = Decimal("50000000.00"),
     valuation: Decimal | None = Decimal("300000000.00"),
+    valuation_source: str | None = None,
     announced: date | None = date(2026, 5, 1),
     leads: list[str] | None = None,
     others: list[str] | None = None,
@@ -85,6 +86,7 @@ def _make_extraction(
         round_type=round_type,
         amount_raised_usd=amount,
         valuation_post_money_usd=valuation,
+        valuation_source=valuation_source,
         announced_date=announced,
         lead_investors=leads if leads is not None else ["Lightspeed"],
         other_investors=others if others is not None else ["Founders Fund"],
@@ -212,6 +214,35 @@ async def test_low_confidence_included_with_opt_in(
     summary = await run_extract_funding(db, limit=10, skip_low_confidence=False)
     assert summary.funding_rounds_created == 1
     assert summary.investor_links_created == 1
+
+
+async def test_valuation_source_is_persisted_when_extracted(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When the LLM returns valuation_source, reconcile_funding_round writes it."""
+    company = _make_company()
+    db.add(company)
+    await db.flush()
+    db.add(_make_article(company.id, url="https://news.example.com/val-src"))
+    await db.flush()
+    await db.commit()
+
+    async def _fake_complete_json(prompt: str, schema: type) -> FundingExtraction:
+        return _make_extraction(
+            valuation=Decimal("750000000"),
+            valuation_source="TechCrunch, March 2026",
+        )
+
+    monkeypatch.setattr(
+        "nous.pipeline.extract_funding.complete_json", _fake_complete_json
+    )
+
+    summary = await run_extract_funding(db, limit=10)
+    assert summary.funding_rounds_created == 1
+
+    rounds = (await db.execute(select(FundingRound))).scalars().all()
+    assert len(rounds) == 1
+    assert rounds[0].valuation_source == "TechCrunch, March 2026"
 
 
 # ---------------------------------------------------------------------------
@@ -398,3 +429,32 @@ async def test_limit_caps_articles_processed(
     summary = await run_extract_funding(db, limit=2)
     assert summary.articles_processed == 2
     assert len(calls) == 2
+
+
+# ---------------------------------------------------------------------------
+# CHECK constraint
+# ---------------------------------------------------------------------------
+
+
+async def test_extraction_confidence_check_rejects_invalid_values(
+    db: AsyncSession,
+) -> None:
+    """The CHECK constraint blocks any string outside ('low','medium','high', NULL)."""
+    from sqlalchemy.exc import IntegrityError
+
+    company = _make_company()
+    db.add(company)
+    await db.flush()
+    await db.commit()
+
+    bad = FundingRound(
+        company_id=company.id,
+        round_type="Series A",
+        amount_raised=Decimal("1000000"),
+        announced_date=date(2026, 1, 1),
+        extraction_confidence="medum",  # typo — must be rejected
+    )
+    db.add(bad)
+    with pytest.raises(IntegrityError):
+        await db.flush()
+    await db.rollback()

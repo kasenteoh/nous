@@ -190,41 +190,91 @@ async def test_upsert_company_preserves_first_seen_name_casing(
     assert company_2.slug == original_slug
 
 
-async def test_upsert_company_preserves_non_form_d_name(
+async def test_upsert_company_does_not_hijack_non_form_d_row(
     db: AsyncSession,
 ) -> None:
-    """When a VC-portfolio row already exists, a later Form D match must NOT
-    overwrite ``name`` or ``discovered_via``. Only ``normalized_name`` and
-    mutable fields (hq/industry) refresh."""
+    """Form D must NOT backfill CIK onto a row discovered by another source.
+
+    Scenario: a VC-portfolio row exists for "Acme" (no CIK, discovered_via=
+    'vc_portfolio'). SEC Form D arrives for a *different* "Acme" with a real
+    CIK. Pre-fix, the CIK was backfilled onto the VC row, silently merging
+    two distinct entities. After the fix, Form D inserts a new row.
+    """
     from nous.util.slugify import normalize_name, slugify
 
-    seeded = Company(
+    vc_row = Company(
         cik=None,
-        name="Stripe",
-        slug=slugify("Stripe"),
-        normalized_name=normalize_name("Stripe"),
+        name="Acme",
+        slug=slugify("Acme"),
+        normalized_name=normalize_name("Acme"),
         hq_country="US",
         discovered_via="vc_portfolio",
     )
-    db.add(seeded)
+    db.add(vc_row)
     await db.flush()
-    seeded_id = seeded.id
-    seeded_slug = seeded.slug
+    vc_id = vc_row.id
 
     form_d = _make_form_d(
-        cik="0001234500",
-        entity_name="STRIPE, INC.",
-        accession_number="0001234500-21-000001",
+        cik="0009999001",
+        entity_name="Acme",  # same normalized name
+        accession_number="0009999001-26-000001",
     )
     company, created = await upsert_company(db, form_d)
 
-    assert created is False
-    assert company.id == seeded_id
-    # Form D backfilled CIK, but did NOT touch name/slug/discovered_via.
-    assert company.cik == "0001234500"
-    assert company.name == "Stripe"
-    assert company.slug == seeded_slug
-    assert company.discovered_via == "vc_portfolio"
+    # A new row was inserted; the VC row is left alone.
+    assert created is True
+    assert company.id != vc_id
+    assert company.cik == "0009999001"
+    assert company.discovered_via == "form_d"
+
+    # Verify VC row is untouched.
+    refetched = await db.get(Company, vc_id)
+    assert refetched is not None
+    assert refetched.cik is None
+    assert refetched.discovered_via == "vc_portfolio"
+
+
+async def test_deleting_filing_sets_funding_round_filing_id_null(
+    db: AsyncSession,
+) -> None:
+    """Deleting a Filing must SET NULL on referencing funding_rounds.filing_id,
+    not raise an FK violation."""
+    from nous.db.models import FundingRound
+
+    # Seed a company + filing + funding round that references the filing.
+    form_d = _make_form_d(
+        cik="0008888001",
+        entity_name="DeleteCo",
+        accession_number="0008888001-26-000001",
+    )
+    company, _ = await upsert_company(db, form_d)
+    await db.flush()
+    filing = await insert_filing_if_new(db, company.id, form_d)
+    assert filing is not None
+    await db.flush()
+
+    round_row = FundingRound(
+        company_id=company.id,
+        filing_id=filing.id,
+        round_type="Series A",
+        amount_raised=Decimal("5000000"),
+        announced_date=date(2026, 1, 1),
+        extraction_confidence="high",
+    )
+    db.add(round_row)
+    await db.flush()
+    round_id = round_row.id
+
+    # Delete the filing — must not raise. The DB-level SET NULL fires here,
+    # but the round_row ORM object's `filing_id` still points to the deleted
+    # filing in the session's identity map. Use populate_existing=True to
+    # force a re-read from the DB and see the post-SET-NULL state.
+    await db.delete(filing)
+    await db.flush()
+
+    refetched = await db.get(FundingRound, round_id, populate_existing=True)
+    assert refetched is not None  # round survived
+    assert refetched.filing_id is None  # FK was SET NULL
 
 
 async def test_upsert_company_slug_collision_disambiguation(db: AsyncSession) -> None:
