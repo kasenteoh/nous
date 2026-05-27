@@ -2,7 +2,17 @@ from datetime import date, datetime
 from decimal import Decimal
 from uuid import UUID
 
-from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Numeric, String, UniqueConstraint, func
+from sqlalchemy import (
+    Boolean,
+    Date,
+    DateTime,
+    ForeignKey,
+    Numeric,
+    SmallInteger,
+    String,
+    UniqueConstraint,
+    func,
+)
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column
@@ -255,7 +265,7 @@ class Competitor(Base):
     competitor_name: Mapped[str] = mapped_column(String, nullable=False)
     description: Mapped[str | None] = mapped_column(String, nullable=True)
     reasoning: Mapped[str | None] = mapped_column(String, nullable=True)
-    rank: Mapped[int] = mapped_column(nullable=False)
+    rank: Mapped[int] = mapped_column(SmallInteger, nullable=False)
 
     __table_args__ = (
         UniqueConstraint("company_id", "rank", name="uq_competitors_company_rank"),
