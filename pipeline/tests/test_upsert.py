@@ -271,6 +271,46 @@ async def test_upsert_company_does_not_hijack_non_form_d_row(
     assert refetched.discovered_via == "vc_portfolio"
 
 
+async def test_deleting_filing_sets_funding_round_filing_id_null(
+    db: AsyncSession,
+) -> None:
+    """Deleting a Filing must SET NULL on referencing funding_rounds.filing_id,
+    not raise an FK violation."""
+    from nous.db.models import FundingRound
+
+    # Seed a company + filing + funding round that references the filing.
+    form_d = _make_form_d(
+        cik="0008888001",
+        entity_name="DeleteCo",
+        accession_number="0008888001-26-000001",
+    )
+    company, _ = await upsert_company(db, form_d)
+    await db.flush()
+    filing = await insert_filing_if_new(db, company.id, form_d)
+    assert filing is not None
+    await db.flush()
+
+    round_row = FundingRound(
+        company_id=company.id,
+        filing_id=filing.id,
+        round_type="Series A",
+        amount_raised=Decimal("5000000"),
+        announced_date=date(2026, 1, 1),
+        extraction_confidence="high",
+    )
+    db.add(round_row)
+    await db.flush()
+    round_id = round_row.id
+
+    # Delete the filing — must not raise.
+    await db.delete(filing)
+    await db.flush()
+
+    refetched = await db.get(FundingRound, round_id)
+    assert refetched is not None  # round survived
+    assert refetched.filing_id is None  # FK was SET NULL
+
+
 async def test_upsert_company_slug_collision_disambiguation(db: AsyncSession) -> None:
     """Two companies with the same normalized name get disambiguated slugs."""
     form_d_1 = _make_form_d(

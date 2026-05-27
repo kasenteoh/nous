@@ -184,7 +184,7 @@ class FundingRound(Base):
     announced_date: Mapped[date | None] = mapped_column(Date, index=True)
     filing_id: Mapped[UUID | None] = mapped_column(
         PG_UUID(as_uuid=True),
-        ForeignKey("filings.id"),
+        ForeignKey("filings.id", ondelete="SET NULL"),
         nullable=True,
         index=True,
     )
