@@ -1,0 +1,87 @@
+Recursive AI raises $300M Series A led by Lightspeed at $2B valuation
+
+Recursive AI, the San Francisco-based startup building autonomous coding agents
+for enterprise software teams, announced on Thursday that it has closed a $300
+million Series A round led by Lightspeed Venture Partners, with participation
+from Founders Fund, Andreessen Horowitz, and existing seed investors. The deal
+values the eighteen-month-old company at approximately $2 billion post-money,
+according to two sources familiar with the matter.
+
+The round is one of the largest Series A financings of the year and reflects
+continued investor appetite for AI infrastructure plays despite a broader
+cooling in venture markets. Lightspeed partner Ravi Mhatre, who is joining
+Recursive AI's board as part of the transaction, said in a statement that the
+firm has been "watching the autonomous-agent category closely for the better
+part of a year" and that Recursive AI's approach to long-horizon code
+generation was the clearest technical differentiator they had encountered.
+
+Recursive AI was founded in late 2024 by Maya Chen, formerly a research
+scientist at Anthropic, and Dan Pereira, who led infrastructure engineering
+at Stripe. The company is building what it calls a "coding teammate": an AI
+system that operates over multi-day engineering tasks, opening pull requests,
+running CI, responding to review comments, and iterating until the work
+merges. Unlike single-turn code-completion tools, the system is designed to
+hold context across sessions and adapt to a codebase's idiosyncratic
+conventions.
+
+Chen said in an interview that the new capital will be used to roughly triple
+the engineering headcount over the next twelve months and to expand the
+company's go-to-market efforts beyond the small handful of design-partner
+customers it has worked with to date. Recursive AI declined to name those
+customers but said they include "two of the top five US banks" and "a major
+public e-commerce company."
+
+The Series A follows a $24 million seed round announced last March, also led
+by Lightspeed with participation from Founders Fund and a syndicate of angel
+investors that included Patrick Collison and Nat Friedman. With this round,
+Recursive AI has raised approximately $324 million in total equity financing.
+
+Investors and operators in the autonomous-agent space have for months
+described the category as bifurcating between general-purpose agent platforms,
+which attempt to handle any task a human knowledge worker might perform, and
+verticalized systems that pick a single high-value workflow and optimize it
+end-to-end. Recursive AI sits squarely in the latter camp. Mhatre cited that
+focus as a meaningful factor in Lightspeed's decision: "The teams that win
+the agent layer are going to be the ones who can demonstrate measurable
+business value in a narrow surface area first, then expand. Recursive picked
+a surface — engineering — where the ROI is calculable on day one."
+
+Competing with Recursive AI in the AI-coding agent space are Cognition, the
+maker of Devin; Magic, which is building a model purpose-trained for code; and
+the agent products from Anthropic, OpenAI, and Google. Several enterprise
+software incumbents — most notably GitHub with its Copilot Workspace product
+and Atlassian with its Rovo agents — are also moving aggressively into the
+category, though their offerings are positioned more as augmentation than
+autonomous execution.
+
+Pereira said the company has been deliberate about not releasing a public
+self-serve product. "There is a real temptation in this category to chase
+the developer-tool playbook of bottoms-up adoption," he said. "But the kinds
+of tasks we want our agent to take on — multi-day, high-stakes refactors,
+incident response, infrastructure migrations — those are not tasks where you
+want a developer just trying us out over the weekend without organizational
+buy-in. We're going top-down, slowly, by design."
+
+The company plans to publish a public technical report in the coming weeks
+detailing the architecture of its agent system, which Chen described as
+combining a custom-trained planning model with a fleet of execution models
+specialized for different programming languages and toolchains. Whether the
+report will include any benchmarks comparing the system to publicly available
+agents is unclear; Chen would say only that "the numbers will speak for
+themselves."
+
+Lightspeed's investment in Recursive AI is the firm's third investment in an
+AI-coding company in the past eighteen months, following its lead investments
+in Codeium and a stealth-mode startup the firm has not publicly named.
+Founders Fund partner Trae Stephens, who led that firm's participation in
+both the seed and Series A rounds, said Recursive AI's combination of "a
+genuinely novel technical approach with the discipline to commercialize
+narrowly" was rare in the current market. "Most of what we're seeing is
+either great technology with no go-to-market story, or polished
+go-to-market wrapped around fairly conventional models. Maya and Dan have
+both, and they're moving fast."
+
+The Series A is expected to close in the next two weeks. Recursive AI's
+headquarters will remain in San Francisco's Mission District, though the
+company plans to open a small New York office to support its East Coast
+financial-services customers.
