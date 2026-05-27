@@ -369,10 +369,18 @@ async def run_scrape_homepages(
                 )
                 summary.pages_fetched += 1
         finally:
-            # Record the attempt regardless of outcome so future runs can
-            # back off on dead URLs instead of re-trying every week.
-            company.last_scrape_attempt_at = datetime.now(tz=UTC)
-            session.add(company)
-            await session.commit()
+            # Stamp the attempt timestamp on every iteration so the back-off
+            # window applies even when the body raised (e.g. a DB hiccup in
+            # _persist_fetched_page). If the in-flight transaction is
+            # poisoned, roll back, then commit just the timestamp update.
+            try:
+                company.last_scrape_attempt_at = datetime.now(tz=UTC)
+                await session.commit()
+            except Exception:
+                await session.rollback()
+                fresh = await session.get(Company, company.id)
+                if fresh is not None:
+                    fresh.last_scrape_attempt_at = datetime.now(tz=UTC)
+                    await session.commit()
 
     return summary
