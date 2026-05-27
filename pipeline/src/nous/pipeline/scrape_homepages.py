@@ -106,11 +106,15 @@ async def run_scrape_homepages(
                 summary.pages_failed += 1
                 continue
 
+            # Postgres TEXT columns reject NUL (0x00) bytes. Some sites serve
+            # binary disguised as text/html, or include stray NULs in error
+            # pages. Strip them — they're never legitimate in HTML.
+            sanitized_content = fetch_result.content.replace("\x00", "")
             await upsert_raw_page(
                 session,
                 company_id=company.id,
                 url=fetch_result.url,  # use final URL after redirects
-                content=fetch_result.content,
+                content=sanitized_content,
             )
             pages_this_company += 1
             summary.pages_fetched += 1
