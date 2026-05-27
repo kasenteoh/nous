@@ -17,6 +17,7 @@ dependencies = [
     "lxml>=5",
     "google-genai>=1.0",
     "feedparser>=6.0",
+    "curl_cffi>=0.7",
 ]
 
 [project.scripts]
@@ -61,6 +62,10 @@ ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 module = ["feedparser", "feedparser.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["curl_cffi", "curl_cffi.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
