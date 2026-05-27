@@ -22,6 +22,9 @@ export interface CompanyRow {
   employee_count_max: number | null; // filled later
   employee_count_source: string | null;
   last_enriched_at: string | null;
+  // M3 — how this company first entered the DB.
+  // One of: 'form_d' | 'vc_portfolio' | 'news' | 'techcrunch'.
+  discovered_via: string;
   created_at: string;
   updated_at: string;
 }
@@ -71,9 +74,57 @@ export interface CompanyListRow {
   latest_offering_amount: number | null;
 }
 
+// ─── M3: funding-history rows ─────────────────────────────────────────────────
+
+/**
+ * Row from the `investors` table. `name_normalized` is the lowercased form used
+ * for unique-on-rename matching server-side; the UI always shows `name`.
+ */
+export interface Investor {
+  id: string;
+  name: string;
+  name_normalized: string;
+  type: string; // 'institutional' | 'angel' | 'unknown'
+  description: string | null;
+  website: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+/**
+ * Row from `funding_rounds`. Numeric columns come back from Supabase as
+ * strings (Postgres `numeric` is not safely coercible to JS `number`), but the
+ * JS client serializes them as `number` for us — so we type them as `number`
+ * here. If we ever see precision loss, we'll switch to `string`.
+ */
+export interface FundingRound {
+  id: string;
+  company_id: string;
+  round_type: string | null;
+  amount_raised: number | null;
+  valuation_post_money: number | null;
+  valuation_source: string | null;
+  announced_date: string | null; // ISO date (YYYY-MM-DD) or null
+  filing_id: string | null;
+  primary_news_url: string | null;
+  extraction_confidence: string | null; // 'low' | 'medium' | 'high' | null
+  created_at: string;
+  updated_at: string;
+}
+
+/**
+ * A funding round joined with its investor names, pre-split into lead vs
+ * other participants. Built in `getCompanyBySlug` from the nested-select.
+ */
+export interface FundingRoundWithInvestors extends FundingRound {
+  leadInvestors: string[];
+  otherInvestors: string[];
+}
+
 /** Full company detail assembled from three DB queries. */
 export interface CompanyDetail {
   company: CompanyRow;
   filings: FilingRow[]; // sorted by filing_date desc
   relatedPersons: RelatedPersonRow[]; // most recent filing's people first
+  fundingRounds: FundingRoundWithInvestors[]; // sorted by announced_date desc (nulls last)
 }

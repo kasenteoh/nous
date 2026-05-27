@@ -8,8 +8,25 @@ import type {
   CompanyListRow,
   CompanyRow,
   FilingRow,
+  FundingRound,
+  FundingRoundWithInvestors,
   RelatedPersonRow,
 } from "@/lib/types";
+
+// Shape returned by the nested Supabase select on `funding_rounds`. We narrow
+// rather than reach for `any` so the join structure is checked at the boundary.
+interface NestedInvestor {
+  name: string | null;
+}
+
+interface NestedFundingRoundInvestor {
+  is_lead: boolean | null;
+  investors: NestedInvestor | NestedInvestor[] | null;
+}
+
+type FundingRoundJoin = FundingRound & {
+  funding_round_investors: NestedFundingRoundInvestor[] | null;
+};
 
 /**
  * Return a paginated list of companies with their latest filing snapshot.
@@ -140,8 +157,9 @@ export async function getCompanyBySlug(
 
   const companyId = company.id as string;
 
-  // 2 & 3: fetch filings and related persons in parallel.
-  const [filingsResult, personsResult] = await Promise.all([
+  // 2, 3 & 4: fetch filings, related persons, and funding rounds (with nested
+  // investor joins) in parallel.
+  const [filingsResult, personsResult, roundsResult] = await Promise.all([
     supabase
       .from("filings")
       .select("*")
@@ -151,6 +169,16 @@ export async function getCompanyBySlug(
     supabase
       .from("related_persons")
       .select("*")
+      .eq("company_id", companyId),
+
+    // Nested select: pull each funding round with its join rows, and from each
+    // join row pull the investor's display name. Sort handled in JS below
+    // because we need a custom "nulls last" ordering on announced_date.
+    supabase
+      .from("funding_rounds")
+      .select(
+        "*, funding_round_investors(is_lead, investors(name))",
+      )
       .eq("company_id", companyId),
   ]);
 
@@ -166,9 +194,16 @@ export async function getCompanyBySlug(
       personsResult.error.message,
     );
   }
+  if (roundsResult.error) {
+    console.error(
+      "[getCompanyBySlug] funding_rounds query failed:",
+      roundsResult.error.message,
+    );
+  }
 
   const filings = (filingsResult.data ?? []) as FilingRow[];
   const rawPersons = (personsResult.data ?? []) as RelatedPersonRow[];
+  const rawRounds = (roundsResult.data ?? []) as FundingRoundJoin[];
 
   // Sort related persons: most recent filing's people first.
   // Build a map: filing_id → filing_date for ordering.
@@ -182,9 +217,48 @@ export async function getCompanyBySlug(
     return db2.localeCompare(da); // desc
   });
 
+  // Shape funding rounds: split join rows into lead vs other investor names,
+  // then sort by announced_date desc with nulls last.
+  const fundingRounds: FundingRoundWithInvestors[] = rawRounds
+    .map((round) => {
+      const joinRows = round.funding_round_investors ?? [];
+      const leadInvestors: string[] = [];
+      const otherInvestors: string[] = [];
+
+      for (const j of joinRows) {
+        // PostgREST can return the related row as either an object or a
+        // single-element array depending on join cardinality; normalize.
+        const inv = Array.isArray(j.investors) ? j.investors[0] : j.investors;
+        const name = inv?.name;
+        if (!name) continue;
+        if (j.is_lead === true) {
+          leadInvestors.push(name);
+        } else {
+          otherInvestors.push(name);
+        }
+      }
+
+      // Strip the nested join field from the returned object — the caller only
+      // sees the flattened leadInvestors / otherInvestors arrays.
+      const {
+        funding_round_investors: _funding_round_investors,
+        ...rest
+      } = round;
+      void _funding_round_investors;
+      return { ...rest, leadInvestors, otherInvestors };
+    })
+    .sort((a, b) => {
+      // Nulls last; otherwise ISO date string compare is lexicographically correct.
+      if (a.announced_date === null && b.announced_date === null) return 0;
+      if (a.announced_date === null) return 1;
+      if (b.announced_date === null) return -1;
+      return b.announced_date.localeCompare(a.announced_date);
+    });
+
   return {
     company: company as unknown as CompanyRow,
     filings,
     relatedPersons,
+    fundingRounds,
   };
 }
