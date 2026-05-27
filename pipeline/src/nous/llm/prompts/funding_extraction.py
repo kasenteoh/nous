@@ -57,6 +57,15 @@ class FundingExtraction(BaseModel):
             "state a valuation."
         ),
     )
+    valuation_source: str | None = Field(
+        default=None,
+        description=(
+            "Short attribution for the post-money valuation: the publication "
+            "or source name plus month/year if stated, e.g. 'TechCrunch, "
+            "March 2026'. Null when no publication/source is named alongside "
+            "the valuation. Do NOT invent a source."
+        ),
+    )
     announced_date: date | None = Field(
         default=None,
         description=(
@@ -96,6 +105,10 @@ Return JSON matching the schema. Rules:
   set is_funding_announcement=false and leave other fields null/empty.
 - Do not invent numbers. If the round size or valuation is not stated, return null.
 - amount_raised_usd is in raw USD (e.g. 50000000 for "$50M").
+- valuation_source: if a publication or attribution accompanies the valuation
+  number (e.g. "according to TechCrunch", "sources told The Information"),
+  capture it as a short string like "TechCrunch, March 2026". Return null if
+  no source is named alongside the valuation — never invent.
 - announced_date is the date the round was publicly announced; null if unclear.
 - lead_investors: only firms the article identifies as leading. Other participants
   go in other_investors.
