@@ -62,6 +62,12 @@ jobs:
       DATABASE_URL: ${{ secrets.DATABASE_URL }}
       SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      # Optional. Set as a repo secret to swap to DeepSeek when LLM_PROVIDER=deepseek.
+      DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+      # Optional. Defaults to "gemini" in Settings. Set as a repo variable
+      # (Settings → Secrets and variables → Actions → Variables) to switch
+      # providers without code changes.
+      LLM_PROVIDER: ${{ vars.LLM_PROVIDER || 'gemini' }}
     steps:
       - uses: actions/checkout@v4
 
