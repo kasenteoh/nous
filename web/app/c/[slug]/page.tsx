@@ -96,21 +96,21 @@ export default async function CompanyPage({ params }: Props) {
       {/* ── Company header ─────────────────────────────────────────────── */}
       <header className="mb-10">
         <div className="flex flex-wrap items-center gap-3">
-          <h1 className="text-4xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-100">
+          <h1 className="text-4xl font-semibold tracking-tight text-ink">
             {company.name}
           </h1>
           {/* Discovery badge — every company has a discovered_via value
               ('vc_portfolio' | 'news' | 'techcrunch'), surfacing how nous
               first found the company. */}
           <span
-            className="bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300 text-xs px-2 py-0.5 rounded"
+            className="rounded border border-edge px-2 py-0.5 text-xs text-ink-muted"
             title="How nous first discovered this company"
           >
             Discovered via {company.discovered_via}
           </span>
         </div>
 
-        <dl className="mt-4 flex flex-wrap gap-x-8 gap-y-2 text-sm text-zinc-500 dark:text-zinc-400">
+        <dl className="mt-4 flex flex-wrap gap-x-8 gap-y-2 text-sm text-ink-muted">
           {company.website && (
             <div>
               <dt className="sr-only">Website</dt>
@@ -119,7 +119,7 @@ export default async function CompanyPage({ params }: Props) {
                   href={company.website}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="text-zinc-700 hover:text-zinc-900 dark:text-zinc-300 dark:hover:text-zinc-100 underline underline-offset-2 decoration-zinc-300 dark:decoration-zinc-600"
+                  className="text-ink-soft hover:text-ink underline underline-offset-2 decoration-ink-faint"
                 >
                   {websiteHostname(company.website) ?? company.website}
                 </a>
@@ -169,7 +169,7 @@ export default async function CompanyPage({ params }: Props) {
 
         {/* Tagline — description_short as a muted paragraph below the meta strip */}
         {company.description_short && (
-          <p className="mt-5 text-base text-zinc-500 dark:text-zinc-400 leading-relaxed max-w-2xl">
+          <p className="mt-5 text-base text-ink-soft leading-relaxed max-w-2xl">
             {company.description_short}
           </p>
         )}
@@ -180,14 +180,16 @@ export default async function CompanyPage({ params }: Props) {
             attribution visible at a glance. */}
         <dl className="mt-6 flex flex-wrap gap-x-10 gap-y-3 text-sm">
           <div>
-            <dt className="text-xs font-medium uppercase tracking-wider text-zinc-400 dark:text-zinc-500">
+            <dt className="text-xs font-medium uppercase tracking-wider text-ink-muted">
               Total raised
             </dt>
-            <dd className="mt-1 text-base font-semibold text-zinc-900 dark:text-zinc-100">
+            <dd
+              className={`mt-1 text-base font-semibold ${hasAnyRaised ? "font-mono text-money" : "text-ink-faint"}`}
+            >
               {hasAnyRaised ? formatUsd(totalRaisedAmount) : "—"}
             </dd>
             {fundingRounds.length > 0 && (
-              <dd className="text-xs text-zinc-400 dark:text-zinc-500">
+              <dd className="text-xs text-ink-muted">
                 from {distinctNewsSources.size}{" "}
                 {distinctNewsSources.size === 1
                   ? "news source"
@@ -201,9 +203,7 @@ export default async function CompanyPage({ params }: Props) {
       {/* ── About ──────────────────────────────────────────────────────── */}
       {company.description_long && (
         <section className="mb-12">
-          <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-100 mb-4">
-            About
-          </h2>
+          <h2 className="text-lg font-semibold text-ink mb-4">About</h2>
           <Markdown>{company.description_long}</Markdown>
         </section>
       )}
@@ -212,7 +212,7 @@ export default async function CompanyPage({ params }: Props) {
       {(company.primary_category || (company.tags && company.tags.length > 0)) && (
         <section className="mb-10">
           {company.primary_category && (
-            <p className="text-xs font-medium uppercase tracking-wider text-zinc-400 dark:text-zinc-500 mb-3">
+            <p className="text-xs font-medium uppercase tracking-wider text-ink-muted mb-3">
               {company.primary_category}
             </p>
           )}
@@ -221,7 +221,7 @@ export default async function CompanyPage({ params }: Props) {
               {company.tags.map((tag) => (
                 <span
                   key={tag}
-                  className="rounded-full bg-zinc-100 dark:bg-zinc-800 px-2 py-0.5 text-xs text-zinc-600 dark:text-zinc-300"
+                  className="rounded-full border border-edge px-2.5 py-0.5 text-xs text-ink-soft"
                 >
                   {tag}
                 </span>

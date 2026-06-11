@@ -192,6 +192,235 @@ export async function listIndustryGroups(): Promise<string[]> {
   return [...seen].sort((a, b) => a.localeCompare(b));
 }
 
+// ─── Front-page queries ───────────────────────────────────────────────────────
+
+/** One "Recent fundings" margin-note row on the front page. */
+export interface RecentFundingRow {
+  companySlug: string;
+  companyName: string;
+  round_type: string | null;
+  amount_raised: number | null;
+  announced_date: string;
+}
+
+// Nested shape from funding_rounds → companies(name, slug).
+interface NestedFundingCompany {
+  name: string | null;
+  slug: string | null;
+}
+
+/**
+ * The latest funding rounds with a known announce date, newest first, joined
+ * with the company's name and slug. Rows whose company join is missing are
+ * dropped (every fact on the page must link somewhere).
+ */
+export async function listRecentFundings(
+  limit = 5,
+): Promise<RecentFundingRow[]> {
+  let supabase: ReturnType<typeof createSupabaseServerClient>;
+  try {
+    supabase = createSupabaseServerClient();
+  } catch (err) {
+    console.warn(
+      "[listRecentFundings] Supabase not configured:",
+      (err as Error).message,
+    );
+    return [];
+  }
+
+  const { data, error } = await supabase
+    .from("funding_rounds")
+    .select("round_type, amount_raised, announced_date, companies(name, slug)")
+    .not("announced_date", "is", null)
+    .order("announced_date", { ascending: false })
+    .limit(limit);
+
+  if (error) {
+    console.error("[listRecentFundings] query failed:", error.message);
+    return [];
+  }
+
+  type Row = {
+    round_type: string | null;
+    amount_raised: number | null;
+    announced_date: string;
+    companies: NestedFundingCompany | NestedFundingCompany[] | null;
+  };
+
+  return ((data ?? []) as Row[]).flatMap((row) => {
+    const company = Array.isArray(row.companies)
+      ? row.companies[0]
+      : row.companies;
+    if (!company?.name || !company.slug) return [];
+    return [
+      {
+        companySlug: company.slug,
+        companyName: company.name,
+        round_type: row.round_type,
+        amount_raised: row.amount_raised,
+        announced_date: row.announced_date,
+      },
+    ];
+  });
+}
+
+/** One "New on nous" margin-note row on the front page. */
+export interface NewCompanyRow {
+  slug: string;
+  name: string;
+  description_short: string | null;
+}
+
+/**
+ * Newest companies by created_at, preferring ones with a one-liner and
+ * falling back to name-only rows to fill the requested count (spec §2).
+ */
+export async function listNewestCompanies(limit = 4): Promise<NewCompanyRow[]> {
+  let supabase: ReturnType<typeof createSupabaseServerClient>;
+  try {
+    supabase = createSupabaseServerClient();
+  } catch (err) {
+    console.warn(
+      "[listNewestCompanies] Supabase not configured:",
+      (err as Error).message,
+    );
+    return [];
+  }
+
+  // Over-fetch so described companies can be preferred without a second query.
+  const { data, error } = await supabase
+    .from("companies")
+    .select("slug, name, description_short")
+    .order("created_at", { ascending: false })
+    .limit(limit * 3);
+
+  if (error) {
+    console.error("[listNewestCompanies] query failed:", error.message);
+    return [];
+  }
+
+  const rows = (data ?? []) as NewCompanyRow[];
+  const described = rows.filter((r) => r.description_short);
+  const nameOnly = rows.filter((r) => !r.description_short);
+  return [...described, ...nameOnly].slice(0, limit);
+}
+
+/** Top industry groups by company count, plus how many groups were left out. */
+export interface IndustrySummary {
+  top: string[];
+  moreCount: number;
+}
+
+/**
+ * Count industry_group frequencies in-process (same column fetch as
+ * listIndustryGroups — the catalog is small) and return the top N.
+ */
+export async function getIndustrySummary(topN = 6): Promise<IndustrySummary> {
+  let supabase: ReturnType<typeof createSupabaseServerClient>;
+  try {
+    supabase = createSupabaseServerClient();
+  } catch (err) {
+    console.warn(
+      "[getIndustrySummary] Supabase not configured:",
+      (err as Error).message,
+    );
+    return { top: [], moreCount: 0 };
+  }
+
+  const { data, error } = await supabase
+    .from("companies")
+    .select("industry_group")
+    .not("industry_group", "is", null)
+    .limit(5000);
+
+  if (error) {
+    console.error("[getIndustrySummary] query failed:", error.message);
+    return { top: [], moreCount: 0 };
+  }
+
+  const counts = new Map<string, number>();
+  for (const row of data ?? []) {
+    const value = row.industry_group as string | null;
+    if (value) counts.set(value, (counts.get(value) ?? 0) + 1);
+  }
+
+  const top = [...counts.entries()]
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .slice(0, topN)
+    .map(([value]) => value);
+
+  return { top, moreCount: Math.max(0, counts.size - top.length) };
+}
+
+/** Exact number of companies in the index (head-only count). */
+export async function countCompanies(): Promise<number> {
+  let supabase: ReturnType<typeof createSupabaseServerClient>;
+  try {
+    supabase = createSupabaseServerClient();
+  } catch (err) {
+    console.warn(
+      "[countCompanies] Supabase not configured:",
+      (err as Error).message,
+    );
+    return 0;
+  }
+
+  const { count, error } = await supabase
+    .from("companies")
+    .select("id", { count: "exact", head: true });
+
+  if (error) {
+    console.error("[countCompanies] query failed:", error.message);
+    return 0;
+  }
+  return count ?? 0;
+}
+
+/**
+ * Slug of one uniformly random company, for /surprise: exact count, then a
+ * single row at a random offset (ordered so the offset is stable within a
+ * request). Returns null when the index is empty.
+ */
+export async function getRandomCompanySlug(): Promise<string | null> {
+  let supabase: ReturnType<typeof createSupabaseServerClient>;
+  try {
+    supabase = createSupabaseServerClient();
+  } catch (err) {
+    console.warn(
+      "[getRandomCompanySlug] Supabase not configured:",
+      (err as Error).message,
+    );
+    return null;
+  }
+
+  const { count, error: countError } = await supabase
+    .from("companies")
+    .select("id", { count: "exact", head: true });
+
+  if (countError || !count) {
+    if (countError) {
+      console.error(
+        "[getRandomCompanySlug] count failed:",
+        countError.message,
+      );
+    }
+    return null;
+  }
+
+  const offset = Math.floor(Math.random() * count);
+  const { data, error } = await supabase
+    .from("companies")
+    .select("slug")
+    .order("id", { ascending: true })
+    .range(offset, offset);
+
+  if (error) {
+    console.error("[getRandomCompanySlug] slug fetch failed:", error.message);
+    return null;
+  }
+  return (data?.[0]?.slug as string | undefined) ?? null;
+}
+
 /**
  * Return the full detail for a single company identified by slug.
  * Returns null when the slug does not exist.

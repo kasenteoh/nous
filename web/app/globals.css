@@ -1,27 +1,66 @@
 @import "tailwindcss";
 @plugin "@tailwindcss/typography";
 
+/* Class-based dark mode (replaces prefers-color-scheme). The `.dark` class is
+   server-rendered on <html> by default; the no-flash script in layout.tsx
+   removes it when the visitor has chosen light. */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* Semantic theme tokens — Tokyo Night Day (light) / Tokyo Night (dark).
+   `--money` is deliberately Catppuccin green (Latte #40a02b / Mocha #a6e3a1),
+   a chosen cross-theme blend for funding amounts — not Tokyo Night's #9ece6a. */
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  color-scheme: light;
+  --canvas: #e1e2e7;
+  --ink: #343b58;
+  --ink-soft: #565a6e;
+  --ink-muted: #848cb5;
+  --ink-faint: #c4c8da;
+  --edge: #c4c8da;
+  --accent: #2e7de9;
+  --money: #40a02b;
+}
+
+.dark {
+  color-scheme: dark;
+  --canvas: #1a1b26;
+  --ink: #c0caf5;
+  --ink-soft: #a9b1d6;
+  --ink-muted: #565f89;
+  --ink-faint: #3b4261;
+  --edge: #24283b;
+  --accent: #7aa2f7;
+  --money: #a6e3a1;
 }
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
+  --color-canvas: var(--canvas);
+  --color-ink: var(--ink);
+  --color-ink-soft: var(--ink-soft);
+  --color-ink-muted: var(--ink-muted);
+  --color-ink-faint: var(--ink-faint);
+  --color-edge: var(--edge);
+  --color-accent: var(--accent);
+  --color-money: var(--money);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+body {
+  background: var(--canvas);
+  color: var(--ink-soft);
+  font-family: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
 }
 
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+/* Spotlight deck enter transition. Applied via motion-safe: so
+   prefers-reduced-motion users get an instant swap instead. */
+@keyframes spotlight-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
 }

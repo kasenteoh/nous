@@ -21,34 +21,28 @@ export function Team({ people, companyName }: Props) {
 
   return (
     <section className="mb-12">
-      <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-100 mb-4">
-        Leadership
-      </h2>
+      <h2 className="text-lg font-semibold text-ink mb-4">Leadership</h2>
 
-      <ul className="divide-y divide-zinc-100 dark:divide-zinc-800">
+      <ul className="divide-y divide-edge">
         {people.map((person) => (
           <li
             key={person.id}
             className="py-3 flex flex-col sm:flex-row sm:items-baseline gap-1 sm:gap-4"
           >
-            <span className="font-medium text-zinc-900 dark:text-zinc-100">
-              {person.name}
-            </span>
-            <span className="text-sm text-zinc-500 dark:text-zinc-400">
-              {person.role}
-            </span>
+            <span className="font-medium text-ink">{person.name}</span>
+            <span className="text-sm text-ink-muted">{person.role}</span>
           </li>
         ))}
       </ul>
 
       {sourceUrl && (
-        <p className="mt-3 text-xs text-zinc-400 dark:text-zinc-500">
+        <p className="mt-3 text-xs text-ink-muted">
           From{" "}
           <a
             href={sourceUrl}
             target="_blank"
             rel="noopener noreferrer"
-            className="underline underline-offset-2 hover:text-zinc-600 dark:hover:text-zinc-300"
+            className="underline underline-offset-2 hover:text-ink-soft"
           >
             {companyName}&rsquo;s website
           </a>

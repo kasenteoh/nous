@@ -12,25 +12,23 @@ interface Props {
 export function News({ news }: Props) {
   return (
     <section className="mb-12">
-      <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-100 mb-4">
-        News
-      </h2>
+      <h2 className="text-lg font-semibold text-ink mb-4">News</h2>
 
       {news.length === 0 ? (
-        <p className="text-sm text-zinc-500 dark:text-zinc-400">No news yet.</p>
+        <p className="text-sm text-ink-muted">No news yet.</p>
       ) : (
-        <ul className="divide-y divide-zinc-100 dark:divide-zinc-800">
+        <ul className="divide-y divide-edge">
           {news.map((article) => (
             <li key={article.id} className="py-3">
               <a
                 href={article.url}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="text-zinc-900 dark:text-zinc-100 hover:underline underline-offset-2 font-medium"
+                className="text-ink hover:underline underline-offset-2 font-medium"
               >
                 {article.title}
               </a>
-              <p className="mt-1 text-xs text-zinc-400 dark:text-zinc-500">
+              <p className="mt-1 font-mono text-xs text-ink-muted">
                 {article.source}
                 {article.published_date && (
                   <> · {formatDate(article.published_date)}</>
