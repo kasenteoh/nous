@@ -14,14 +14,31 @@ uv run alembic upgrade head  # create schema
 uv run pytest              # run tests
 
 # Discovery: seed companies from VC portfolios + funding news
-uv run nous refresh-vc-portfolios   # scrape registered VC portfolio pages
+uv run nous refresh-vc-portfolios   # scrape VC portfolio pages; records the discovering firm as a company investor
 uv run nous ingest-news             # Google News + TechCrunch venture sweep
 
-# Enrich each company with a description
+# Enrich each company with a description + location/industry
 uv run nous resolve-homepages   # find each company's website
 uv run nous scrape-homepages    # cache homepage + about/product pages
-uv run nous enrich-companies --limit 50   # call the LLM, write description
+uv run nous enrich-companies --limit 50   # LLM: description, people/leadership, hq city/state, industry
+
+# De-duplicate: merge companies sharing a website domain (LLM-gated for fuzzy matches)
+uv run nous dedup-companies
 ```
+
+### Pipeline stages
+
+| Stage | What it does |
+|---|---|
+| `refresh-vc-portfolios` | Scrape registered VC portfolio pages; create companies and record the discovering firm (e.g. Sequoia → "Sequoia Capital") as a company-level investor. |
+| `ingest-news` | Google News RSS per company + TechCrunch venture broad sweep; auto-create companies found in TechCrunch. |
+| `resolve-homepages` | Find each company's website (TLD patterns, DuckDuckGo fallback). |
+| `scrape-homepages` | Cache homepage + about/product/team pages as raw HTML. |
+| `enrich-companies` | LLM: short/long description, people/leadership, plus HQ city/state and industry (null when unknown). |
+| `extract-funding` | LLM: parse funding rounds, valuations, and investors from news articles. |
+| `analyze-competitors` | LLM: ranked competitor list (sourced as TechCrunch vs LLM-inferred). |
+| `dedup-companies` | Merge duplicate companies: auto-merge on shared website domain (shared-hosting blocklist), LLM `company-match` adjudicator for fuzzy matches (similar name / shared HQ / similar description), high-confidence only. |
+| `cleanup-form-d` | One-time (not in cron): re-tag legacy `discovered_via='form_d'` rows that have VC-investor or news evidence (→ `vc_portfolio`/`news`) and delete the rest. |
 
 Get a free Gemini API key at <https://ai.google.dev/> (no credit card). The enrichment stage costs ~1 LLM call per company and stays well under the free tier's 1500/day limit.
 
@@ -40,7 +57,7 @@ npm install
 npm run dev
 ```
 
-Open <http://localhost:3000>.
+Open <http://localhost:3000>. Each company page renders description, key facts, leadership/people, funding history, **Investors** (the firms backing the company), competitors, and a **News** section drawn from collected `news_articles`.
 
 ## Deploy (Milestone 1)
 
@@ -49,4 +66,4 @@ Open <http://localhost:3000>.
 3. **GitHub Actions secrets.** Add `DATABASE_URL`, `SEC_USER_AGENT`, and `DEEPSEEK_API_KEY` so the weekly cron can run all stages (homepage + enrich + news + funding).
 4. **First backfill.** Trigger the `backfill-discovery` workflow manually (`workflow_dispatch`) to seed companies from VC portfolios + TechCrunch.
 
-The weekly cron (every Monday 09:00 UTC) then keeps the data fresh on its own.
+The weekly cron (every Monday 09:00 UTC) then keeps the data fresh on its own. The monthly VC-portfolio refresh additionally runs `dedup-companies` to merge duplicate rows that slip through discovery.

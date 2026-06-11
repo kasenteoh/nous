@@ -92,7 +92,14 @@ Detail page has no `<link rel="canonical">` and no `Organization` JSON-LD. Easy 
 ## Future ideas (need a spec discussion first)
 
 ### Post-ingest periodic dedup pass with human review
-Catch near-duplicate companies that slipped through normalization (e.g. "Acme Robotics" vs "Acme Robotic Co"). Surface candidate merge pairs in a small admin view; never auto-merge.
+**Partially shipped.** The `dedup-companies` stage now catches near-duplicate
+companies that slipped through normalization (e.g. "Acme Robotics" vs "Acme
+Robotic Co"): it auto-merges on exact shared website domain (with a
+shared-hosting blocklist) and LLM-gates fuzzy pairs (similar name / shared HQ /
+similar description) via the `company-match` adjudicator, merging only on high
+confidence. Runs in the monthly cron. A human-review admin view that surfaces
+candidate merge pairs for manual approval (instead of auto-merging) remains a
+possible enhancement.
 
 ### `company_aliases` table for stylization variants
 Track every name we've seen per company + source. Lets us recover from a bad name choice without losing audit trail. Also unlocks "you searched 'OpenAI Inc' → here's the OpenAI page" UX.

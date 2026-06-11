@@ -282,6 +282,21 @@ A funding round is the user-facing concept. It may be derived from a filing, fro
 | investor_id | uuid | FK |
 | is_lead | boolean | default false |
 
+### 4.5.1 `company_investors` (join table, migration 0013)
+
+Links a company to the investor firms backing it, independent of any single
+funding round. Populated by `refresh-vc-portfolios`, which records the
+discovering VC firm (e.g. Sequoia → "Sequoia Capital") as a company-level
+investor, and surfaced in the company page's **Investors** section.
+
+| Column | Type | Notes |
+|---|---|---|
+| company_id | uuid | FK companies |
+| investor_id | uuid | FK investors |
+| source | text | e.g. `'vc_portfolio'` — how this link was established |
+
+Unique on `(company_id, investor_id)`; idempotent on re-run.
+
 ### 4.6 `competitors`
 
 | Column | Type | Notes |
@@ -394,7 +409,41 @@ For each company without recent employee data:
 - Try public sources in order (Wellfound, theorg, growjo, careers page job count, GitHub org).
 - Store the range and source.
 
-### 5.9 Idempotency
+### 5.9 De-duplicate Companies (`dedup-companies`)
+
+Discovery from independent sources (VC portfolios, news, TechCrunch) inevitably
+creates the same company twice. This stage collapses duplicates and runs in the
+monthly cron alongside `refresh-vc-portfolios`.
+
+- **Exact-domain auto-merge:** companies sharing the exact same website domain
+  are merged automatically. A shared-hosting blocklist (e.g. `sites.google.com`,
+  `notion.site`, `webflow.io`, link aggregators) prevents false merges on
+  domains that legitimately host many distinct companies.
+- **Fuzzy LLM-gated merge:** candidate pairs with a similar name, shared HQ, or
+  similar description are passed to the LLM `company-match` "same company?"
+  adjudicator (see §6.4). The pair is merged **only on high confidence**.
+- **`merge_companies` primitive:** repoints all child rows (filings,
+  funding_rounds, news_articles, raw_pages, competitors, company_investors) to
+  the survivor, then deletes the loser. The survivor keeps the
+  earliest-discovered identity. Idempotent and safe to re-run.
+
+`auto_create_company` also dedupes by website domain on live ingest, so freshly
+discovered rows attach to an existing company instead of creating a duplicate
+that `dedup-companies` would later have to merge.
+
+### 5.10 Clean Up Legacy Form D Rows (`cleanup-form-d`)
+
+A one-time migration stage — **not** wired into any cron. SEC Form D ingestion
+was removed (see the banner at the top of this spec), leaving legacy rows tagged
+`discovered_via='form_d'`. This stage:
+
+- Re-tags rows that have corroborating evidence — a VC-investor link →
+  `vc_portfolio`, or news articles → `news`.
+- Deletes the remaining `form_d` rows that have no other supporting evidence.
+
+Run once to retire the Form D legacy, then drop from the playbook.
+
+### 5.11 Idempotency
 
 Every stage should be safe to re-run. Use upserts keyed on natural unique identifiers (accession_number, news URL, etc.). The pipeline should never throw on duplicate data.
 
@@ -414,7 +463,11 @@ All prompts return JSON. The LLM client validates output against a Pydantic mode
   "description_short": "string, 1-2 sentences, plain language, no marketing fluff",
   "description_long": "string, 3-6 paragraphs of markdown, detailed but readable, covers: what the product does, who it is for, how it works, what makes it distinctive",
   "primary_category": "string, e.g. 'developer tools', 'fintech', 'AI infrastructure'",
-  "tags": ["array", "of", "strings"]
+  "tags": ["array", "of", "strings"],
+  "people": [{ "name": "string", "title": "string or null" }],
+  "hq_city": "string or null",
+  "hq_state": "string or null",
+  "industry": "string or null"
 }
 ```
 
@@ -422,6 +475,9 @@ All prompts return JSON. The LLM client validates output against a Pydantic mode
 - Strip marketing language. Write like a curious analyst, not a press release.
 - If the page is thin or unclear, say so in the description (do not invent).
 - The long version should be the kind of thing the user described as "what they enjoy reading."
+- Extract leadership/people (founders, executives) named on the site, plus the
+  company's HQ city/state and industry when stated. Return null (or an empty
+  list) for any field the site does not make clear — never guess a location.
 
 ### 6.2 Funding extraction prompt
 
@@ -469,6 +525,31 @@ If `is_funding_announcement` is false, the article is skipped.
 - Return up to 6 competitors.
 - Do not invent fictional companies.
 
+### 6.4 Company-match prompt (`company-match`)
+
+Used by the `dedup-companies` stage (§5.9) to adjudicate fuzzy duplicate
+candidates — pairs with a similar name, shared HQ, or similar description that
+are not an exact website-domain match.
+
+**Input:** Two company records (name, website, HQ, short description) — candidate A and candidate B.
+
+**Output schema:**
+```json
+{
+  "same_company": "boolean",
+  "confidence": "low | medium | high",
+  "reasoning": "string, why they are or are not the same company"
+}
+```
+
+**Prompt guidelines:**
+- Return `same_company: true` only when the two records clearly refer to the
+  same legal entity (e.g. a stylization or punctuation variant of the same name
+  at the same company). Distinct companies with similar names are **not** a match.
+- The pipeline merges **only** when `same_company` is true **and** `confidence`
+  is `high`. When unsure, prefer `false` / lower confidence — a missed merge is
+  cheaper than a wrong one.
+
 ---
 
 ## 7. Frontend
@@ -496,9 +577,14 @@ Sections in order:
 2. **Short description.**
 3. **Key facts strip:** estimated valuation (with attribution), employee range (with source), total raised, last round.
 4. **Long description** (rendered markdown).
-5. **Funding history table:** each round with date, type, amount, valuation, lead, other investors.
-6. **Competitors section:** each competitor as a card with name, description, reasoning. Cards link internally if the competitor is indexed in nous.
-7. **Sources footer:** list of news articles and filings used to construct this page, with links.
+5. **Leadership / people:** founders and executives extracted from the company website (name + title).
+6. **Funding history table:** each round with date, type, amount, valuation, lead, other investors.
+7. **Investors section:** the investor firms backing the company, from `company_investors` (e.g. the discovering VC firm recorded by `refresh-vc-portfolios`).
+8. **Competitors section:** each competitor as a card with name, description, reasoning, and whether it was sourced from TechCrunch or LLM-inferred. Cards link internally if the competitor is indexed in nous.
+9. **News section:** recent articles from `news_articles` (title, source, date, link) — collected during ingestion and surfaced here.
+10. **Sources footer:** list of news articles used to construct this page, with links.
+
+The page carries no "generated by Gemini" AI-attribution line; per-fact source attribution is shown inline (valuation source, competitor source, etc.).
 
 ### 7.4 Styling
 
