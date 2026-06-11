@@ -22,13 +22,14 @@ from nous.db.base import Base
 
 
 class Company(Base):
-    """Represents a software company discovered via SEC Form D filings."""
+    """Represents a software company discovered from public sources.
+
+    Companies enter the DB via VC portfolio scrapes, funding news, or the
+    TechCrunch venture feed (see ``discovered_via``).
+    """
 
     __tablename__ = "companies"
 
-    # SEC Central Index Key — nullable because we may create companies before
-    # linking to a CIK (e.g., from enriched sources in later milestones).
-    cik: Mapped[str | None] = mapped_column(unique=True, nullable=True, index=True)
     name: Mapped[str]
     slug: Mapped[str] = mapped_column(unique=True, index=True)
     normalized_name: Mapped[str] = mapped_column(index=True)
@@ -68,57 +69,12 @@ class Company(Base):
     )
 
     # M3 — how this company first entered the DB.
-    # 'form_d' | 'vc_portfolio' | 'news' | 'techcrunch'.
+    # 'vc_portfolio' | 'news' | 'techcrunch'. Discovery paths always set this
+    # explicitly; the 'unknown' default is a safe fallback for any other insert
+    # (replaces the old 'form_d' default removed when Form D ingestion was cut).
     discovered_via: Mapped[str] = mapped_column(
-        String, nullable=False, server_default="form_d"
+        String, nullable=False, server_default="unknown"
     )
-
-
-class Filing(Base):
-    """Represents a single SEC Form D filing, linked to a Company."""
-
-    __tablename__ = "filings"
-
-    company_id: Mapped[UUID] = mapped_column(
-        PG_UUID(as_uuid=True),
-        ForeignKey("companies.id", ondelete="CASCADE"),
-        index=True,
-    )
-    accession_number: Mapped[str] = mapped_column(unique=True, index=True)
-    filing_date: Mapped[date]
-
-    # Financial fields — Numeric(20, 2) for precision with large dollar amounts
-    offering_amount_total: Mapped[Decimal | None] = mapped_column(Numeric(20, 2))
-    amount_sold: Mapped[Decimal | None] = mapped_column(Numeric(20, 2))
-    investors_count: Mapped[int | None]
-    minimum_investment: Mapped[Decimal | None] = mapped_column(Numeric(20, 2))
-
-    # Full raw XML/JSON payload from SEC EDGAR, stored for audit and re-extraction
-    raw_data: Mapped[dict] = mapped_column(JSONB, nullable=False)  # type: ignore[type-arg]
-
-
-class RelatedPerson(Base):
-    """A person named in a Form D filing (e.g., executive director, promoter).
-
-    Defined now per spec §5.1; populated during filing ingestion in M1 ingest stage.
-    """
-
-    __tablename__ = "related_persons"
-
-    company_id: Mapped[UUID] = mapped_column(
-        PG_UUID(as_uuid=True),
-        ForeignKey("companies.id", ondelete="CASCADE"),
-        index=True,
-    )
-    filing_id: Mapped[UUID] = mapped_column(
-        PG_UUID(as_uuid=True),
-        ForeignKey("filings.id", ondelete="CASCADE"),
-        index=True,
-    )
-    name: Mapped[str]
-    relationship: Mapped[str]
-    # Address stored as a flexible dict; structure mirrors SEC EDGAR's address object
-    address: Mapped[dict | None] = mapped_column(JSONB)  # type: ignore[type-arg]
 
 
 class RawPage(Base):
@@ -172,8 +128,8 @@ class NewsArticle(Base):
 
 
 class FundingRound(Base):
-    """Per spec §4.3. A funding round attributed to a company, optionally
-    linked to a Form D filing and/or to a news article (primary_news_url).
+    """Per spec §4.3. A funding round attributed to a company, sourced from a
+    news article (primary_news_url).
     """
 
     __tablename__ = "funding_rounds"
@@ -195,12 +151,6 @@ class FundingRound(Base):
     valuation_post_money: Mapped[Decimal | None] = mapped_column(Numeric(20, 2))
     valuation_source: Mapped[str | None]  # e.g. "TechCrunch, Mar 2026"
     announced_date: Mapped[date | None] = mapped_column(Date, index=True)
-    filing_id: Mapped[UUID | None] = mapped_column(
-        PG_UUID(as_uuid=True),
-        ForeignKey("filings.id", ondelete="SET NULL"),
-        nullable=True,
-        index=True,
-    )
     primary_news_url: Mapped[str | None]
     # LLM-reported confidence: 'low' | 'medium' | 'high'.
     extraction_confidence: Mapped[str | None]
@@ -280,6 +230,43 @@ class Competitor(Base):
     reasoning: Mapped[str | None] = mapped_column(String, nullable=True)
     rank: Mapped[int] = mapped_column(SmallInteger, nullable=False)
 
+    # Provenance: 'techcrunch' (named/implied in the company's TechCrunch
+    # coverage) or 'llm_inferred' (general-knowledge competitor, shown as a
+    # "potential" competitor in the UI). source_url is the TechCrunch article
+    # when source='techcrunch', else NULL.
+    source: Mapped[str] = mapped_column(
+        String, nullable=False, server_default="llm_inferred"
+    )
+    source_url: Mapped[str | None] = mapped_column(String, nullable=True)
+
     __table_args__ = (
         UniqueConstraint("company_id", "rank", name="uq_competitors_company_rank"),
+    )
+
+
+class Person(Base):
+    """A leadership/founder entry for a company, extracted from the company's
+    scraped website during the enrich-companies stage.
+
+    Replace-style writes: each enrichment run for a company DELETEs existing
+    rows for that company_id then INSERTs the new ranked set. Distinct from the
+    (removed) Form D ``related_persons`` — these come from the company website.
+    """
+
+    __tablename__ = "people"
+
+    company_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("companies.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    name: Mapped[str] = mapped_column(String, nullable=False)
+    role: Mapped[str] = mapped_column(String, nullable=False)
+    # Attribution — the company website the person was extracted from.
+    source_url: Mapped[str | None] = mapped_column(String, nullable=True)
+    rank: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("company_id", "rank", name="uq_people_company_rank"),
     )

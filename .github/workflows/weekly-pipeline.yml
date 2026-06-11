@@ -5,14 +5,6 @@ on:
     - cron: "0 9 * * 1"
   workflow_dispatch:
     inputs:
-      since:
-        description: "Ingest: optional start date (YYYY-MM-DD). Default: rolling 7-day window with overlap."
-        required: false
-        type: string
-      until:
-        description: "Ingest: optional end date (YYYY-MM-DD). Default: today."
-        required: false
-        type: string
       resolve_refetch_after_days:
         description: "Resolve: re-resolve companies whose website_resolved_at is older than N days. 0 = re-resolve everything. Default: 90."
         required: false
@@ -21,11 +13,6 @@ on:
         description: "Scrape: re-scrape companies whose raw_pages are older than N days. 0 = re-scrape everything. Default: 90."
         required: false
         type: string
-      skip_ingest:
-        description: "Skip the Ingest filings stage. Useful when you just want to re-run scrape/enrich on existing data."
-        required: false
-        type: boolean
-        default: false
       skip_resolve:
         description: "Skip the Resolve homepages stage."
         required: false
@@ -99,14 +86,6 @@ jobs:
       - name: Apply migrations
         run: uv run alembic upgrade head
 
-      - name: Ingest filings
-        if: ${{ inputs.skip_ingest != true }}
-        run: |
-          ARGS=()
-          if [ -n "${{ inputs.since }}" ]; then ARGS+=(--since "${{ inputs.since }}"); fi
-          if [ -n "${{ inputs.until }}" ]; then ARGS+=(--until "${{ inputs.until }}"); fi
-          uv run nous ingest-filings "${ARGS[@]}"
-
       - name: Resolve homepages
         if: ${{ inputs.skip_resolve != true }}
         run: |
@@ -152,6 +131,15 @@ jobs:
         run: uv run nous extract-funding --limit 1000
         continue-on-error: true
 
+      - name: Extract funding (website fallback)
+        if: ${{ inputs.skip_funding != true }}
+        # Gap-fill only: runs for companies that still have no funding rounds
+        # after the TechCrunch/news pass above, so TechCrunch stays primary.
+        run: uv run nous extract-funding-website
+        continue-on-error: true
+
+      # Volatile vs. stable: funding (above) + competitors (monthly cron) refresh
+      # on a cadence; description + people are written once by enrich-companies.
       # Note: Vercel deploy-hook POST is deferred to M6 per spec §9.
       # Note: refresh-vc-portfolios runs on its own monthly cron (see
       # monthly-vc-refresh.yml) — VC sites change slowly enough that monthly

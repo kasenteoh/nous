@@ -4,6 +4,16 @@
 **Status:** Pre-implementation
 **Audience:** Claude Code, for decomposition into discrete coding tasks
 
+> **⚠️ Outdated: SEC Form D ingestion removed.** As of 2026-06, nous no longer
+> ingests SEC Form D filings. Company discovery now runs entirely off VC
+> portfolio scrapes and funding news (TechCrunch + Google News); funding,
+> valuation, and competitor data come from news + LLM enrichment. The
+> `filings` / `related_persons` tables, the `companies.cik` column, and the
+> `ingest-filings` stage have all been dropped. Sections below that describe
+> Form D as the "primary spine" (notably §1.1, §1.2, §3.1, §5.1, and the M1
+> milestone) are retained as historical context and are pending a rewrite of
+> the discovery architecture.
+
 ---
 
 ## 1. Product Overview

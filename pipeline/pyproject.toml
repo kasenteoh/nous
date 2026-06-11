@@ -1,7 +1,7 @@
 [project]
 name = "nous"
 version = "0.1.0"
-description = "nous data pipeline — ingests SEC Form D filings and enriches them into company records."
+description = "nous data pipeline — discovers software startups from public sources and enriches them into company records."
 requires-python = ">=3.11"
 dependencies = [
     "sqlalchemy[asyncio]>=2.0",
@@ -14,7 +14,6 @@ dependencies = [
     "python-dotenv>=1.0",
     "psycopg[binary]>=3.2",
     "tenacity>=8",
-    "lxml>=5",
     "feedparser>=6.0",
     "curl_cffi>=0.7",
     "playwright>=1.40",
@@ -50,10 +49,6 @@ files = ["src/nous"]
 
 [[tool.mypy.overrides]]
 module = ["selectolax.*"]
-ignore_missing_imports = true
-
-[[tool.mypy.overrides]]
-module = ["lxml.*"]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]

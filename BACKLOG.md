@@ -19,14 +19,8 @@ entries at the bottom of the appropriate section. Close items by deleting them
 ### Funding extraction never writes `valuation_source`
 [funding_extraction.py](pipeline/src/nous/llm/prompts/funding_extraction.py) Pydantic model doesn't include the field; [upsert.py:402](pipeline/src/nous/db/upsert.py) docstring mentions it but no write path exists. The frontend now renders it ([FundingHistory.tsx:81-99](web/components/FundingHistory.tsx)) but the column will always be NULL. Fix: add `valuation_source` to `FundingExtraction`, prompt for "if a publication is named alongside the valuation, return its name + month"; wire into `reconcile_funding_round`.
 
-### Form D backfills CIK onto non-Form-D rows (hostile takeover risk)
-[upsert.py:106-113](pipeline/src/nous/db/upsert.py): when an existing row has no CIK and a Form D arrives with a matching `normalized_name`, the CIK is backfilled — even if the existing row's `discovered_via` is `vc_portfolio`/`news`/`techcrunch`. Two distinct real-world entities sharing a normalized name (e.g. "Acme" the SF startup vs "Acme" the NYC startup that just filed Form D) get silently merged. Fix: only backfill CIK when `existing.discovered_via == 'form_d'`; otherwise fall through to INSERT and surface as a duplicate-cleanup candidate.
-
 ### extraction_confidence is free-text in the DB
 [models.py:193](pipeline/src/nous/db/models.py) is `String, nullable=True`. Application code uses `_CONFIDENCE_RANK.get(new, -1)` ([upsert.py:370](pipeline/src/nous/db/upsert.py)); a typo (`"medum"`) ranks as `-1` and silently downgrades the row. Pydantic catches typos at the LLM boundary but the DB is permissive. Fix: add `CheckConstraint("extraction_confidence IN ('low','medium','high') OR extraction_confidence IS NULL")` via a new migration.
-
-### funding_rounds.filing_id FK has no `ondelete` clause
-[0003_m3_schema.py:129-133](pipeline/alembic/versions/0003_m3_schema.py): defaults to `NO ACTION`. Deleting a Filing directly is blocked even though the relationship is informational, not load-bearing. Fix: `ondelete="SET NULL"` via a new migration.
 
 ---
 
@@ -51,16 +45,13 @@ entries at the bottom of the appropriate section. Close items by deleting them
 [0003_m3_schema.py:86-89](pipeline/alembic/versions/0003_m3_schema.py): both `UniqueConstraint("url")` and a redundant `create_index(..., unique=True)`. Two unique indexes for the same column waste write cost. Fix: drop the redundant `ix_news_articles_url` index.
 
 ### Throttle/get helper triplicated across source clients
-[homepage.py:128-166](pipeline/src/nous/sources/homepage.py), [news.py:218-250](pipeline/src/nous/sources/news.py), [edgar.py:92-115](pipeline/src/nous/sources/edgar.py), [headless_browser.py:107-159](pipeline/src/nous/sources/headless_browser.py) all reimplement `_get_domain_lock` + `_throttled_get` + tenacity decoration. ~80 lines of duplication. The HomepageClient and HeadlessBrowserClient comment says they "cooperate when targeting the same host" but they keep separate dicts — they don't actually cooperate. Fix: extract a `ThrottledHTTPClient` base or mixin in `sources/_http.py`.
+[homepage.py:128-166](pipeline/src/nous/sources/homepage.py), [news.py:218-250](pipeline/src/nous/sources/news.py), [headless_browser.py:107-159](pipeline/src/nous/sources/headless_browser.py) all reimplement `_get_domain_lock` + `_throttled_get` + tenacity decoration. ~60 lines of duplication. The HomepageClient and HeadlessBrowserClient comment says they "cooperate when targeting the same host" but they keep separate dicts — they don't actually cooperate. Fix: extract a `ThrottledHTTPClient` base or mixin in `sources/_http.py`.
 
 ### techcrunch.py reaches into private NewsClient._fetch_text
 [techcrunch.py:36](pipeline/src/nous/sources/techcrunch.py) uses `client._fetch_text` (private). Fix: either promote `_fetch_text` to public, or inline the TC adapter into `news.py` as `NewsClient.techcrunch_venture_feed`.
 
-### replace_related_persons has an unused parameter
-[upsert.py:236-268](pipeline/src/nous/db/upsert.py) accepts `company_id` but only filters/inserts by `filing_id`. `company_id` is written to the RelatedPerson rows but it's denormalized from `filing.company_id`. Fix: assert `company_id == filing.company_id` or drop the param.
-
 ### Redundant `@pytest.mark.asyncio` decorators
-`pyproject.toml` sets `asyncio_mode = "auto"`. ~57 explicit `@pytest.mark.asyncio` decorators across `test_duckduckgo.py`, `test_robots.py`, `test_llm_client_deepseek.py`, `test_homepage.py`, `test_news.py`, `test_vc_portfolios.py`, `test_edgar.py` are no-ops. Fix: one-time sed sweep to remove.
+`pyproject.toml` sets `asyncio_mode = "auto"`. Explicit `@pytest.mark.asyncio` decorators across `test_duckduckgo.py`, `test_robots.py`, `test_llm_client_deepseek.py`, `test_homepage.py`, `test_news.py`, `test_vc_portfolios.py` are no-ops. Fix: one-time sed sweep to remove.
 
 ### Add `-rs` to pytest invocation in CI
 DB-gated tests are skipped silently. Adding `-rs` shows the skip list by name in CI logs so a missing DATABASE_URL doesn't hide test count. Fix: update `.github/workflows/lint.yml` step.
@@ -110,10 +101,7 @@ Track every name we've seen per company + source. Lets us recover from a bad nam
 If a company's primary slug ever changes (rename, merger), keep old slug → 301 → new slug. Middleware in `web/` reads from this table.
 
 ### `name_quality` score or source-priority column
-Today first-discovery wins for `name`, with one cross-source upgrade path (lowercase → proper-cased). A future improvement: explicitly rank sources (e.g. proper-cased VC > Form-D SEC > news parse) and only overwrite when a higher-quality source arrives.
-
-### Reject pure-uppercase Form D entity names
-SEC sometimes returns names like "OPENAI, INC." even when the registrant uses mixed case. Detection: `name.upper() == name and len(name) > 4`. Either title-case automatically or queue for manual review.
+Today first-discovery wins for `name`, with one cross-source upgrade path (lowercase → proper-cased). A future improvement: explicitly rank sources (e.g. proper-cased VC > news parse) and only overwrite when a higher-quality source arrives.
 
 ### Centralized prompt-input character limit
 Each LLM-using stage has its own truncation constant ([enrich_companies.py:99](pipeline/src/nous/pipeline/enrich_companies.py), [funding_extraction.py:120](pipeline/src/nous/llm/prompts/funding_extraction.py)). Centralize as `MAX_PROMPT_INPUT_CHARS` in `nous.llm.client`.

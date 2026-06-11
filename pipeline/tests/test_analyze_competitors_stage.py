@@ -18,13 +18,17 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from nous.db.models import Company, Competitor
+from nous.db.models import Company, Competitor, NewsArticle
 from nous.llm.client import LLMParseError, LLMRateLimitError
 from nous.llm.prompts.competitor_analysis import (
     Competitor as CompetitorOut,
 )
 from nous.llm.prompts.competitor_analysis import (
     CompetitorAnalysis,
+)
+from nous.llm.prompts.competitor_candidates import (
+    CandidateMention,
+    CompetitorCandidates,
 )
 from nous.pipeline.analyze_competitors import (
     fetch_eligible_companies,
@@ -265,6 +269,89 @@ async def test_happy_path_writes_competitors_and_resolves_links(
     assert [r.competitor_name for r in rows] == ["RivalCo", "UnindexedCo"]
     assert rows[0].competitor_company_id == rival.id
     assert rows[1].competitor_company_id is None
+
+
+async def test_llm_only_competitors_tagged_llm_inferred(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With no TechCrunch coverage, pass 1 is skipped and every competitor is
+    written with source='llm_inferred' and no source_url."""
+    target = _make_company("Target", industry_group="SaaS")
+    db.add(target)
+    await db.flush()
+
+    async def _fake_complete_json(prompt: str, schema: type) -> CompetitorAnalysis:
+        # Only the analysis call should happen — there are no TC articles.
+        assert schema is CompetitorAnalysis
+        return _fixture_extraction(["Rival"])
+
+    monkeypatch.setattr(
+        "nous.pipeline.analyze_competitors.complete_json", _fake_complete_json
+    )
+
+    summary = await run_analyze_competitors(db, limit=10, ttl_days=25)
+    assert summary.competitors_from_llm == 1
+    assert summary.competitors_from_techcrunch == 0
+
+    rows = (
+        await db.execute(select(Competitor).where(Competitor.company_id == target.id))
+    ).scalars().all()
+    assert len(rows) == 1
+    assert rows[0].source == "llm_inferred"
+    assert rows[0].source_url is None
+
+
+async def test_techcrunch_candidates_are_revalidated_and_sourced(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Two-step flow: a competitor surfaced from the target's TechCrunch coverage
+    is tagged source='techcrunch' with the article URL; competitors the model
+    adds on its own are 'llm_inferred'."""
+    target = _make_company("Target", industry_group="SaaS")
+    db.add(target)
+    await db.flush()
+
+    tc_url = "https://techcrunch.com/2026/05/01/target-raises"
+    db.add(
+        NewsArticle(
+            company_id=target.id,
+            url=tc_url,
+            title="Target raises",
+            source="techcrunch.com",
+            raw_content="Target competes head-on with Globex in the market. " * 5,
+        )
+    )
+    await db.flush()
+    await db.commit()
+
+    async def _fake_complete_json(prompt: str, schema: type) -> object:
+        if schema is CompetitorCandidates:
+            return CompetitorCandidates(
+                candidates=[CandidateMention(name="Globex", article_url=tc_url)]
+            )
+        # Pass 2: model keeps Globex (revalidated) and adds an own pick.
+        return _fixture_extraction(["Globex", "LLMRival"])
+
+    monkeypatch.setattr(
+        "nous.pipeline.analyze_competitors.complete_json", _fake_complete_json
+    )
+
+    summary = await run_analyze_competitors(db, limit=10, ttl_days=25)
+    assert summary.competitors_from_techcrunch == 1
+    assert summary.competitors_from_llm == 1
+
+    rows = (
+        await db.execute(
+            select(Competitor)
+            .where(Competitor.company_id == target.id)
+            .order_by(Competitor.rank)
+        )
+    ).scalars().all()
+    by_name = {r.competitor_name: r for r in rows}
+    assert by_name["Globex"].source == "techcrunch"
+    assert by_name["Globex"].source_url == tc_url
+    assert by_name["LLMRival"].source == "llm_inferred"
+    assert by_name["LLMRival"].source_url is None
 
 
 async def test_rerun_replaces_existing_rows(

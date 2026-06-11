@@ -1,9 +1,9 @@
 """Round-trip tests for M3 schema additions.
 
 Covers:
-- companies.discovered_via column (default + accepts explicit values)
+- companies.discovered_via column (accepts explicit values)
 - news_articles round-trip + url uniqueness
-- funding_rounds round-trip + nullable filing_id
+- funding_rounds round-trip
 - investors round-trip + name_normalized uniqueness
 - funding_round_investors join behavior + (round, investor) uniqueness
 - pg_trgm GIN trigram similarity query
@@ -49,6 +49,7 @@ def make_company(**kwargs: object) -> Company:
         "slug": f"m3-test-co-{os.urandom(3).hex()}",
         "normalized_name": "m3 test co",
         "hq_country": "US",
+        "discovered_via": "vc_portfolio",
     }
     defaults.update(kwargs)
     return Company(**defaults)
@@ -57,17 +58,6 @@ def make_company(**kwargs: object) -> Company:
 # ---------------------------------------------------------------------------
 # discovered_via
 # ---------------------------------------------------------------------------
-
-
-async def test_company_discovered_via_defaults_to_form_d(db: AsyncSession) -> None:
-    """A Company inserted without an explicit discovered_via gets 'form_d'."""
-    company = make_company()
-    db.add(company)
-    await db.flush()
-
-    fetched = await db.get(Company, company.id)
-    assert fetched is not None
-    assert fetched.discovered_via == "form_d"
 
 
 async def test_company_discovered_via_accepts_explicit_value(db: AsyncSession) -> None:
@@ -161,7 +151,6 @@ async def test_funding_round_insert_and_read(db: AsyncSession) -> None:
         valuation_post_money=Decimal("300000000.00"),
         valuation_source="TechCrunch, May 2026",
         announced_date=date(2026, 5, 1),
-        filing_id=None,  # nullable — not every round comes from Form D
         primary_news_url="https://techcrunch.com/2026/05/01/article",
         extraction_confidence="high",
     )
@@ -175,7 +164,6 @@ async def test_funding_round_insert_and_read(db: AsyncSession) -> None:
     assert fetched.amount_raised == Decimal("50000000.00")
     assert fetched.valuation_post_money == Decimal("300000000.00")
     assert fetched.announced_date == date(2026, 5, 1)
-    assert fetched.filing_id is None
     assert fetched.extraction_confidence == "high"
 
 

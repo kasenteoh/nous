@@ -9,10 +9,9 @@ import type {
   CompanyRow,
   CompetitorRow,
   CompetitorWithResolved,
-  FilingRow,
   FundingRound,
   FundingRoundWithInvestors,
-  RelatedPersonRow,
+  PersonRow,
 } from "@/lib/types";
 
 // Shape returned by the nested Supabase select on `funding_rounds`. We narrow
@@ -40,13 +39,9 @@ type CompetitorJoin = CompetitorRow & {
 };
 
 /**
- * Return a paginated list of companies with their latest filing snapshot.
+ * Return a paginated list of companies, ordered by name.
  *
- * Strategy: two queries.
- *   1. Fetch companies (ordered by name).
- *   2. For each company, fetch its most-recent filing (filing_date desc, limit 1).
- *
- * This is intentionally simple for M1's 50-row pages. A Postgres view or RPC
+ * Intentionally simple for the current page sizes. A Postgres view or RPC
  * would be cleaner at scale, but YAGNI until we have meaningful traffic.
  */
 export async function listCompanies(opts: {
@@ -67,9 +62,7 @@ export async function listCompanies(opts: {
 
   const { data: companies, error } = await supabase
     .from("companies")
-    .select(
-      "slug, name, hq_city, hq_state, industry_group, description_short, id",
-    )
+    .select("slug, name, hq_city, hq_state, industry_group, description_short")
     .order("name", { ascending: true })
     .range(offset, offset + limit - 1);
 
@@ -79,50 +72,14 @@ export async function listCompanies(opts: {
   }
   if (!companies || companies.length === 0) return [];
 
-  // Fetch the latest filing for each company in parallel.
-  const companyIds = companies.map((c) => c.id as string);
-
-  const { data: latestFilings, error: filingError } = await supabase
-    .from("filings")
-    .select("company_id, filing_date, offering_amount_total")
-    .in("company_id", companyIds)
-    .order("filing_date", { ascending: false });
-
-  if (filingError) {
-    console.error(
-      "[listCompanies] filings query failed:",
-      filingError.message,
-    );
-  }
-
-  // Build a map: company_id → latest filing row (first seen = most recent due to ordering).
-  const latestByCompany = new Map<
-    string,
-    { filing_date: string; offering_amount_total: number | null }
-  >();
-  for (const f of latestFilings ?? []) {
-    const id = f.company_id as string;
-    if (!latestByCompany.has(id)) {
-      latestByCompany.set(id, {
-        filing_date: f.filing_date as string,
-        offering_amount_total: f.offering_amount_total as number | null,
-      });
-    }
-  }
-
-  return companies.map((c) => {
-    const latest = latestByCompany.get(c.id as string);
-    return {
-      slug: c.slug as string,
-      name: c.name as string,
-      hq_city: (c.hq_city as string | null) ?? null,
-      hq_state: (c.hq_state as string | null) ?? null,
-      industry_group: (c.industry_group as string | null) ?? null,
-      description_short: (c.description_short as string | null) ?? null,
-      latest_filing_date: latest?.filing_date ?? null,
-      latest_offering_amount: latest?.offering_amount_total ?? null,
-    };
-  });
+  return companies.map((c) => ({
+    slug: c.slug as string,
+    name: c.name as string,
+    hq_city: (c.hq_city as string | null) ?? null,
+    hq_state: (c.hq_state as string | null) ?? null,
+    industry_group: (c.industry_group as string | null) ?? null,
+    description_short: (c.description_short as string | null) ?? null,
+  }));
 }
 
 /**
@@ -131,10 +88,8 @@ export async function listCompanies(opts: {
  *
  * Three queries:
  *   1. companies — the main row.
- *   2. filings — all filings for this company, newest first.
- *   3. related_persons — all people linked to this company, ordered so the most
- *      recent filing's people appear first (via filing_id ordering matching the
- *      filing date desc order).
+ *   2. funding_rounds — with nested investor joins.
+ *   3. competitors — with the resolved competitor company, when matched.
  */
 export async function getCompanyBySlug(
   slug: string,
@@ -168,43 +123,31 @@ export async function getCompanyBySlug(
 
   const companyId = company.id as string;
 
-  // 2, 3, 4 & 5: fetch filings, related persons, funding rounds (with nested
-  // investor joins), and competitors (with resolved company) in parallel.
-  const [filingsResult, personsResult, roundsResult, competitorsResult] =
-    await Promise.all([
-      supabase
-        .from("filings")
-        .select("*")
-        .eq("company_id", companyId)
-        .order("filing_date", { ascending: false }),
+  // 2, 3 & 4: fetch people, funding rounds (with nested investor joins), and
+  // competitors (with resolved company) in parallel.
+  const [peopleResult, roundsResult, competitorsResult] = await Promise.all([
+    supabase
+      .from("people")
+      .select("*")
+      .eq("company_id", companyId)
+      .order("rank", { ascending: true }),
 
-      supabase
-        .from("related_persons")
-        .select("*")
-        .eq("company_id", companyId),
+    supabase
+      .from("funding_rounds")
+      .select("*, funding_round_investors(is_lead, investors(name))")
+      .eq("company_id", companyId),
 
-      supabase
-        .from("funding_rounds")
-        .select("*, funding_round_investors(is_lead, investors(name))")
-        .eq("company_id", companyId),
+    supabase
+      .from("competitors")
+      .select("*, competitor_company:companies!competitor_company_id(slug, name)")
+      .eq("company_id", companyId)
+      .order("rank", { ascending: true }),
+  ]);
 
-      supabase
-        .from("competitors")
-        .select("*, competitor_company:companies!competitor_company_id(slug, name)")
-        .eq("company_id", companyId)
-        .order("rank", { ascending: true }),
-    ]);
-
-  if (filingsResult.error) {
+  if (peopleResult.error) {
     console.error(
-      "[getCompanyBySlug] filings query failed:",
-      filingsResult.error.message,
-    );
-  }
-  if (personsResult.error) {
-    console.error(
-      "[getCompanyBySlug] related_persons query failed:",
-      personsResult.error.message,
+      "[getCompanyBySlug] people query failed:",
+      peopleResult.error.message,
     );
   }
   if (roundsResult.error) {
@@ -220,21 +163,9 @@ export async function getCompanyBySlug(
     );
   }
 
-  const filings = (filingsResult.data ?? []) as FilingRow[];
-  const rawPersons = (personsResult.data ?? []) as RelatedPersonRow[];
+  const people = (peopleResult.data ?? []) as PersonRow[];
+
   const rawRounds = (roundsResult.data ?? []) as FundingRoundJoin[];
-
-  // Sort related persons: most recent filing's people first.
-  // Build a map: filing_id → filing_date for ordering.
-  const filingDateByFiling = new Map<string, string>(
-    filings.map((f) => [f.id, f.filing_date]),
-  );
-
-  const relatedPersons = [...rawPersons].sort((a, b) => {
-    const da = filingDateByFiling.get(a.filing_id) ?? "";
-    const db2 = filingDateByFiling.get(b.filing_id) ?? "";
-    return db2.localeCompare(da); // desc
-  });
 
   // Shape funding rounds: split join rows into lead vs other investor names,
   // then sort by announced_date desc with nulls last.
@@ -290,8 +221,7 @@ export async function getCompanyBySlug(
 
   return {
     company: company as unknown as CompanyRow,
-    filings,
-    relatedPersons,
+    people,
     fundingRounds,
     competitors,
   };

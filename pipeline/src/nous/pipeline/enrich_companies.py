@@ -16,10 +16,11 @@ import re
 from datetime import UTC, datetime, timedelta
 
 from pydantic import BaseModel
-from sqlalchemy import exists, select
+from sqlalchemy import ColumnElement, exists, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from nous.db.models import Company, RawPage
+from nous.db.upsert import replace_people
 from nous.llm.client import LLMError, LLMParseError, LLMRateLimitError, complete_json
 from nous.llm.prompts.company_description import CompanyDescription, build_prompt
 from nous.util.text import extract_visible_text, truncate_to_chars
@@ -39,6 +40,7 @@ def _normalize_tag(tag: str) -> str:
 class EnrichSummary(BaseModel):
     companies_seen: int = 0
     companies_enriched: int = 0
+    people_written: int = 0
     llm_failures: int = 0
     skipped_no_text: int = 0
     skipped_rate_limited: int = 0
@@ -48,28 +50,34 @@ async def run_enrich_companies(
     session: AsyncSession,
     *,
     max_companies: int | None = None,
-    refetch_after_days: int = 90,
+    refetch_after_days: int | None = None,
 ) -> EnrichSummary:
-    """Enrich companies that have raw_pages but no recent description.
+    """Enrich companies that have raw_pages but no current description.
 
-    A company is eligible when:
+    Description + people (written together from the same scraped pages) are
+    "stable" data — written once, not refreshed every run (the volatile data is
+    funding + competitors). A company is eligible when:
     - At least one RawPage row exists for it, AND
-    - description_short IS NULL OR last_enriched_at < (now - refetch_after_days).
+    - description_short IS NULL, OR ``refetch_after_days`` is provided and
+      last_enriched_at is older than that.
+
+    With the default ``refetch_after_days=None`` the stage is write-once: it only
+    enriches companies that have never been enriched. To backfill people onto
+    rows enriched before this stage wrote them (or to refresh descriptions),
+    run with ``--refetch-after-days 0`` to force re-enrichment of everyone.
     """
     summary = EnrichSummary()
 
-    cutoff = datetime.now(tz=UTC) - timedelta(days=refetch_after_days)
+    conditions: list[ColumnElement[bool]] = [Company.description_short.is_(None)]
+    if refetch_after_days is not None:
+        cutoff = datetime.now(tz=UTC) - timedelta(days=refetch_after_days)
+        conditions.append(Company.last_enriched_at.is_(None))
+        conditions.append(Company.last_enriched_at < cutoff)
 
     stmt = (
         select(Company)
-        .where(
-            exists().where(RawPage.company_id == Company.id)
-        )
-        .where(
-            (Company.description_short.is_(None))
-            | (Company.last_enriched_at.is_(None))
-            | (Company.last_enriched_at < cutoff)
-        )
+        .where(exists().where(RawPage.company_id == Company.id))
+        .where(or_(*conditions))
     )
     if max_companies is not None:
         stmt = stmt.limit(max_companies)
@@ -141,6 +149,14 @@ async def run_enrich_companies(
         company.last_enriched_payload = description.model_dump(mode="json")
 
         session.add(company)
+
+        # People (CEO/CTO/founders) come from the same scraped pages; attribute
+        # them to the company website. Replace-style so re-enrichment is clean.
+        n_people = await replace_people(
+            session, company.id, description.people, source_url=company.website
+        )
+        summary.people_written += n_people
+
         await session.commit()
         summary.companies_enriched += 1
 

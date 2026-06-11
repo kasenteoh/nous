@@ -3,7 +3,7 @@ export const revalidate = 21600;
 
 import Link from "next/link";
 import { listCompanies } from "@/lib/queries";
-import { formatDate, formatLocation, formatUsd } from "@/lib/format";
+import { formatLocation } from "@/lib/format";
 
 export default async function Home() {
   // Stopgap until the M5 search/filter/pagination UI lands (spec §7.2).
@@ -19,7 +19,7 @@ export default async function Home() {
           nous
         </h1>
         <p className="mt-3 text-lg text-zinc-500 dark:text-zinc-400 max-w-xl">
-          US software startups, indexed from SEC filings.
+          US software startups, discovered from VC portfolios and funding news.
         </p>
       </header>
 
@@ -27,10 +27,10 @@ export default async function Home() {
       {companies.length === 0 ? (
         <div className="rounded-lg border border-dashed border-zinc-300 dark:border-zinc-700 px-8 py-14 text-center">
           <p className="text-zinc-500 dark:text-zinc-400">
-            No companies indexed yet. Run the pipeline to ingest filings:
+            No companies indexed yet. Run the discovery pipeline:
           </p>
           <pre className="mt-4 inline-block rounded bg-zinc-100 dark:bg-zinc-800 px-4 py-2 text-sm text-zinc-700 dark:text-zinc-300 font-mono">
-            <code>nous ingest-filings --since YYYY-MM-DD</code>
+            <code>nous refresh-vc-portfolios</code>
           </pre>
         </div>
       ) : (
@@ -64,20 +64,6 @@ export default async function Home() {
                     <dd className="truncate">{company.industry_group}</dd>
                   </div>
                 )}
-                <div className="flex justify-between gap-2 pt-2 border-t border-zinc-100 dark:border-zinc-800">
-                  <div>
-                    <dt className="sr-only">Latest filing</dt>
-                    <dd>{formatDate(company.latest_filing_date)}</dd>
-                  </div>
-                  {company.latest_offering_amount != null && (
-                    <div className="text-right">
-                      <dt className="sr-only">Offering amount</dt>
-                      <dd className="font-medium text-zinc-700 dark:text-zinc-300">
-                        {formatUsd(company.latest_offering_amount)}
-                      </dd>
-                    </div>
-                  )}
-                </div>
               </dl>
             </Link>
           ))}

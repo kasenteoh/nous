@@ -27,9 +27,13 @@ from nous.db.models import (
     FundingRoundInvestor,
     Investor,
     NewsArticle,
+    RawPage,
 )
 from nous.llm.prompts.funding_extraction import FundingExtraction
-from nous.pipeline.extract_funding import run_extract_funding
+from nous.pipeline.extract_funding import (
+    run_extract_funding,
+    run_extract_funding_website,
+)
 from nous.util.slugify import normalize_name
 
 pytestmark = pytest.mark.skipif(
@@ -434,6 +438,86 @@ async def test_limit_caps_articles_processed(
 # ---------------------------------------------------------------------------
 # CHECK constraint
 # ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# Website fallback (gap-fill only)
+# ---------------------------------------------------------------------------
+
+
+def _add_raw_page(company_id: object, url: str) -> RawPage:
+    body = "The company raised a $20M Series B in March 2026. " * 20
+    return RawPage(
+        company_id=company_id,  # type: ignore[arg-type]
+        url=url,
+        content=f"<html><body><p>{body}</p></body></html>",
+    )
+
+
+async def test_website_fallback_creates_round_when_no_news(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    company = _make_company("WebCo")
+    company.website = "https://webco.example/"
+    db.add(company)
+    await db.flush()
+    db.add(_add_raw_page(company.id, "https://webco.example/about"))
+    await db.flush()
+    await db.commit()
+
+    async def _fake_complete_json(prompt: str, schema: type) -> FundingExtraction:
+        return _make_extraction(
+            round_type="Series B",
+            amount=Decimal("20000000.00"),
+            valuation=None,
+            valuation_source="Company website, March 2026",
+            leads=["Acme Capital"],
+            others=[],
+            confidence="medium",
+        )
+
+    monkeypatch.setattr(
+        "nous.pipeline.extract_funding.complete_json", _fake_complete_json
+    )
+
+    summary = await run_extract_funding_website(db, limit=10)
+    assert summary.companies_seen == 1
+    assert summary.companies_with_funding == 1
+    assert summary.funding_rounds_created == 1
+
+    rounds = (await db.execute(select(FundingRound))).scalars().all()
+    assert len(rounds) == 1
+    # Attributed to the company's own website (the source of the text).
+    assert rounds[0].primary_news_url == "https://webco.example/"
+    assert rounds[0].valuation_source == "Company website, March 2026"
+
+
+async def test_website_fallback_skips_company_with_existing_round(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Gap-fill only: a company that already has a funding_round is ineligible."""
+    company = _make_company("HasRound")
+    company.website = "https://hasround.example/"
+    db.add(company)
+    await db.flush()
+    db.add(_add_raw_page(company.id, "https://hasround.example/about"))
+    db.add(FundingRound(company_id=company.id, round_type="Seed"))
+    await db.flush()
+    await db.commit()
+
+    calls = {"n": 0}
+
+    async def _fake_complete_json(prompt: str, schema: type) -> FundingExtraction:
+        calls["n"] += 1
+        return _make_extraction()
+
+    monkeypatch.setattr(
+        "nous.pipeline.extract_funding.complete_json", _fake_complete_json
+    )
+
+    summary = await run_extract_funding_website(db, limit=10)
+    assert summary.companies_seen == 0
+    assert calls["n"] == 0
 
 
 async def test_extraction_confidence_check_rejects_invalid_values(

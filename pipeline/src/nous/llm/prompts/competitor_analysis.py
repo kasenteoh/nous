@@ -73,10 +73,15 @@ Target company:
 Peer list (other companies indexed in our database in the same industry):
 {peer_block}
 
+Competitors named in the target's TechCrunch coverage (candidates to validate):
+{candidate_block}
+
 Task:
 - Identify up to {max_competitors} companies that compete with the target.
-- Prefer companies from the peer list when reasonable.
-- You may also name well-known competitors that are not in the peer list.
+- First, REVALIDATE the TechCrunch candidates above: include a candidate only if
+  it is genuinely a competitor of the target. Drop any that are not.
+- Then add other competitors you are confident about (from the peer list or
+  well-known companies). Rank the full combined set together.
 - Do not invent fictional companies. If you have no high-confidence competitors,
   return an empty list rather than fabricate.
 - Rank them 1..N, where 1 is the most direct competitor. Ranks must be
@@ -95,10 +100,21 @@ def _render_peer_block(peers: list[Peer]) -> str:
     return "\n".join(lines)
 
 
-def build_prompt(*, target: Target, peers: list[Peer]) -> str:
-    """Render the competitor-analysis prompt with the given target and peer list.
+def _render_candidate_block(candidates: list[str]) -> str:
+    if not candidates:
+        return "(no TechCrunch coverage names any competitors)"
+    return "\n".join(f"- {name}" for name in candidates)
+
+
+def build_prompt(
+    *, target: Target, peers: list[Peer], tc_candidates: list[str] | None = None
+) -> str:
+    """Render the competitor-analysis prompt.
 
     The peer list is truncated to MAX_PEERS to keep token cost predictable.
+    `tc_candidates` are competitor names surfaced from the target's TechCrunch
+    coverage (pass 1); the model revalidates them and combines with its own
+    suggestions.
     """
     capped_peers = peers[:MAX_PEERS]
     return PROMPT_TEMPLATE.format(
@@ -107,5 +123,6 @@ def build_prompt(*, target: Target, peers: list[Peer]) -> str:
         description_short=target.description_short,
         description_long=target.description_long,
         peer_block=_render_peer_block(capped_peers),
+        candidate_block=_render_candidate_block(tc_candidates or []),
         max_competitors=MAX_COMPETITORS,
     )

@@ -17,11 +17,12 @@ from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from nous.db.models import Company, RawPage
+from nous.db.models import Company, Person, RawPage
 from nous.llm.client import LLMParseError, LLMRateLimitError
-from nous.llm.prompts.company_description import CompanyDescription
+from nous.llm.prompts.company_description import CompanyDescription, PersonExtraction
 from nous.pipeline.enrich_companies import run_enrich_companies
 
 # ---------------------------------------------------------------------------
@@ -105,6 +106,49 @@ async def test_enrich_populates_company_fields(
     assert company.primary_category == _CANNED_DESCRIPTION.primary_category
     assert company.last_enriched_at is not None
     assert summary.companies_enriched >= 1
+
+
+async def test_enrich_writes_people(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """People returned by the LLM are written to the people table, ranked, and
+    attributed to the company website."""
+    company = _make_company(slug="enrich-people")
+    company.website = "https://acme.example/"
+    db.add(company)
+    await db.flush()
+    db.add(_make_raw_page(company.id))
+    await db.flush()
+    await db.commit()
+
+    canned = CompanyDescription(
+        description_short="Short.",
+        description_long="Long.",
+        primary_category="developer tools",
+        tags=[],
+        people=[
+            PersonExtraction(name="Ada Lovelace", role="CEO"),
+            PersonExtraction(name="Alan Turing", role="CTO"),
+        ],
+    )
+    monkeypatch.setattr(
+        "nous.pipeline.enrich_companies.complete_json",
+        AsyncMock(return_value=canned),
+    )
+
+    summary = await run_enrich_companies(db)
+    assert summary.people_written == 2
+
+    rows = (
+        await db.execute(
+            select(Person).where(Person.company_id == company.id).order_by(Person.rank)
+        )
+    ).scalars().all()
+    assert [(r.name, r.role, r.rank) for r in rows] == [
+        ("Ada Lovelace", "CEO", 1),
+        ("Alan Turing", "CTO", 2),
+    ]
+    assert all(r.source_url == "https://acme.example/" for r in rows)
 
 
 async def test_tags_are_normalized(
