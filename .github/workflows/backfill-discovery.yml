@@ -32,6 +32,13 @@ on:
         type: boolean
         default: false
 
+# Serialize against every other workflow that mutates the companies table (see
+# discovery.yml). This job auto-creates companies, so it must not race the dedup
+# DELETEs in discovery.yml. cancel-in-progress: false so a queued run waits.
+concurrency:
+  group: nous-pipeline-db
+  cancel-in-progress: false
+
 jobs:
   backfill-discovery:
     runs-on: ubuntu-latest

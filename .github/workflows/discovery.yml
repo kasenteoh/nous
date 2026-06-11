@@ -1,14 +1,18 @@
-name: monthly-refresh
+name: discovery
 
+# Weekly company discovery + refresh: pull new startups from VC portfolios,
+# collapse duplicates, then (re)compute competitor sets. Moved from monthly to
+# weekly so new companies surface sooner — discovery itself is LLM-free and
+# competitor analysis is TTL-gated (25 days), so weekly costs little more than
+# monthly did.
 on:
   schedule:
-    # 02:00 UTC on the 1st of each month — deliberately OFFSET from the weekly
-    # pipeline's Monday 09:00 slot so the two never run concurrently. They share
-    # the companies table, and this job's dedup-companies step DELETEs merged
-    # rows; an overlapping weekly run updating those same rows would crash with a
-    # StaleDataError (this happened when the 1st falls on a Monday). The 7h gap
-    # lets the monthly job finish well before any weekly run starts.
-    - cron: "0 2 1 * *"
+    # Mon 02:00 UTC. The dedup-companies step DELETEs merged company rows, so
+    # this job must never run concurrently with descriptions.yml /
+    # funding-news.yml / backfill-discovery.yml — they all write the companies
+    # table. That mutual exclusion is enforced by the shared `concurrency` group
+    # below, not by cron offsets.
+    - cron: "0 2 * * 1"
   workflow_dispatch:
     inputs:
       firms:
@@ -24,8 +28,16 @@ on:
         required: false
         type: string
 
+# Serialize against every other workflow that mutates the companies table.
+# dedup-companies (below) DELETEs merged rows; an overlapping run elsewhere
+# would crash with a StaleDataError. cancel-in-progress: false so a queued run
+# waits its turn instead of being dropped.
+concurrency:
+  group: nous-pipeline-db
+  cancel-in-progress: false
+
 jobs:
-  monthly-refresh:
+  discovery:
     runs-on: ubuntu-latest
     defaults:
       run:
