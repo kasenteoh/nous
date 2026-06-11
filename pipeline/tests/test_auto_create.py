@@ -5,7 +5,7 @@ Covers:
 - Trigram match above threshold returns the existing row.
 - Trigram match below threshold inserts a new row.
 - auto_create_company opportunistic website backfill on match.
-- auto_create_company writes cik=NULL + discovered_via on insert.
+- auto_create_company writes discovered_via on insert.
 - Re-running auto_create_company is idempotent.
 
 Requires DATABASE_URL pointing at a Postgres with pg_trgm + migration 0003.
@@ -14,8 +14,6 @@ Requires DATABASE_URL pointing at a Postgres with pg_trgm + migration 0003.
 from __future__ import annotations
 
 import os
-from datetime import date
-from decimal import Decimal
 
 import pytest
 from sqlalchemy import select
@@ -42,7 +40,7 @@ def make_company(
     slug: str,
     normalized_name: str | None = None,
     website: str | None = None,
-    discovered_via: str = "form_d",
+    discovered_via: str = "vc_portfolio",
 ) -> Company:
     return Company(
         name=name,
@@ -127,7 +125,6 @@ async def test_auto_create_inserts_new_row(db: AsyncSession) -> None:
         discovered_via="vc_portfolio",
     )
     assert created is True
-    assert company.cik is None
     assert company.name == "Brand New Co"
     assert company.website == "https://brandnewco.example/"
     assert company.discovered_via == "vc_portfolio"
@@ -258,29 +255,17 @@ async def test_auto_create_trigram_match_avoids_duplicate(
 # ---------------------------------------------------------------------------
 
 
-async def test_tc_and_vc_arrivals_merge_form_d_arrives_separately(
+async def test_tc_and_vc_arrivals_merge_to_one_row(
     db: AsyncSession,
 ) -> None:
-    """Three-source dedup under the post-audit semantics.
+    """A TechCrunch arrival and a VC-portfolio arrival for the same company
+    collapse to a single row via ``auto_create_company``'s fuzzy matching —
+    the legitimate cross-source merge case.
 
-    Step 1 (TC) and step 2 (VC) collapse to one row via ``auto_create_company``'s
-    fuzzy matching — that's the legitimate cross-source merge case.
-
-    Step 3 (Form D) intentionally does NOT merge with the TC/VC row even
-    though the normalized_name matches: the hostile-takeover guard in
-    ``upsert_company`` (see Task 1 of the pre-M5 plan) refuses to backfill
-    a CIK onto a row whose ``discovered_via`` is not ``'form_d'``. The
-    accepted trade-off: an occasional cross-source duplicate is safer than
-    silently merging two distinct real-world entities that happen to share
-    a normalized name.
-
-    End state: two rows. The TC/VC row keeps its identity (name "OpenAI",
-    discovered_via "techcrunch", cik NULL). A separate Form D row carries
-    the SEC entity name and CIK.
+    End state: one row. The TC arrival creates it; the VC arrival (a spacing
+    variant) matches via normalize_name and returns the same row, leaving the
+    first-seen name and discovery source intact.
     """
-    from nous.db.upsert import upsert_company
-    from nous.sources.form_d import FormD, FormDAddress
-
     # 1. TechCrunch broad-sweep auto-creates the row.
     tc_company, tc_created = await auto_create_company(
         db,
@@ -302,41 +287,19 @@ async def test_tc_and_vc_arrivals_merge_form_d_arrives_separately(
     assert vc_created is False
     assert vc_company.id == canonical_id
 
-    # 3. Form D ingest: SEC entity_name "OPENAI, INC." with CIK. Refuses to
-    #    hijack the non-Form-D row — inserts a new row instead.
-    form_d = FormD(
-        accession_number="0001000999-26-000001",
-        cik="0001234567",
-        entity_name="OPENAI, INC.",
-        industry_group_type="Technology - Computers",
-        principal_place_of_business=FormDAddress(
-            city="San Francisco", state="CA", country="US"
-        ),
-        filing_date=date(2026, 5, 1),
-        total_offering_amount=Decimal("100000000"),
-        related_persons=[],
-    )
-    fd_company, fd_created = await upsert_company(db, form_d)
-    assert fd_created is True
-    assert fd_company.id != canonical_id
+    # First-discovery wins: name and source are untouched, website backfilled.
+    refetched = await db.get(Company, canonical_id, populate_existing=True)
+    assert refetched is not None
+    assert refetched.name == "OpenAI"
+    assert refetched.discovered_via == "techcrunch"
+    assert refetched.website == "https://openai.com"
 
-    # The new Form D row carries the SEC entity name and CIK.
-    assert fd_company.cik == "0001234567"
-    assert fd_company.discovered_via == "form_d"
-
-    # The TC/VC row was left untouched.
-    tc_refetched = await db.get(Company, canonical_id, populate_existing=True)
-    assert tc_refetched is not None
-    assert tc_refetched.cik is None
-    assert tc_refetched.name == "OpenAI"
-    assert tc_refetched.discovered_via == "techcrunch"
-
-    # Both rows share the same normalized_name (the audit's accepted duplicate).
+    # Exactly one row carries this normalized_name.
     matches = await db.execute(
         select(Company).where(Company.normalized_name == "openai")
     )
     rows = matches.scalars().all()
-    assert {r.id for r in rows} == {canonical_id, fd_company.id}
+    assert {r.id for r in rows} == {canonical_id}
 
 
 async def test_auto_create_upgrades_lowercase_display_name(db: AsyncSession) -> None:

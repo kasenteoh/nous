@@ -5,14 +5,6 @@ on:
     - cron: "0 9 * * 1"
   workflow_dispatch:
     inputs:
-      since:
-        description: "Ingest: optional start date (YYYY-MM-DD). Default: rolling 7-day window with overlap."
-        required: false
-        type: string
-      until:
-        description: "Ingest: optional end date (YYYY-MM-DD). Default: today."
-        required: false
-        type: string
       resolve_refetch_after_days:
         description: "Resolve: re-resolve companies whose website_resolved_at is older than N days. 0 = re-resolve everything. Default: 90."
         required: false
@@ -21,11 +13,6 @@ on:
         description: "Scrape: re-scrape companies whose raw_pages are older than N days. 0 = re-scrape everything. Default: 90."
         required: false
         type: string
-      skip_ingest:
-        description: "Skip the Ingest filings stage. Useful when you just want to re-run scrape/enrich on existing data."
-        required: false
-        type: boolean
-        default: false
       skip_resolve:
         description: "Skip the Resolve homepages stage."
         required: false
@@ -98,14 +85,6 @@ jobs:
 
       - name: Apply migrations
         run: uv run alembic upgrade head
-
-      - name: Ingest filings
-        if: ${{ inputs.skip_ingest != true }}
-        run: |
-          ARGS=()
-          if [ -n "${{ inputs.since }}" ]; then ARGS+=(--since "${{ inputs.since }}"); fi
-          if [ -n "${{ inputs.until }}" ]; then ARGS+=(--until "${{ inputs.until }}"); fi
-          uv run nous ingest-filings "${ARGS[@]}"
 
       - name: Resolve homepages
         if: ${{ inputs.skip_resolve != true }}

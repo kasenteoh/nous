@@ -7,6 +7,9 @@ class Settings(BaseSettings):
     DATABASE_URL: str = ""
     SUPABASE_URL: str = ""
     SUPABASE_SERVICE_ROLE_KEY: str = ""
+    # User-Agent contact string sent on all outbound scraping (homepages, news,
+    # VC portfolios). Must include a contact email — many sites block anonymous
+    # traffic, and robots.txt etiquette expects an identifiable agent.
     SEC_USER_AGENT: str = ""
     VERCEL_DEPLOY_HOOK_URL: str = ""
 
@@ -20,31 +23,6 @@ class Settings(BaseSettings):
     # rule because Gemini's free tier (20 RPD) was too low for bulk enrichment.
     # Get a key at https://platform.deepseek.com/api_keys
     DEEPSEEK_API_KEY: str = ""
-
-    # ---------------------------------------------------------------------------
-    # ingest-filings settings
-    # ---------------------------------------------------------------------------
-
-    # Industry groups to retain from Form D filings. Values must match the
-    # `industryGroupType` enum in the Form D XSD exactly (case-sensitive):
-    # "Computers", "Other Technology", "Telecommunications" are the three
-    # software-adjacent buckets. The spec §3.1 referred to these with a
-    # "Technology - " prefix; that's the EDGAR UI label, not the XML value.
-    # When overriding via env var, supply a JSON array string, e.g.:
-    #   INDUSTRY_GROUPS='["Computers","Other Technology"]'
-    INDUSTRY_GROUPS: list[str] = [
-        "Computers",
-        "Other Technology",
-        "Telecommunications",
-    ]
-
-    # Extra days to look back beyond the requested window to catch late-filed
-    # amendments and guard against EDGAR indexing delays.
-    EDGAR_OVERLAP_DAYS: int = 14
-
-    # Maximum EDGAR requests per second.  SEC's stated ceiling is 10 req/s;
-    # we default to 5.0 to stay comfortably below it.
-    EDGAR_REQUESTS_PER_SECOND: float = 5.0
 
     # ---------------------------------------------------------------------------
     # M3: auto-create + fuzzy match

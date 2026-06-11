@@ -3,7 +3,6 @@
 
 export interface CompanyRow {
   id: string;
-  cik: string | null;
   name: string;
   slug: string;
   normalized_name: string;
@@ -23,39 +22,8 @@ export interface CompanyRow {
   employee_count_source: string | null;
   last_enriched_at: string | null;
   // M3 — how this company first entered the DB.
-  // One of: 'form_d' | 'vc_portfolio' | 'news' | 'techcrunch'.
+  // One of: 'vc_portfolio' | 'news' | 'techcrunch'.
   discovered_via: string;
-  created_at: string;
-  updated_at: string;
-}
-
-export interface FilingRow {
-  id: string;
-  company_id: string;
-  accession_number: string;
-  filing_date: string; // ISO date string (YYYY-MM-DD)
-  offering_amount_total: number | null;
-  amount_sold: number | null;
-  investors_count: number | null;
-  minimum_investment: number | null;
-  raw_data: Record<string, unknown>;
-  created_at: string;
-  updated_at: string;
-}
-
-export interface RelatedPersonRow {
-  id: string;
-  company_id: string;
-  filing_id: string;
-  name: string;
-  relationship: string;
-  address: {
-    street?: string;
-    city?: string;
-    state?: string;
-    zip?: string;
-    country?: string;
-  } | null;
   created_at: string;
   updated_at: string;
 }
@@ -70,8 +38,6 @@ export interface CompanyListRow {
   hq_state: string | null;
   industry_group: string | null;
   description_short: string | null; // M2 — shown as preview on index cards
-  latest_filing_date: string | null; // ISO date
-  latest_offering_amount: number | null;
 }
 
 // ─── M3: funding-history rows ─────────────────────────────────────────────────
@@ -105,7 +71,6 @@ export interface FundingRound {
   valuation_post_money: number | null;
   valuation_source: string | null;
   announced_date: string | null; // ISO date (YYYY-MM-DD) or null
-  filing_id: string | null;
   primary_news_url: string | null;
   extraction_confidence: string | null; // 'low' | 'medium' | 'high' | null
   created_at: string;
@@ -148,11 +113,9 @@ export interface CompetitorWithResolved extends CompetitorRow {
   resolved: { slug: string; name: string } | null;
 }
 
-/** Full company detail assembled from four DB queries. */
+/** Full company detail assembled from three DB queries. */
 export interface CompanyDetail {
   company: CompanyRow;
-  filings: FilingRow[]; // sorted by filing_date desc
-  relatedPersons: RelatedPersonRow[]; // most recent filing's people first
   fundingRounds: FundingRoundWithInvestors[]; // sorted by announced_date desc (nulls last)
   competitors: CompetitorWithResolved[]; // sorted by rank ascending
 }

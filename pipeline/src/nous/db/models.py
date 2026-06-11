@@ -22,13 +22,14 @@ from nous.db.base import Base
 
 
 class Company(Base):
-    """Represents a software company discovered via SEC Form D filings."""
+    """Represents a software company discovered from public sources.
+
+    Companies enter the DB via VC portfolio scrapes, funding news, or the
+    TechCrunch venture feed (see ``discovered_via``).
+    """
 
     __tablename__ = "companies"
 
-    # SEC Central Index Key — nullable because we may create companies before
-    # linking to a CIK (e.g., from enriched sources in later milestones).
-    cik: Mapped[str | None] = mapped_column(unique=True, nullable=True, index=True)
     name: Mapped[str]
     slug: Mapped[str] = mapped_column(unique=True, index=True)
     normalized_name: Mapped[str] = mapped_column(index=True)
@@ -68,57 +69,8 @@ class Company(Base):
     )
 
     # M3 — how this company first entered the DB.
-    # 'form_d' | 'vc_portfolio' | 'news' | 'techcrunch'.
-    discovered_via: Mapped[str] = mapped_column(
-        String, nullable=False, server_default="form_d"
-    )
-
-
-class Filing(Base):
-    """Represents a single SEC Form D filing, linked to a Company."""
-
-    __tablename__ = "filings"
-
-    company_id: Mapped[UUID] = mapped_column(
-        PG_UUID(as_uuid=True),
-        ForeignKey("companies.id", ondelete="CASCADE"),
-        index=True,
-    )
-    accession_number: Mapped[str] = mapped_column(unique=True, index=True)
-    filing_date: Mapped[date]
-
-    # Financial fields — Numeric(20, 2) for precision with large dollar amounts
-    offering_amount_total: Mapped[Decimal | None] = mapped_column(Numeric(20, 2))
-    amount_sold: Mapped[Decimal | None] = mapped_column(Numeric(20, 2))
-    investors_count: Mapped[int | None]
-    minimum_investment: Mapped[Decimal | None] = mapped_column(Numeric(20, 2))
-
-    # Full raw XML/JSON payload from SEC EDGAR, stored for audit and re-extraction
-    raw_data: Mapped[dict] = mapped_column(JSONB, nullable=False)  # type: ignore[type-arg]
-
-
-class RelatedPerson(Base):
-    """A person named in a Form D filing (e.g., executive director, promoter).
-
-    Defined now per spec §5.1; populated during filing ingestion in M1 ingest stage.
-    """
-
-    __tablename__ = "related_persons"
-
-    company_id: Mapped[UUID] = mapped_column(
-        PG_UUID(as_uuid=True),
-        ForeignKey("companies.id", ondelete="CASCADE"),
-        index=True,
-    )
-    filing_id: Mapped[UUID] = mapped_column(
-        PG_UUID(as_uuid=True),
-        ForeignKey("filings.id", ondelete="CASCADE"),
-        index=True,
-    )
-    name: Mapped[str]
-    relationship: Mapped[str]
-    # Address stored as a flexible dict; structure mirrors SEC EDGAR's address object
-    address: Mapped[dict | None] = mapped_column(JSONB)  # type: ignore[type-arg]
+    # 'vc_portfolio' | 'news' | 'techcrunch'.
+    discovered_via: Mapped[str] = mapped_column(String, nullable=False)
 
 
 class RawPage(Base):
@@ -172,8 +124,8 @@ class NewsArticle(Base):
 
 
 class FundingRound(Base):
-    """Per spec §4.3. A funding round attributed to a company, optionally
-    linked to a Form D filing and/or to a news article (primary_news_url).
+    """Per spec §4.3. A funding round attributed to a company, sourced from a
+    news article (primary_news_url).
     """
 
     __tablename__ = "funding_rounds"
@@ -195,12 +147,6 @@ class FundingRound(Base):
     valuation_post_money: Mapped[Decimal | None] = mapped_column(Numeric(20, 2))
     valuation_source: Mapped[str | None]  # e.g. "TechCrunch, Mar 2026"
     announced_date: Mapped[date | None] = mapped_column(Date, index=True)
-    filing_id: Mapped[UUID | None] = mapped_column(
-        PG_UUID(as_uuid=True),
-        ForeignKey("filings.id", ondelete="SET NULL"),
-        nullable=True,
-        index=True,
-    )
     primary_news_url: Mapped[str | None]
     # LLM-reported confidence: 'low' | 'medium' | 'high'.
     extraction_confidence: Mapped[str | None]

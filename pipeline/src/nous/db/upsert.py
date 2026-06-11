@@ -1,7 +1,7 @@
-"""Idempotent upsert helpers for Form D ingestion.
+"""Idempotent upsert helpers for company discovery + funding ingestion.
 
-All functions operate on an open ``AsyncSession``.  Callers (i.e. the
-``ingest_filings`` pipeline stage) are responsible for committing.
+All functions operate on an open ``AsyncSession``.  Callers are responsible
+for committing.
 """
 
 from __future__ import annotations
@@ -9,29 +9,20 @@ from __future__ import annotations
 from datetime import timedelta
 from uuid import UUID
 
-from sqlalchemy import and_, delete, func, select
+from sqlalchemy import and_, func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from nous.db.models import (
     Company,
-    Filing,
     FundingRound,
     FundingRoundInvestor,
     Investor,
     RawPage,
-    RelatedPerson,
 )
 from nous.llm.prompts.funding_extraction import FundingExtraction
-from nous.sources.form_d import FormD, FormDRelatedPerson
 from nous.util.investor_name import canonicalize_investor_name
 from nous.util.slugify import normalize_name, slug_with_disambiguator, slugify
-
-
-async def _find_by_cik(session: AsyncSession, cik: str) -> Company | None:
-    """Return the Company row matching *cik*, or None."""
-    result = await session.execute(select(Company).where(Company.cik == cik))
-    return result.scalar_one_or_none()
 
 
 async def _find_by_normalized_name(session: AsyncSession, norm: str) -> Company | None:
@@ -52,7 +43,7 @@ async def _is_slug_taken(session: AsyncSession, slug: str, exclude_id: UUID | No
 
 
 async def _build_slug(
-    session: AsyncSession, name: str, cik: str | None, company_id: UUID | None
+    session: AsyncSession, name: str, company_id: UUID | None
 ) -> str:
     """Generate a unique slug for *name*, appending a disambiguator if needed."""
     base = slugify(name)
@@ -61,144 +52,8 @@ async def _build_slug(
         base = "company"
     candidate = base
     if await _is_slug_taken(session, candidate, exclude_id=company_id):
-        candidate = slug_with_disambiguator(base, cik)
+        candidate = slug_with_disambiguator(base)
     return candidate
-
-
-async def upsert_company(session: AsyncSession, form_d: FormD) -> tuple[Company, bool]:
-    """Find or create a Company from a parsed Form D.
-
-    Lookup strategy (in order):
-    1. If ``form_d.cik`` is non-empty → query by CIK.
-       - Hit: update mutable fields; if row had no CIK set it now.
-       - Miss → also query by normalized_name (a previous no-CIK filing may
-         have created the row; if found, backfill CIK).
-    2. If ``form_d.cik`` is empty → query by normalized_name only.
-    3. If still no match → insert new row.
-
-    Fields that are NEVER overwritten on update:
-    - ``name``: first-discovery wins. SEC entity names are frequently
-      ALL-CAPS ("OPENAI, INC.") and would degrade a nicer "OpenAI" already
-      set by an earlier VC or news ingest. Preserved as the display name.
-      (The casing-upgrade path in ``auto_create_company`` handles the
-      opposite case — properly-cased VC entry replacing a lowercase name.)
-    - ``slug``: URL identity. Stable across ingests so external links don't
-      break when a Form D amendment changes the legal name.
-    - M2 enrichment: ``description_short``, ``description_long``, ``website``,
-      ``logo_url``, ``employee_count_*``, ``last_enriched_at``.
-    - ``discovered_via``: source provenance.
-
-    Fields that ARE updated on every ingest (most-recent-filing wins):
-    ``normalized_name``, ``hq_city``, ``hq_state``, ``hq_country``,
-    ``year_incorporated``, ``industry_group``. ``normalized_name`` is the
-    matching key, so it tracks the latest stylization to keep dedup working
-    if the helper's rules ever change.
-
-    Returns:
-        ``(company, created)`` where *created* is True only on a fresh insert.
-    """
-    cik = form_d.cik.strip() if form_d.cik else ""
-    norm = normalize_name(form_d.entity_name)
-    addr = form_d.principal_place_of_business
-
-    company: Company | None = None
-
-    # -- Step 1: try CIK lookup --
-    if cik:
-        company = await _find_by_cik(session, cik)
-
-    # -- Step 1b: if CIK lookup missed, check by normalized name --
-    # Only accept a name match when both rows are Form-D-sourced (the
-    # original use case: an earlier no-CIK filing matched by name, current
-    # filing supplies the CIK). For non-Form-D rows we fall through to
-    # INSERT — accepting a possible duplicate is safer than hijacking a
-    # VC/news/TC row that may represent a different real-world company.
-    if company is None:
-        candidate = await _find_by_normalized_name(session, norm)
-        if candidate is not None:
-            if not cik:
-                # Without an incoming CIK, this is a re-ingest of the same
-                # no-CIK Form D filing — match regardless of source.
-                company = candidate
-            elif not candidate.cik and candidate.discovered_via == "form_d":
-                # Backfill CIK only onto a prior Form D row that lacked one.
-                company = candidate
-                company.cik = cik  # backfill
-
-    # -- Step 2: update or insert --
-    if company is not None:
-        # name and slug are first-discovery-wins; do not overwrite them.
-        # normalized_name stays in sync so future matching catches new
-        # stylizations even if the canonical name was set by a non-Form-D source.
-        company.normalized_name = norm
-        company.hq_city = addr.city
-        company.hq_state = addr.state
-        company.hq_country = addr.country or "US"
-        company.year_incorporated = form_d.year_of_incorporation
-        company.industry_group = form_d.industry_group_type or None
-        session.add(company)
-        return company, False
-
-    # -- Insert new company --
-    slug = await _build_slug(session, form_d.entity_name, cik or None, None)
-    company = Company(
-        cik=cik or None,
-        name=form_d.entity_name,
-        slug=slug,
-        normalized_name=norm,
-        hq_city=addr.city,
-        hq_state=addr.state,
-        hq_country=addr.country or "US",
-        year_incorporated=form_d.year_of_incorporation,
-        industry_group=form_d.industry_group_type or None,
-    )
-    session.add(company)
-    # Flush so company.id is populated before callers reference it.
-    await session.flush()
-    return company, True
-
-
-async def insert_filing_if_new(
-    session: AsyncSession, company_id: UUID, form_d: FormD
-) -> Filing | None:
-    """Insert a Filing row, ignoring duplicates on ``accession_number``.
-
-    Uses ``INSERT … ON CONFLICT (accession_number) DO NOTHING RETURNING id``
-    so the insert is truly idempotent: a second call with the same accession
-    number returns ``None`` without raising.
-
-    Returns:
-        The newly-created ``Filing`` on first insert, or ``None`` if the row
-        already existed.
-    """
-    stmt = (
-        pg_insert(Filing)
-        .values(
-            company_id=company_id,
-            accession_number=form_d.accession_number,
-            filing_date=form_d.filing_date,
-            offering_amount_total=form_d.total_offering_amount,
-            amount_sold=form_d.total_amount_sold,
-            investors_count=form_d.total_number_already_invested,
-            minimum_investment=form_d.minimum_investment_accepted,
-            raw_data=form_d.model_dump(mode="json"),
-        )
-        .on_conflict_do_nothing(index_elements=["accession_number"])
-        .returning(Filing.id)
-    )
-    result = await session.execute(stmt)
-    row = result.fetchone()
-    if row is None:
-        # Conflict — row already exists, nothing inserted.
-        return None
-
-    filing_id: UUID = row[0]
-    # Re-fetch the ORM object so callers can access all columns.
-    fetched = await session.get(Filing, filing_id)
-    # get() returns None only if the row somehow doesn't exist — that would be
-    # a logic bug, not a user error, so a hard assert is appropriate.
-    assert fetched is not None, f"Filing {filing_id} missing after insert"
-    return fetched
 
 
 async def upsert_raw_page(
@@ -243,41 +98,6 @@ async def upsert_raw_page(
     fetched = await session.get(RawPage, raw_page_id, populate_existing=True)
     assert fetched is not None, f"RawPage {raw_page_id} missing after upsert"
     return fetched
-
-
-async def replace_related_persons(
-    session: AsyncSession,
-    company_id: UUID,
-    filing_id: UUID,
-    persons: list[FormDRelatedPerson],
-) -> int:
-    """Delete existing RelatedPerson rows for *filing_id*, then re-insert.
-
-    Idempotent: calling with the same *persons* list twice yields the same
-    final DB state.  Scoped to ``filing_id`` so multiple filings for the same
-    company don't interfere with each other.
-
-    Returns:
-        Number of rows inserted.
-    """
-    await session.execute(
-        delete(RelatedPerson).where(RelatedPerson.filing_id == filing_id)
-    )
-    if not persons:
-        return 0
-
-    rows = [
-        RelatedPerson(
-            company_id=company_id,
-            filing_id=filing_id,
-            name=p.name,
-            relationship=p.relationship,
-            address=p.address.model_dump() if p.address is not None else None,
-        )
-        for p in persons
-    ]
-    session.add_all(rows)
-    return len(rows)
 
 
 # ---------------------------------------------------------------------------
@@ -360,10 +180,9 @@ async def auto_create_company(
       wins (Open Question §6 in the M3 plan).
 
     Behavior on insert:
-    - cik is NULL (non-Form-D rows don't have a CIK)
-    - hq_country defaults to "US" (consistent with the M1 Form D path)
-    - slug is built via the same _build_slug helper used by upsert_company,
-      with disambiguation via the os.urandom branch since cik is None
+    - hq_country defaults to "US"
+    - slug is built via _build_slug, with disambiguation via a random suffix
+      when the base slug is already taken
     - description_short stays NULL — M2's enrich-companies stage will fill
       it from the scraped homepage, which is more authoritative than any
       VC-portfolio one-liner.
@@ -381,9 +200,8 @@ async def auto_create_company(
         return existing, False
 
     norm = normalize_name(name)
-    slug = await _build_slug(session, name, None, None)
+    slug = await _build_slug(session, name, None)
     company = Company(
-        cik=None,
         name=name,
         slug=slug,
         normalized_name=norm,

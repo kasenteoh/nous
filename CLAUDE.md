@@ -1,6 +1,6 @@
 # nous
 
-US software startup discovery site. Aggregates SEC Form D filings, scrapes public sources, uses LLM enrichment to produce readable company pages. Full design lives in `nous-technical-spec.md` at the repo root; read it on demand rather than importing it here.
+US software startup discovery site. Discovers companies from VC portfolio pages and funding news, scrapes public sources, uses LLM enrichment to produce readable company pages. Full design lives in `nous-technical-spec.md` at the repo root; read it on demand rather than importing it here.
 
 ## Your role
 
@@ -74,7 +74,7 @@ Before considering any task complete: run `ruff check`, `mypy src`, and `pytest`
 
 ## Non-negotiable rules
 
-- SEC EDGAR requests must include a `User-Agent` header with a contact email. SEC blocks anonymous traffic.
+- Every outbound scrape must send a `User-Agent` header with a contact email (the `SEC_USER_AGENT` setting). Many sites block anonymous traffic, and it is basic scraping etiquette.
 - Respect `robots.txt` on every external site scraped. Throttle to 1 request per second per domain.
 - Every fact rendered on a company page must have a source recorded in the database. No unattributed numbers.
 - Stay on free tiers. If a change would incur cost, flag it before implementing.

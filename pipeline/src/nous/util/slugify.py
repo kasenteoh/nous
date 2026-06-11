@@ -95,15 +95,17 @@ def normalize_name(name: str) -> str:
     return re.sub(r"[^a-z0-9]+", "", cleaned)
 
 
-def slug_with_disambiguator(base: str, cik: str | None) -> str:
-    """Append a stable 6-hex-char suffix to a base slug to resolve collisions.
+def slug_with_disambiguator(base: str, seed: str | None = None) -> str:
+    """Append a 6-hex-char suffix to a base slug to resolve collisions.
 
-    If *cik* is provided, the suffix is the first 6 hex chars of sha256(cik),
-    making it deterministic for the same company.  If *cik* is None or empty,
-    a random 3-byte value is used (non-deterministic, acceptable for rare edge
-    cases where CIK is absent).
+    If *seed* is provided, the suffix is the first 6 hex chars of sha256(seed),
+    making it deterministic for the same seed.  If *seed* is None or empty, a
+    random 3-byte value is used (non-deterministic), which is the common case
+    now that companies no longer carry a stable external identifier.
 
     Example: "acme" → "acme-a3f9c2"
     """
-    suffix = hashlib.sha256(cik.encode()).hexdigest()[:6] if cik else os.urandom(3).hex()
+    suffix = (
+        hashlib.sha256(seed.encode()).hexdigest()[:6] if seed else os.urandom(3).hex()
+    )
     return f"{base}-{suffix}"
