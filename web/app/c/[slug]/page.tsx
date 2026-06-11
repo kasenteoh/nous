@@ -4,7 +4,7 @@ export const revalidate = 21600;
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { getCompanyBySlug } from "@/lib/queries";
-import { formatLocation, formatUsd } from "@/lib/format";
+import { formatEmployeeRange, formatLocation, formatUsd } from "@/lib/format";
 import { Markdown } from "@/components/Markdown";
 import { Team } from "@/components/Team";
 import { FundingHistory } from "@/components/FundingHistory";
@@ -142,6 +142,27 @@ export default async function CompanyPage({ params }: Props) {
             <div>
               <dt className="sr-only">Industry</dt>
               <dd>{company.industry_group}</dd>
+            </div>
+          )}
+          {/* Employee estimate (M5). Gated on a non-null min so it renders
+              nothing until the estimate-employees stage populates the fields;
+              source is attributed in the title per spec §11. */}
+          {company.employee_count_min != null && (
+            <div>
+              <dt className="sr-only">Employees</dt>
+              <dd
+                title={
+                  company.employee_count_source
+                    ? `Source: ${company.employee_count_source}`
+                    : undefined
+                }
+              >
+                {formatEmployeeRange(
+                  company.employee_count_min,
+                  company.employee_count_max,
+                )}{" "}
+                employees
+              </dd>
             </div>
           )}
         </dl>

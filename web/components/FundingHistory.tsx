@@ -72,6 +72,14 @@ export function FundingHistory({ rounds }: Props) {
                     </td>
                     <td className="py-3 pr-6 text-zinc-700 dark:text-zinc-300">
                       {round.round_type ?? EM_DASH}
+                      {round.extraction_confidence === "low" && (
+                        <span
+                          className="ml-2 inline-block rounded bg-amber-50 text-amber-700 dark:bg-amber-950 dark:text-amber-400 px-1.5 py-0.5 text-xs align-middle"
+                          title="Extracted with low confidence — treat as unverified"
+                        >
+                          low confidence
+                        </span>
+                      )}
                     </td>
                     <td className="py-3 pr-6 text-right text-zinc-700 dark:text-zinc-300">
                       {round.amount_raised != null
