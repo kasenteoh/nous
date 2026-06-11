@@ -70,27 +70,23 @@ export function Investors({ investors, rounds }: Props) {
 
   return (
     <section className="mb-12">
-      <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-100 mb-4">
-        Investors
-      </h2>
+      <h2 className="text-lg font-semibold text-ink mb-4">Investors</h2>
 
       {merged.length === 0 ? (
-        <p className="text-sm text-zinc-500 dark:text-zinc-400">
-          No investors recorded yet.
-        </p>
+        <p className="text-sm text-ink-muted">No investors recorded yet.</p>
       ) : (
         <ul className="flex flex-wrap gap-2">
           {merged.map((inv) => (
             <li
               key={inv.name.toLowerCase()}
-              className="inline-flex items-center gap-1.5 rounded-full border border-zinc-200 dark:border-zinc-800 px-3 py-1 text-sm text-zinc-700 dark:text-zinc-300"
+              className="inline-flex items-center gap-1.5 rounded-full border border-edge px-3 py-1 text-sm text-ink-soft"
             >
               {inv.website ? (
                 <a
                   href={inv.website}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="hover:text-zinc-900 dark:hover:text-zinc-100 underline underline-offset-2 decoration-zinc-300 dark:decoration-zinc-600"
+                  className="hover:text-ink underline underline-offset-2 decoration-ink-faint"
                 >
                   {inv.name}
                 </a>
@@ -98,7 +94,7 @@ export function Investors({ investors, rounds }: Props) {
                 <span>{inv.name}</span>
               )}
               {inv.isLead && (
-                <span className="text-xs uppercase tracking-wider text-zinc-400 dark:text-zinc-500">
+                <span className="text-xs uppercase tracking-wider text-ink-muted">
                   lead
                 </span>
               )}
