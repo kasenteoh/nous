@@ -14,6 +14,7 @@ from datetime import UTC, datetime, timedelta
 from pydantic import BaseModel
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm.exc import StaleDataError
 
 from nous.db.models import Company
 from nous.sources.homepage import HomepageClient, resolve_homepage
@@ -97,6 +98,19 @@ async def run_resolve_homepages(
 
         company.website_resolved_at = now
         session.add(company)
-        await session.commit()
+        try:
+            await session.commit()
+        except StaleDataError:
+            # The row was deleted out from under us mid-run — almost always a
+            # concurrent dedup-companies merge folding this company into another.
+            # Nothing to resolve; roll back and move on instead of crashing.
+            await session.rollback()
+            logger.warning(
+                "Company %s disappeared mid-resolve (likely a concurrent merge)"
+                " — skipping.",
+                company.id,
+            )
+            summary.errors += 1
+            continue
 
     return summary
