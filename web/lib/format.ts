@@ -46,6 +46,25 @@ export function formatDate(iso: string | null | undefined): string {
 }
 
 /**
+ * Format an employee-count range for display.
+ * - min & max → "11–50" (or "42" when equal)
+ * - min only  → "11+"
+ * - max only  → "≤50"
+ * - neither   → "—"
+ */
+export function formatEmployeeRange(
+  min: number | null | undefined,
+  max: number | null | undefined,
+): string {
+  if (min != null && max != null) {
+    return min === max ? `${min}` : `${min}–${max}`;
+  }
+  if (min != null) return `${min}+`;
+  if (max != null) return `≤${max}`;
+  return "—";
+}
+
+/**
  * Format a city + state pair for display.
  * Returns "—" when both are absent.
  * Examples: ("San Francisco", "CA") → "San Francisco, CA"
