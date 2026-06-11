@@ -52,17 +52,46 @@ type CompanyInvestorJoin = {
   investors: NestedInvestorFull | NestedInvestorFull[] | null;
 };
 
-/**
- * Return a paginated list of companies, ordered by name.
- *
- * Intentionally simple for the current page sizes. A Postgres view or RPC
- * would be cleaner at scale, but YAGNI until we have meaningful traffic.
- */
-export async function listCompanies(opts: {
+/** Sort options exposed by the index page. */
+export type CompanyListSort = "name_asc" | "name_desc" | "recent";
+
+/** Filters + paging accepted by {@link listCompanies}. */
+export interface CompanyListOptions {
+  search?: string;
+  industry_group?: string;
+  discovered_via?: string;
+  sort?: CompanyListSort;
   limit?: number;
   offset?: number;
-}): Promise<CompanyListRow[]> {
-  const limit = opts.limit ?? 50;
+}
+
+/** Paged result: the current page of rows plus the total matching the filters. */
+export interface CompanyListResult {
+  rows: CompanyListRow[];
+  total: number;
+}
+
+/**
+ * Strip characters that have meaning in the PostgREST filter grammar so a
+ * user-supplied search term can't break out of the `.or()` / `.ilike()`
+ * expression (commas separate `.or()` clauses; `%`/`*` are wildcards).
+ */
+function sanitizeIlikeTerm(term: string): string {
+  return term.replace(/[,()%*\\]/g, " ").replace(/\s+/g, " ").trim();
+}
+
+/**
+ * Return a filtered, sorted, paginated page of companies plus the total count
+ * matching the filters (for pagination). Search matches `name` or
+ * `description_short` (case-insensitive substring). Backed by the GIN trigram
+ * index on `normalized_name` for the name side; `ilike` is adequate at current
+ * scale. Funding-based sort would need a cross-table aggregate (Postgres view /
+ * RPC) and is intentionally out of scope here.
+ */
+export async function listCompanies(
+  opts: CompanyListOptions,
+): Promise<CompanyListResult> {
+  const limit = opts.limit ?? 30;
   const offset = opts.offset ?? 0;
 
   let supabase: ReturnType<typeof createSupabaseServerClient>;
@@ -71,22 +100,53 @@ export async function listCompanies(opts: {
   } catch (err) {
     // Missing env vars — expected during build-time prerender or local dev without .env.local.
     console.warn("[listCompanies] Supabase not configured:", (err as Error).message);
-    return [];
+    return { rows: [], total: 0 };
   }
 
-  const { data: companies, error } = await supabase
+  // `count: "exact"` makes PostgREST return the total matching the filters
+  // (ignoring `.range()`), so we get rows + total in a single round trip.
+  let query = supabase
     .from("companies")
-    .select("slug, name, hq_city, hq_state, industry_group, description_short")
-    .order("name", { ascending: true })
-    .range(offset, offset + limit - 1);
+    .select(
+      "slug, name, hq_city, hq_state, industry_group, description_short",
+      { count: "exact" },
+    );
+
+  const search = opts.search ? sanitizeIlikeTerm(opts.search) : "";
+  if (search) {
+    query = query.or(
+      `name.ilike.%${search}%,description_short.ilike.%${search}%`,
+    );
+  }
+  if (opts.industry_group) {
+    query = query.eq("industry_group", opts.industry_group);
+  }
+  if (opts.discovered_via) {
+    query = query.eq("discovered_via", opts.discovered_via);
+  }
+
+  switch (opts.sort) {
+    case "name_desc":
+      query = query.order("name", { ascending: false });
+      break;
+    case "recent":
+      query = query.order("created_at", { ascending: false });
+      break;
+    default:
+      query = query.order("name", { ascending: true });
+  }
+
+  const { data: companies, error, count } = await query.range(
+    offset,
+    offset + limit - 1,
+  );
 
   if (error) {
     console.error("[listCompanies] companies query failed:", error.message);
-    return [];
+    return { rows: [], total: 0 };
   }
-  if (!companies || companies.length === 0) return [];
 
-  return companies.map((c) => ({
+  const rows = (companies ?? []).map((c) => ({
     slug: c.slug as string,
     name: c.name as string,
     hq_city: (c.hq_city as string | null) ?? null,
@@ -94,6 +154,42 @@ export async function listCompanies(opts: {
     industry_group: (c.industry_group as string | null) ?? null,
     description_short: (c.description_short as string | null) ?? null,
   }));
+
+  return { rows, total: count ?? rows.length };
+}
+
+/**
+ * Distinct, non-null `industry_group` values for the index filter dropdown.
+ * Deduped client-side; the catalog is small enough that this is cheaper than a
+ * dedicated RPC. `discovered_via` is a small fixed enum, so the page hardcodes
+ * those options rather than querying for them.
+ */
+export async function listIndustryGroups(): Promise<string[]> {
+  let supabase: ReturnType<typeof createSupabaseServerClient>;
+  try {
+    supabase = createSupabaseServerClient();
+  } catch (err) {
+    console.warn("[listIndustryGroups] Supabase not configured:", (err as Error).message);
+    return [];
+  }
+
+  const { data, error } = await supabase
+    .from("companies")
+    .select("industry_group")
+    .not("industry_group", "is", null)
+    .limit(5000);
+
+  if (error) {
+    console.error("[listIndustryGroups] query failed:", error.message);
+    return [];
+  }
+
+  const seen = new Set<string>();
+  for (const row of data ?? []) {
+    const value = row.industry_group as string | null;
+    if (value) seen.add(value);
+  }
+  return [...seen].sort((a, b) => a.localeCompare(b));
 }
 
 /**
