@@ -6,10 +6,6 @@ def cli() -> None:
     """nous pipeline CLI."""
 
 
-def _stub(stage: str) -> None:
-    click.echo(f"{stage} not yet implemented")
-
-
 @cli.command("resolve-homepages")
 @click.option(
     "--limit",
@@ -436,8 +432,60 @@ def cleanup_form_d(dry_run: bool) -> None:
 
 
 @cli.command("estimate-employees")
-def estimate_employees() -> None:
-    _stub("estimate-employees")
+@click.option(
+    "--limit",
+    type=int,
+    default=None,
+    help="Maximum number of companies to process (for testing / partial runs).",
+)
+@click.option(
+    "--refetch-after-days",
+    type=int,
+    default=None,
+    help=(
+        "Re-estimate companies last checked more than N days ago. "
+        "Default: the EMPLOYEE_REFETCH_DAYS setting (90)."
+    ),
+)
+def estimate_employees(limit: int | None, refetch_after_days: int | None) -> None:
+    """Estimate employee headcount from public sources.
+
+    Sources are tried in priority order (Wellfound, The Org, GrowJo, careers-page
+    job count, GitHub org); the first non-null result wins and its source is
+    recorded for attribution.
+    """
+    import asyncio
+
+    from nous.config import Settings
+    from nous.db.session import AsyncSessionLocal
+    from nous.pipeline.estimate_employees import run_estimate_employees
+    from nous.sources.homepage import HomepageClient
+
+    settings = Settings()
+    effective_refetch = (
+        refetch_after_days
+        if refetch_after_days is not None
+        else settings.EMPLOYEE_REFETCH_DAYS
+    )
+
+    async def _run() -> None:
+        async with (
+            HomepageClient(
+                settings.SEC_USER_AGENT,
+                requests_per_second_per_domain=1.0,
+            ) as homepage_client,
+            AsyncSessionLocal() as session,
+        ):
+            summary = await run_estimate_employees(
+                session,
+                homepage_client,
+                settings.GITHUB_TOKEN,
+                refetch_after_days=effective_refetch,
+                limit=limit,
+            )
+            click.echo(summary.model_dump_json(indent=2))
+
+    asyncio.run(_run())
 
 
 def main() -> None:

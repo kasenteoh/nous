@@ -34,3 +34,17 @@ class Settings(BaseSettings):
     # positives. Open Question §5 in the M3 plan flags this for revisit after
     # the first monthly refresh produces real near-miss data.
     COMPANY_FUZZY_MATCH_THRESHOLD: float = 0.85
+
+    # ---------------------------------------------------------------------------
+    # M5: employee estimation
+    # ---------------------------------------------------------------------------
+
+    # GitHub REST API token for the github-org employee-count signal. In CI this
+    # is the built-in ``secrets.GITHUB_TOKEN`` (nothing to provision); locally
+    # it's optional — an empty token just skips the GitHub source.
+    GITHUB_TOKEN: str = ""
+
+    # estimate-employees re-checks a company at most once per this many days
+    # (rows whose employee_count_checked_at is more recent are skipped). The CLI
+    # --refetch-after-days flag overrides this per run.
+    EMPLOYEE_REFETCH_DAYS: int = 90
