@@ -15,7 +15,7 @@ import httpx
 import pytest
 
 from nous.sources.homepage import HomepageClient
-from nous.sources.vc_portfolios import ADAPTERS, PortfolioEntry
+from nous.sources.vc_portfolios import ADAPTERS, FIRM_DISPLAY_NAMES, PortfolioEntry
 
 FIXTURES = Path(__file__).parent / "fixtures" / "vc_portfolios"
 USER_AGENT = "nous-test test@example.com"
@@ -158,6 +158,11 @@ async def test_yc_adapter_drops_pre_seed_and_keeps_other_stages() -> None:
         ("lightspeed", "lightspeed.html", "Anthropic", 50),
         ("founders_fund", "founders_fund.html", "Palantir", 50),
         ("greylock", "greylock.html", "Anthropic", 50),
+        # M5 additions — single-fetch HTML adapters.
+        ("bessemer", "bessemer.html", "Shopify", 50),
+        ("index_ventures", "index_ventures.html", "Figma", 50),
+        ("accel", "accel.html", "Atlassian", 50),
+        ("general_catalyst", "general_catalyst.html", "Stripe", 50),
     ],
 )
 @pytest.mark.asyncio
@@ -285,13 +290,89 @@ async def test_lightspeed_yields_no_websites() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Felicis — Sanity docs embedded in the Next.js RSC flight payload. The
+# excerpt -> description extraction is what distinguishes this adapter.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_felicis_parses_rsc_payload_with_descriptions() -> None:
+    adapter = ADAPTERS["felicis"]
+    routes = _html_routes(adapter.PORTFOLIO_URL, FIXTURES / "felicis.html")  # type: ignore[attr-defined]
+    async with HomepageClient(user_agent=USER_AGENT) as client:
+        _inject_transport(client, _MockTransport(routes))
+        entries = await adapter.fetch(client)
+
+    assert len(entries) > 50, f"Felicis adapter parsed only {len(entries)} entries"
+    names = [e.name for e in entries]
+    assert "Canva" in names, f"Felicis anchor 'Canva' missing; first 10: {names[:10]!r}"
+    # The excerpt field gives most companies a one-line description — the payoff
+    # of parsing the RSC payload rather than the (company-less) static DOM.
+    assert sum(1 for e in entries if e.description) > 50, (
+        "Felicis adapter should surface excerpts as descriptions"
+    )
+    for entry in entries:
+        assert entry.firm == "felicis"
+        assert entry.source_url == adapter.PORTFOLIO_URL  # type: ignore[attr-defined]
+        assert isinstance(entry, PortfolioEntry)
+
+
+# ---------------------------------------------------------------------------
+# Kleiner Perkins — the partnerships page is JS-rendered, so we enumerate the
+# WordPress company-sitemap.xml and derive names from the /company/<slug> URLs.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_kleiner_perkins_enumerates_company_sitemap() -> None:
+    adapter = ADAPTERS["kleiner_perkins"]
+    routes = [
+        _Route("kleinerperkins.com/robots.txt", b"", status=404),
+        _Route(
+            "company-sitemap.xml",
+            (FIXTURES / "kleiner_perkins_sitemap.xml").read_bytes(),
+            content_type="application/xml",
+        ),
+    ]
+    async with HomepageClient(user_agent=USER_AGENT) as client:
+        _inject_transport(client, _MockTransport(routes))
+        entries = await adapter.fetch(client)
+
+    assert len(entries) > 50, f"Kleiner adapter enumerated only {len(entries)} entries"
+    names = [e.name for e in entries]
+    # "plex" slug -> "Plex" (title-cased from the sitemap URL).
+    assert "Plex" in names, f"Kleiner anchor 'Plex' missing; first 10: {names[:10]!r}"
+    assert len(set(names)) == len(names), "Kleiner adapter must dedup by name"
+    for entry in entries:
+        assert entry.firm == "kleiner_perkins"
+        assert entry.website is None  # sitemap exposes no homepage URL
+        assert entry.source_url == adapter.PORTFOLIO_URL  # type: ignore[attr-defined]
+        assert isinstance(entry, PortfolioEntry)
+
+
+# ---------------------------------------------------------------------------
 # Registry shape
 # ---------------------------------------------------------------------------
 
 
-def test_adapter_registry_has_all_seven_firms() -> None:
-    expected = {"yc", "a16z", "sequoia", "lightspeed", "founders_fund", "greylock", "khosla"}
+def test_adapter_registry_has_all_firms() -> None:
+    expected = {
+        "yc",
+        "a16z",
+        "sequoia",
+        "lightspeed",
+        "founders_fund",
+        "greylock",
+        "khosla",
+        "bessemer",
+        "index_ventures",
+        "accel",
+        "felicis",
+        "kleiner_perkins",
+        "general_catalyst",
+    }
     assert set(ADAPTERS.keys()) == expected
+    assert set(FIRM_DISPLAY_NAMES.keys()) == expected
     for firm, adapter in ADAPTERS.items():
         assert adapter.firm == firm
 
