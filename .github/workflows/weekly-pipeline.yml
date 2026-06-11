@@ -131,6 +131,15 @@ jobs:
         run: uv run nous extract-funding --limit 1000
         continue-on-error: true
 
+      - name: Extract funding (website fallback)
+        if: ${{ inputs.skip_funding != true }}
+        # Gap-fill only: runs for companies that still have no funding rounds
+        # after the TechCrunch/news pass above, so TechCrunch stays primary.
+        run: uv run nous extract-funding-website
+        continue-on-error: true
+
+      # Volatile vs. stable: funding (above) + competitors (monthly cron) refresh
+      # on a cadence; description + people are written once by enrich-companies.
       # Note: Vercel deploy-hook POST is deferred to M6 per spec §9.
       # Note: refresh-vc-portfolios runs on its own monthly cron (see
       # monthly-vc-refresh.yml) — VC sites change slowly enough that monthly

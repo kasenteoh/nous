@@ -10,6 +10,17 @@ from __future__ import annotations
 from pydantic import BaseModel, Field
 
 
+class PersonExtraction(BaseModel):
+    name: str = Field(..., description="Full name of the person.")
+    role: str = Field(
+        ...,
+        description=(
+            "Their role/title at the company, e.g. 'CEO', 'CTO', 'Founder', "
+            "'Co-founder & CEO'. Use the title as stated on the site."
+        ),
+    )
+
+
 class CompanyDescription(BaseModel):
     description_short: str = Field(
         ...,
@@ -31,6 +42,13 @@ class CompanyDescription(BaseModel):
         default_factory=list,
         description="Lowercase, hyphenated tags (max ~8).",
     )
+    people: list[PersonExtraction] = Field(
+        default_factory=list,
+        description=(
+            "Founders and senior leadership (CEO, CTO, and other C-level/"
+            "founder roles) named on the site. Empty list if none are stated."
+        ),
+    )
 
 
 PROMPT_TEMPLATE = """\
@@ -50,6 +68,10 @@ Rules:
   "fintech", "AI infrastructure", "vertical SaaS", "consumer", "biotech tooling".
   Don't invent obscure categories.
 - `tags`: up to 8 lowercase, hyphenated technical/category tags.
+- `people`: list the founders and senior leadership (CEO, CTO, and other
+  C-level or founder roles) that the site actually names — typically from an
+  about/team/leadership page. Use the role exactly as stated. Return an EMPTY
+  list if the site does not clearly name them. Do NOT guess or fabricate names.
 
 Company name: {company_name}
 

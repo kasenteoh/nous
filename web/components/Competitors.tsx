@@ -46,6 +46,28 @@ export function Competitors({ competitors }: Props) {
               </span>
             </header>
 
+            {/* Provenance badge: TechCrunch-grounded vs LLM-inferred ("potential"). */}
+            {c.source === "techcrunch" ? (
+              c.source_url ? (
+                <a
+                  href={c.source_url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="mt-2 inline-block rounded bg-emerald-50 dark:bg-emerald-900/30 px-2 py-0.5 text-xs text-emerald-700 dark:text-emerald-300 hover:underline underline-offset-2"
+                >
+                  via TechCrunch
+                </a>
+              ) : (
+                <span className="mt-2 inline-block rounded bg-emerald-50 dark:bg-emerald-900/30 px-2 py-0.5 text-xs text-emerald-700 dark:text-emerald-300">
+                  via TechCrunch
+                </span>
+              )
+            ) : (
+              <span className="mt-2 inline-block rounded bg-zinc-100 dark:bg-zinc-800 px-2 py-0.5 text-xs text-zinc-500 dark:text-zinc-400">
+                Potential competitor (AI-inferred)
+              </span>
+            )}
+
             {c.description && (
               <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-300 leading-snug">
                 {c.description}

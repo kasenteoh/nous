@@ -9,6 +9,7 @@ from pydantic import ValidationError
 
 from nous.llm.prompts.company_description import (
     CompanyDescription,
+    PersonExtraction,
     build_prompt,
 )
 
@@ -63,6 +64,34 @@ def test_company_description_tags_default_empty() -> None:
     }
     obj = CompanyDescription.model_validate_json(json.dumps(payload))
     assert obj.tags == []
+
+
+def test_build_prompt_asks_for_people() -> None:
+    """The prompt instructs the model to extract leadership/founders."""
+    prompt = build_prompt(company_name="Acme", cleaned_text="we build X")
+    assert "people" in prompt
+    assert "CEO" in prompt
+
+
+def test_company_description_people_default_empty() -> None:
+    """people has a default of [] so a site that names no leaders is fine."""
+    obj = CompanyDescription.model_validate_json(json.dumps(VALID_PAYLOAD))
+    assert obj.people == []
+
+
+def test_company_description_parses_people() -> None:
+    payload = {
+        **VALID_PAYLOAD,
+        "people": [
+            {"name": "Ada Lovelace", "role": "CEO"},
+            {"name": "Alan Turing", "role": "CTO"},
+        ],
+    }
+    obj = CompanyDescription.model_validate_json(json.dumps(payload))
+    assert obj.people == [
+        PersonExtraction(name="Ada Lovelace", role="CEO"),
+        PersonExtraction(name="Alan Turing", role="CTO"),
+    ]
 
 
 def test_company_description_rejects_missing_description_short() -> None:

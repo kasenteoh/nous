@@ -6,6 +6,7 @@ import { notFound } from "next/navigation";
 import { getCompanyBySlug } from "@/lib/queries";
 import { formatDate, formatLocation, formatUsd } from "@/lib/format";
 import { Markdown } from "@/components/Markdown";
+import { Team } from "@/components/Team";
 import { FundingHistory } from "@/components/FundingHistory";
 import { Competitors } from "@/components/Competitors";
 
@@ -72,7 +73,7 @@ export default async function CompanyPage({ params }: Props) {
     notFound();
   }
 
-  const { company, fundingRounds, competitors } = detail;
+  const { company, people, fundingRounds, competitors } = detail;
 
   // ── M3 key-facts derivations ──────────────────────────────────────────────
   // totalRaised = sum of non-null amount_raised across all funding rounds.
@@ -224,6 +225,9 @@ export default async function CompanyPage({ params }: Props) {
           )}
         </section>
       )}
+
+      {/* ── Leadership / founders (from the company website) ───────────── */}
+      <Team people={people} companyName={company.name} />
 
       {/* ── Funding history (M3) ───────────────────────────────────────── */}
       <FundingHistory rounds={fundingRounds} />

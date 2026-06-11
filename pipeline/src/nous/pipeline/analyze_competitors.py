@@ -28,7 +28,7 @@ from pydantic import BaseModel
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from nous.db.models import Company, Competitor
+from nous.db.models import Company, Competitor, NewsArticle
 from nous.llm.client import LLMError, LLMParseError, LLMRateLimitError, complete_json
 from nous.llm.prompts.competitor_analysis import (
     MAX_PEERS,
@@ -37,9 +37,18 @@ from nous.llm.prompts.competitor_analysis import (
     Target,
     build_prompt,
 )
+from nous.llm.prompts.competitor_candidates import (
+    MAX_ARTICLES,
+    CompetitorCandidates,
+    TechCrunchArticle,
+    build_candidates_prompt,
+)
 from nous.util.slugify import normalize_name
 
 logger = logging.getLogger(__name__)
+
+_TECHCRUNCH_SOURCE = "techcrunch"
+_LLM_SOURCE = "llm_inferred"
 
 
 class AnalyzeCompetitorsSummary(BaseModel):
@@ -47,6 +56,8 @@ class AnalyzeCompetitorsSummary(BaseModel):
     competitors_written: int = 0
     competitors_linked: int = 0
     competitors_unlinked: int = 0
+    competitors_from_techcrunch: int = 0
+    competitors_from_llm: int = 0
     llm_failures: int = 0
     skipped_rate_limited: int = 0
 
@@ -127,6 +138,37 @@ async def fetch_peers(
 
 
 # ---------------------------------------------------------------------------
+# TechCrunch evidence (pass 1 input)
+# ---------------------------------------------------------------------------
+
+
+async def fetch_techcrunch_articles(
+    session: AsyncSession, *, company_id: UUID, max_articles: int = MAX_ARTICLES
+) -> list[TechCrunchArticle]:
+    """Return the company's most-recent TechCrunch articles (newest first).
+
+    Matches on the news_articles.source hostname so any techcrunch.com article
+    qualifies as competitor evidence for pass 1.
+    """
+    stmt = (
+        select(NewsArticle.url, NewsArticle.raw_content)
+        .where(NewsArticle.company_id == company_id)
+        .where(NewsArticle.source.ilike("%techcrunch%"))
+        .order_by(
+            NewsArticle.published_date.desc().nulls_last(),
+            NewsArticle.created_at.desc(),
+        )
+        .limit(max_articles)
+    )
+    rows = (await session.execute(stmt)).all()
+    return [
+        TechCrunchArticle(url=row.url, text=row.raw_content or "")
+        for row in rows
+        if (row.raw_content or "").strip()
+    ]
+
+
+# ---------------------------------------------------------------------------
 # Resolution
 # ---------------------------------------------------------------------------
 
@@ -169,6 +211,43 @@ async def run_analyze_competitors(
     )
 
     for company in companies:
+        # --- Pass 1: pull competitor candidates from the company's TC coverage.
+        # candidate_map: normalized competitor name -> source TechCrunch URL.
+        tc_articles = await fetch_techcrunch_articles(session, company_id=company.id)
+        candidate_map: dict[str, str] = {}
+        candidate_names: list[str] = []
+        if tc_articles:
+            cand_prompt = build_candidates_prompt(
+                target_name=company.name, articles=tc_articles
+            )
+            try:
+                cand_result: CompetitorCandidates = await complete_json(
+                    cand_prompt, CompetitorCandidates
+                )
+            except LLMRateLimitError:
+                logger.warning(
+                    "LLM rate limit hit during competitor-candidate extraction "
+                    "for %s — stopping loop.",
+                    company.name,
+                )
+                summary.skipped_rate_limited += 1
+                break
+            except (LLMParseError, LLMError) as exc:
+                # Degrade gracefully: proceed with LLM-only competitors.
+                logger.warning(
+                    "LLM error extracting TC competitor candidates for %s: %s",
+                    company.name,
+                    exc,
+                )
+                cand_result = CompetitorCandidates()
+            for mention in cand_result.candidates:
+                norm = normalize_name(mention.name)
+                if not norm or norm in candidate_map:
+                    continue
+                candidate_map[norm] = mention.article_url
+                candidate_names.append(mention.name)
+
+        # --- Pass 2: revalidate candidates + combine with LLM-inferred peers.
         peers = await fetch_peers(session, target=company)
         target = Target(
             name=company.name,
@@ -176,7 +255,7 @@ async def run_analyze_competitors(
             description_long=company.description_long or "",
             industry_group=company.industry_group or "",
         )
-        prompt = build_prompt(target=target, peers=peers)
+        prompt = build_prompt(target=target, peers=peers, tc_candidates=candidate_names)
 
         try:
             analysis: CompetitorAnalysis = await complete_json(
@@ -199,13 +278,28 @@ async def run_analyze_competitors(
 
         summary.companies_analyzed += 1
 
-        # Resolve each competitor name to a company_id (None if unmatched).
-        resolved: list[tuple[UUID | None, str, str, str, int]] = []
+        # Resolve each competitor name to a company_id (None if unmatched) and
+        # determine provenance: a competitor whose normalized name came from the
+        # TechCrunch candidates is sourced to that article; everything else the
+        # model added is "llm_inferred" (rendered as a *potential* competitor).
+        resolved: list[tuple[UUID | None, str, str, str, int, str, str | None]] = []
         for c in analysis.competitors:
             cid = await resolve_competitor_company_id(session, name=c.name)
-            resolved.append((cid, c.name, c.description, c.reasoning, c.rank))
+            article_url = candidate_map.get(normalize_name(c.name))
+            if article_url is not None:
+                source, source_url = _TECHCRUNCH_SOURCE, article_url
+            else:
+                source, source_url = _LLM_SOURCE, None
+            resolved.append(
+                (cid, c.name, c.description, c.reasoning, c.rank, source, source_url)
+            )
 
         if dry_run:
+            for *_, source, _su in resolved:
+                if source == _TECHCRUNCH_SOURCE:
+                    summary.competitors_from_techcrunch += 1
+                else:
+                    summary.competitors_from_llm += 1
             continue
 
         # Replace-style write: delete then insert in one transaction. The outer
@@ -216,7 +310,7 @@ async def run_analyze_competitors(
                 delete(Competitor).where(Competitor.company_id == company.id)
             )
             now = datetime.now(UTC)
-            for cid, name, desc, reasoning, rank in resolved:
+            for cid, name, desc, reasoning, rank, source, source_url in resolved:
                 session.add(
                     Competitor(
                         company_id=company.id,
@@ -225,6 +319,8 @@ async def run_analyze_competitors(
                         description=desc,
                         reasoning=reasoning,
                         rank=rank,
+                        source=source,
+                        source_url=source_url,
                         updated_at=now,
                     )
                 )
@@ -233,6 +329,10 @@ async def run_analyze_competitors(
                     summary.competitors_linked += 1
                 else:
                     summary.competitors_unlinked += 1
+                if source == _TECHCRUNCH_SOURCE:
+                    summary.competitors_from_techcrunch += 1
+                else:
+                    summary.competitors_from_llm += 1
         await session.flush()
 
     return summary

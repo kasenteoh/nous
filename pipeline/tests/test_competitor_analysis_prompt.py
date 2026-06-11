@@ -152,6 +152,21 @@ def test_build_prompt_caps_peers_at_max() -> None:
     assert f"Peer{MAX_PEERS}" not in prompt
 
 
+def test_build_prompt_includes_tc_candidates() -> None:
+    prompt = build_prompt(
+        target=_target(), peers=[], tc_candidates=["Globex", "Initech"]
+    )
+    assert "Globex" in prompt
+    assert "Initech" in prompt
+    # The prompt must ask the model to revalidate the TechCrunch candidates.
+    assert "REVALIDATE" in prompt
+
+
+def test_build_prompt_without_candidates_renders_placeholder() -> None:
+    prompt = build_prompt(target=_target(), peers=[])
+    assert "no TechCrunch coverage names any competitors" in prompt
+
+
 def test_build_prompt_forbids_fabrication_language() -> None:
     """Per spec §11 / CLAUDE.md: prompts must instruct null/empty over fabrication."""
     prompt = build_prompt(target=_target(), peers=[])

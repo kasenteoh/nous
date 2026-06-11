@@ -15,8 +15,9 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from nous.db.models import Company, RawPage
-from nous.db.upsert import upsert_raw_page
+from nous.db.models import Company, Person, RawPage
+from nous.db.upsert import replace_people, upsert_raw_page
+from nous.llm.prompts.company_description import PersonExtraction
 
 # ---------------------------------------------------------------------------
 # Skip guard
@@ -105,3 +106,96 @@ async def test_upsert_raw_page_different_urls_are_separate_rows(db: AsyncSession
     )
     rows = result.scalars().all()
     assert len(rows) == 2
+
+
+# ---------------------------------------------------------------------------
+# replace_people
+# ---------------------------------------------------------------------------
+
+
+async def _people_for(db: AsyncSession, company_id: object) -> list[Person]:
+    result = await db.execute(
+        select(Person).where(Person.company_id == company_id).order_by(Person.rank)
+    )
+    return list(result.scalars().all())
+
+
+async def test_replace_people_inserts_ranked_rows(db: AsyncSession) -> None:
+    company = _make_test_company("people-insert")
+    db.add(company)
+    await db.flush()
+
+    n = await replace_people(
+        db,
+        company.id,
+        [
+            PersonExtraction(name="Ada Lovelace", role="CEO"),
+            PersonExtraction(name="Alan Turing", role="CTO"),
+        ],
+        source_url="https://acme.example/",
+    )
+    await db.flush()
+
+    assert n == 2
+    rows = await _people_for(db, company.id)
+    assert [(r.name, r.role, r.rank) for r in rows] == [
+        ("Ada Lovelace", "CEO", 1),
+        ("Alan Turing", "CTO", 2),
+    ]
+    assert all(r.source_url == "https://acme.example/" for r in rows)
+
+
+async def test_replace_people_is_idempotent(db: AsyncSession) -> None:
+    company = _make_test_company("people-idem")
+    db.add(company)
+    await db.flush()
+
+    people = [PersonExtraction(name="Grace Hopper", role="Founder")]
+    await replace_people(db, company.id, people, source_url=None)
+    await db.flush()
+    await replace_people(db, company.id, people, source_url=None)
+    await db.flush()
+
+    rows = await _people_for(db, company.id)
+    assert len(rows) == 1
+    assert rows[0].name == "Grace Hopper"
+
+
+async def test_replace_people_dedups_case_insensitive(db: AsyncSession) -> None:
+    company = _make_test_company("people-dedup")
+    db.add(company)
+    await db.flush()
+
+    n = await replace_people(
+        db,
+        company.id,
+        [
+            PersonExtraction(name="Ada Lovelace", role="CEO"),
+            PersonExtraction(name="ada lovelace", role="Co-founder"),
+        ],
+        source_url=None,
+    )
+    await db.flush()
+
+    assert n == 1  # second is a case-insensitive duplicate
+    rows = await _people_for(db, company.id)
+    assert len(rows) == 1
+    assert rows[0].name == "Ada Lovelace"  # first-seen casing wins
+
+
+async def test_replace_people_empty_clears(db: AsyncSession) -> None:
+    company = _make_test_company("people-clear")
+    db.add(company)
+    await db.flush()
+
+    await replace_people(
+        db, company.id, [PersonExtraction(name="X", role="CEO")], source_url=None
+    )
+    await db.flush()
+
+    n = await replace_people(db, company.id, [], source_url=None)
+    await db.flush()
+
+    assert n == 0
+    rows = await _people_for(db, company.id)
+    assert rows == []

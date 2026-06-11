@@ -132,3 +132,44 @@ def build_prompt(*, company_name: str, article_text: str) -> str:
         company_name=company_name,
         article_text=article_text[:MAX_ARTICLE_CHARS],
     )
+
+
+WEBSITE_PROMPT_TEMPLATE = """\
+You are extracting funding-round data from a company's OWN public website
+(homepage + about/press pages), not a news article. This is a fallback source,
+so be conservative.
+
+Company name: {company_name}
+
+Return JSON matching the schema. Rules:
+- Only report a round the site EXPLICITLY states (e.g. a press/news blurb like
+  "we raised our $20M Series B"). If the site does not clearly state funding,
+  set is_funding_announcement=false and leave the other fields null/empty.
+- Do not invent numbers. If the round size or valuation is not stated, return null.
+- amount_raised_usd is in raw USD (e.g. 50000000 for "$50M").
+- If MULTIPLE funding events or dates appear on the page, report only the MOST
+  RECENT one — use the latest date you can find as announced_date.
+- valuation_source: set to "Company website" followed by the latest relevant
+  date if one is shown (e.g. "Company website, March 2026"). Never invent a
+  third-party publication.
+- confidence: at most 'medium' for website-sourced data; 'low' when the figure
+  is only implied. A company's own site is less authoritative than news coverage.
+
+Website text (may be truncated):
+---
+{page_text}
+---
+"""
+
+
+def build_website_prompt(*, company_name: str, page_text: str) -> str:
+    """Render the website-fallback funding prompt.
+
+    Reuses the FundingExtraction schema but tells the model this is the
+    company's own site (lower authority) and to prefer the latest date on the
+    page. `page_text` is truncated to MAX_ARTICLE_CHARS to bound prompt cost.
+    """
+    return WEBSITE_PROMPT_TEMPLATE.format(
+        company_name=company_name,
+        page_text=page_text[:MAX_ARTICLE_CHARS],
+    )

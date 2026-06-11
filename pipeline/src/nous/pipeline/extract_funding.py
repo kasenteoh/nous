@@ -23,29 +23,94 @@ Quota discipline (spec §11):
 from __future__ import annotations
 
 import logging
+from uuid import UUID
 
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import exists, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from nous.db.models import Company, NewsArticle
+from nous.db.models import Company, FundingRound, NewsArticle, RawPage
 from nous.db.upsert import (
     link_round_investor,
     reconcile_funding_round,
     upsert_investor,
 )
 from nous.llm.client import LLMError, LLMParseError, LLMRateLimitError, complete_json
-from nous.llm.prompts.funding_extraction import FundingExtraction, build_prompt
+from nous.llm.prompts.funding_extraction import (
+    FundingExtraction,
+    build_prompt,
+    build_website_prompt,
+)
+from nous.util.text import extract_visible_text, truncate_to_chars
 
 logger = logging.getLogger(__name__)
 
+# Minimum cleaned website text length to bother extracting from.
+_MIN_TEXT_CHARS = 200
 
-class ExtractFundingSummary(BaseModel):
-    articles_processed: int = 0
+
+class _RoundPersistCounts(BaseModel):
+    """Shared counters for code paths that reconcile a round + link investors."""
+
     funding_rounds_created: int = 0
     funding_rounds_merged: int = 0
     investors_created: int = 0
     investor_links_created: int = 0
+
+
+async def _persist_round_and_investors(
+    session: AsyncSession,
+    counts: _RoundPersistCounts,
+    *,
+    company_id: UUID,
+    extraction: FundingExtraction,
+    primary_news_url: str,
+    proximity_days: int,
+) -> None:
+    """Reconcile a funding round and link its investors, updating *counts*.
+
+    Shared by the news (primary) and website-fallback paths. Reconciliation is
+    fill-nulls + first-write-wins on primary_news_url, so running the website
+    path after the news path can only fill gaps TechCrunch left.
+    """
+    funding_round, created = await reconcile_funding_round(
+        session,
+        company_id=company_id,
+        extraction=extraction,
+        primary_news_url=primary_news_url,
+        proximity_days=proximity_days,
+    )
+    if created:
+        counts.funding_rounds_created += 1
+    else:
+        counts.funding_rounds_merged += 1
+
+    for is_lead, names in (
+        (True, extraction.lead_investors),
+        (False, extraction.other_investors),
+    ):
+        for investor_name in names:
+            if not investor_name.strip():
+                continue
+            try:
+                investor, inv_created = await upsert_investor(
+                    session, name=investor_name
+                )
+            except ValueError:
+                continue
+            if inv_created:
+                counts.investors_created += 1
+            await link_round_investor(
+                session,
+                funding_round_id=funding_round.id,
+                investor_id=investor.id,
+                is_lead=is_lead,
+            )
+            counts.investor_links_created += 1
+
+
+class ExtractFundingSummary(_RoundPersistCounts):
+    articles_processed: int = 0
     llm_failures: int = 0
     skipped_not_funding: int = 0
     skipped_low_confidence: int = 0
@@ -125,58 +190,115 @@ async def run_extract_funding(
             # transient-skip pending better extraction.
             continue
 
-        funding_round, created = await reconcile_funding_round(
+        await _persist_round_and_investors(
             session,
+            summary,
             company_id=company.id,
             extraction=extraction,
             primary_news_url=article.url,
             proximity_days=proximity_days,
         )
-        if created:
-            summary.funding_rounds_created += 1
-        else:
-            summary.funding_rounds_merged += 1
-
-        for investor_name in extraction.lead_investors:
-            if not investor_name.strip():
-                continue
-            try:
-                investor, inv_created = await upsert_investor(
-                    session, name=investor_name
-                )
-            except ValueError:
-                continue
-            if inv_created:
-                summary.investors_created += 1
-            await link_round_investor(
-                session,
-                funding_round_id=funding_round.id,
-                investor_id=investor.id,
-                is_lead=True,
-            )
-            summary.investor_links_created += 1
-
-        for investor_name in extraction.other_investors:
-            if not investor_name.strip():
-                continue
-            try:
-                investor, inv_created = await upsert_investor(
-                    session, name=investor_name
-                )
-            except ValueError:
-                continue
-            if inv_created:
-                summary.investors_created += 1
-            await link_round_investor(
-                session,
-                funding_round_id=funding_round.id,
-                investor_id=investor.id,
-                is_lead=False,
-            )
-            summary.investor_links_created += 1
 
         article.processed = True
         session.add(article)
+        await session.commit()
+
+    return summary
+
+
+class ExtractFundingWebsiteSummary(_RoundPersistCounts):
+    companies_seen: int = 0
+    companies_with_funding: int = 0
+    llm_failures: int = 0
+    skipped_no_text: int = 0
+    skipped_not_funding: int = 0
+    skipped_low_confidence: int = 0
+    skipped_rate_limited: int = 0
+
+
+async def run_extract_funding_website(
+    session: AsyncSession,
+    *,
+    limit: int | None = None,
+    skip_low_confidence: bool = True,
+    proximity_days: int = 60,
+) -> ExtractFundingWebsiteSummary:
+    """Gap-fill funding from a company's own scraped website.
+
+    Fallback to the news/TechCrunch path: runs ONLY for companies that have
+    raw_pages but no funding_rounds yet, so TechCrunch always remains the
+    primary source. Idempotent — reconcile_funding_round dedups/fills-nulls, so
+    re-running (e.g. after a company gains a TechCrunch round) won't clobber it.
+    """
+    summary = ExtractFundingWebsiteSummary()
+
+    stmt = (
+        select(Company)
+        .where(exists().where(RawPage.company_id == Company.id))
+        .where(~exists().where(FundingRound.company_id == Company.id))
+        .order_by(Company.name.asc())
+    )
+    if limit is not None:
+        stmt = stmt.limit(limit)
+
+    result = await session.execute(stmt)
+    companies = result.scalars().all()
+
+    for company in companies:
+        summary.companies_seen += 1
+
+        pages_result = await session.execute(
+            select(RawPage)
+            .where(RawPage.company_id == company.id)
+            .order_by(RawPage.url.asc())
+        )
+        pages = pages_result.scalars().all()
+
+        parts = [extract_visible_text(page.content) for page in pages]
+        combined = "\n\n".join(p for p in parts if p)
+        cleaned = truncate_to_chars(combined, 32_000)
+
+        if len(cleaned) < _MIN_TEXT_CHARS:
+            summary.skipped_no_text += 1
+            continue
+
+        prompt = build_website_prompt(company_name=company.name, page_text=cleaned)
+
+        try:
+            extraction: FundingExtraction = await complete_json(prompt, FundingExtraction)
+        except LLMRateLimitError:
+            logger.warning(
+                "LLM rate limit hit while extracting website funding for %s —"
+                " stopping loop to avoid further quota exhaustion.",
+                company.name,
+            )
+            summary.skipped_rate_limited += 1
+            break
+        except (LLMParseError, LLMError) as exc:
+            logger.warning(
+                "LLM error extracting website funding for %s: %s", company.name, exc
+            )
+            summary.llm_failures += 1
+            continue
+
+        if not extraction.is_funding_announcement:
+            summary.skipped_not_funding += 1
+            continue
+
+        if skip_low_confidence and extraction.confidence == "low":
+            summary.skipped_low_confidence += 1
+            continue
+
+        # Attribute the round to the company's website (the source of the text).
+        await _persist_round_and_investors(
+            session,
+            summary,
+            company_id=company.id,
+            extraction=extraction,
+            primary_news_url=company.website or (pages[0].url if pages else ""),
+            proximity_days=proximity_days,
+        )
+        summary.companies_with_funding += 1
         await session.commit()
 
     return summary

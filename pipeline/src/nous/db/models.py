@@ -69,8 +69,12 @@ class Company(Base):
     )
 
     # M3 — how this company first entered the DB.
-    # 'vc_portfolio' | 'news' | 'techcrunch'.
-    discovered_via: Mapped[str] = mapped_column(String, nullable=False)
+    # 'vc_portfolio' | 'news' | 'techcrunch'. Discovery paths always set this
+    # explicitly; the 'unknown' default is a safe fallback for any other insert
+    # (replaces the old 'form_d' default removed when Form D ingestion was cut).
+    discovered_via: Mapped[str] = mapped_column(
+        String, nullable=False, server_default="unknown"
+    )
 
 
 class RawPage(Base):
@@ -226,6 +230,43 @@ class Competitor(Base):
     reasoning: Mapped[str | None] = mapped_column(String, nullable=True)
     rank: Mapped[int] = mapped_column(SmallInteger, nullable=False)
 
+    # Provenance: 'techcrunch' (named/implied in the company's TechCrunch
+    # coverage) or 'llm_inferred' (general-knowledge competitor, shown as a
+    # "potential" competitor in the UI). source_url is the TechCrunch article
+    # when source='techcrunch', else NULL.
+    source: Mapped[str] = mapped_column(
+        String, nullable=False, server_default="llm_inferred"
+    )
+    source_url: Mapped[str | None] = mapped_column(String, nullable=True)
+
     __table_args__ = (
         UniqueConstraint("company_id", "rank", name="uq_competitors_company_rank"),
+    )
+
+
+class Person(Base):
+    """A leadership/founder entry for a company, extracted from the company's
+    scraped website during the enrich-companies stage.
+
+    Replace-style writes: each enrichment run for a company DELETEs existing
+    rows for that company_id then INSERTs the new ranked set. Distinct from the
+    (removed) Form D ``related_persons`` — these come from the company website.
+    """
+
+    __tablename__ = "people"
+
+    company_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("companies.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    name: Mapped[str] = mapped_column(String, nullable=False)
+    role: Mapped[str] = mapped_column(String, nullable=False)
+    # Attribution — the company website the person was extracted from.
+    source_url: Mapped[str | None] = mapped_column(String, nullable=True)
+    rank: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("company_id", "rank", name="uq_people_company_rank"),
     )

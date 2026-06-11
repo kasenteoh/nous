@@ -9,7 +9,7 @@ from __future__ import annotations
 from datetime import timedelta
 from uuid import UUID
 
-from sqlalchemy import and_, func, select
+from sqlalchemy import and_, delete, func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -18,8 +18,10 @@ from nous.db.models import (
     FundingRound,
     FundingRoundInvestor,
     Investor,
+    Person,
     RawPage,
 )
+from nous.llm.prompts.company_description import PersonExtraction
 from nous.llm.prompts.funding_extraction import FundingExtraction
 from nous.util.investor_name import canonicalize_investor_name
 from nous.util.slugify import normalize_name, slug_with_disambiguator, slugify
@@ -98,6 +100,51 @@ async def upsert_raw_page(
     fetched = await session.get(RawPage, raw_page_id, populate_existing=True)
     assert fetched is not None, f"RawPage {raw_page_id} missing after upsert"
     return fetched
+
+
+async def replace_people(
+    session: AsyncSession,
+    company_id: UUID,
+    people: list[PersonExtraction],
+    *,
+    source_url: str | None,
+) -> int:
+    """Replace the leadership/founder rows for a company.
+
+    DELETEs existing People rows for *company_id*, then INSERTs the new set in
+    list order (rank = 1-based position). Idempotent: calling twice with the
+    same *people* yields the same final state. Names are de-duplicated
+    (case-insensitive) preserving first-seen order, so the same person listed
+    twice on a site doesn't violate the (company_id, rank) layout.
+
+    Returns the number of rows inserted.
+    """
+    await session.execute(delete(Person).where(Person.company_id == company_id))
+
+    seen: set[str] = set()
+    rows: list[Person] = []
+    for person in people:
+        name = person.name.strip()
+        role = person.role.strip()
+        if not name or not role:
+            continue
+        key = name.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        rows.append(
+            Person(
+                company_id=company_id,
+                name=name,
+                role=role,
+                source_url=source_url,
+                rank=len(rows) + 1,
+            )
+        )
+
+    if rows:
+        session.add_all(rows)
+    return len(rows)
 
 
 # ---------------------------------------------------------------------------

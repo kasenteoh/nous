@@ -128,12 +128,15 @@ def scrape_homepages(
 @click.option(
     "--refetch-after-days",
     type=int,
-    default=90,
-    show_default=True,
-    help="Re-enrich companies enriched more than N days ago.",
+    default=None,
+    help=(
+        "Force re-enrichment of companies enriched more than N days ago. "
+        "Default: write-once (only enrich companies missing a description or "
+        "people). Description + people are stable data, not refreshed weekly."
+    ),
 )
-def enrich_companies(limit: int | None, refetch_after_days: int) -> None:
-    """Call the LLM to generate descriptions for companies with raw pages."""
+def enrich_companies(limit: int | None, refetch_after_days: int | None) -> None:
+    """Call the LLM to generate descriptions + people for companies with raw pages."""
     import asyncio
 
     from nous.db.session import AsyncSessionLocal
@@ -291,6 +294,42 @@ def extract_funding(limit: int, include_low_confidence: bool) -> None:
     async def _run() -> None:
         async with AsyncSessionLocal() as session:
             summary = await run_extract_funding(
+                session,
+                limit=limit,
+                skip_low_confidence=not include_low_confidence,
+            )
+            click.echo(summary.model_dump_json(indent=2))
+
+    asyncio.run(_run())
+
+
+@cli.command("extract-funding-website")
+@click.option(
+    "--limit",
+    type=int,
+    default=None,
+    help="Maximum number of companies to process (for testing / quota management).",
+)
+@click.option(
+    "--include-low-confidence",
+    is_flag=True,
+    default=False,
+    help="Persist rounds the LLM tagged as low-confidence (default: skip).",
+)
+def extract_funding_website(limit: int | None, include_low_confidence: bool) -> None:
+    """Gap-fill funding from a company's own website (fallback to TechCrunch).
+
+    Runs only for companies that have scraped pages but no funding rounds yet,
+    so the news/TechCrunch path always stays the primary source.
+    """
+    import asyncio
+
+    from nous.db.session import AsyncSessionLocal
+    from nous.pipeline.extract_funding import run_extract_funding_website
+
+    async def _run() -> None:
+        async with AsyncSessionLocal() as session:
+            summary = await run_extract_funding_website(
                 session,
                 limit=limit,
                 skip_low_confidence=not include_low_confidence,

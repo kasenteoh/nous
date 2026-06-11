@@ -101,6 +101,10 @@ export interface CompetitorRow {
   description: string | null;
   reasoning: string | null;
   rank: number;
+  // 'techcrunch' (named in the company's TechCrunch coverage) | 'llm_inferred'
+  // (general-knowledge competitor, shown as "potential").
+  source: string;
+  source_url: string | null; // the TechCrunch article when source='techcrunch'
   created_at: string;
   updated_at: string;
 }
@@ -113,9 +117,22 @@ export interface CompetitorWithResolved extends CompetitorRow {
   resolved: { slug: string; name: string } | null;
 }
 
-/** Full company detail assembled from three DB queries. */
+/** Row from the `people` table — website-sourced leadership/founders. */
+export interface PersonRow {
+  id: string;
+  company_id: string;
+  name: string;
+  role: string;
+  source_url: string | null;
+  rank: number;
+  created_at: string;
+  updated_at: string;
+}
+
+/** Full company detail assembled from four DB queries. */
 export interface CompanyDetail {
   company: CompanyRow;
+  people: PersonRow[]; // ordered by rank ascending
   fundingRounds: FundingRoundWithInvestors[]; // sorted by announced_date desc (nulls last)
   competitors: CompetitorWithResolved[]; // sorted by rank ascending
 }

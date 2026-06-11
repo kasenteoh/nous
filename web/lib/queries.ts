@@ -11,6 +11,7 @@ import type {
   CompetitorWithResolved,
   FundingRound,
   FundingRoundWithInvestors,
+  PersonRow,
 } from "@/lib/types";
 
 // Shape returned by the nested Supabase select on `funding_rounds`. We narrow
@@ -122,9 +123,15 @@ export async function getCompanyBySlug(
 
   const companyId = company.id as string;
 
-  // 2 & 3: fetch funding rounds (with nested investor joins) and competitors
-  // (with resolved company) in parallel.
-  const [roundsResult, competitorsResult] = await Promise.all([
+  // 2, 3 & 4: fetch people, funding rounds (with nested investor joins), and
+  // competitors (with resolved company) in parallel.
+  const [peopleResult, roundsResult, competitorsResult] = await Promise.all([
+    supabase
+      .from("people")
+      .select("*")
+      .eq("company_id", companyId)
+      .order("rank", { ascending: true }),
+
     supabase
       .from("funding_rounds")
       .select("*, funding_round_investors(is_lead, investors(name))")
@@ -137,6 +144,12 @@ export async function getCompanyBySlug(
       .order("rank", { ascending: true }),
   ]);
 
+  if (peopleResult.error) {
+    console.error(
+      "[getCompanyBySlug] people query failed:",
+      peopleResult.error.message,
+    );
+  }
   if (roundsResult.error) {
     console.error(
       "[getCompanyBySlug] funding_rounds query failed:",
@@ -149,6 +162,8 @@ export async function getCompanyBySlug(
       competitorsResult.error.message,
     );
   }
+
+  const people = (peopleResult.data ?? []) as PersonRow[];
 
   const rawRounds = (roundsResult.data ?? []) as FundingRoundJoin[];
 
@@ -206,6 +221,7 @@ export async function getCompanyBySlug(
 
   return {
     company: company as unknown as CompanyRow,
+    people,
     fundingRounds,
     competitors,
   };

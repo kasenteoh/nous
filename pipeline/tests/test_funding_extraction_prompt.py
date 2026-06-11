@@ -17,6 +17,7 @@ from nous.llm.prompts.funding_extraction import (
     MAX_ARTICLE_CHARS,
     FundingExtraction,
     build_prompt,
+    build_website_prompt,
 )
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
@@ -53,6 +54,32 @@ def test_build_prompt_short_article_is_unchanged() -> None:
     body = "Short article body about a Series A round."
     prompt = build_prompt(company_name="Acme", article_text=body)
     assert body in prompt
+
+
+# ---------------------------------------------------------------------------
+# build_website_prompt (fallback source)
+# ---------------------------------------------------------------------------
+
+
+def test_build_website_prompt_contains_company_and_text() -> None:
+    prompt = build_website_prompt(company_name="Acme", page_text="we raised $20M")
+    assert "Acme" in prompt
+    assert "we raised $20M" in prompt
+
+
+def test_build_website_prompt_instructs_latest_date_and_own_site() -> None:
+    """The website variant flags lower authority + prefer the most recent date."""
+    prompt = build_website_prompt(company_name="Acme", page_text="x")
+    assert "OWN public website" in prompt
+    assert "MOST" in prompt and "RECENT" in prompt
+    assert "Company website" in prompt
+
+
+def test_build_website_prompt_truncates() -> None:
+    long_text = "b" * 50_000
+    prompt = build_website_prompt(company_name="Acme", page_text=long_text)
+    assert "b" * MAX_ARTICLE_CHARS in prompt
+    assert "b" * (MAX_ARTICLE_CHARS + 1) not in prompt
 
 
 # ---------------------------------------------------------------------------
