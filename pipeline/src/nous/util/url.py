@@ -95,3 +95,73 @@ def hostname(url: str) -> str:
     if host.startswith("www."):
         host = host[4:]
     return host
+
+
+# Hosts where DIFFERENT companies legitimately share a domain — never use these
+# as a de-duplication identity signal (a *.myshopify.com / *.github.io site
+# belongs to whoever set it up, not to one canonical company).
+SHARED_HOSTING_DOMAINS: frozenset[str] = frozenset(
+    {
+        # Code-hosting pages
+        "github.io",
+        "gitlab.io",
+        # E-commerce / site builders
+        "myshopify.com",
+        "squarespace.com",
+        "wixsite.com",
+        "wix.com",
+        "webflow.io",
+        "weebly.com",
+        "carrd.co",
+        "godaddysites.com",
+        "framer.website",
+        "framer.app",
+        "bubbleapps.io",
+        # Blogging / publishing
+        "wordpress.com",
+        "blogspot.com",
+        "notion.site",
+        "substack.com",
+        "medium.com",
+        # PaaS preview / deploy domains
+        "netlify.app",
+        "vercel.app",
+        "herokuapp.com",
+        "pages.dev",
+        "web.app",
+        "firebaseapp.com",
+        "glitch.me",
+        "replit.app",
+        "repl.co",
+        "onrender.com",
+        "fly.dev",
+        "ondigitalocean.app",
+        "azurewebsites.net",
+        "appspot.com",
+        "surge.sh",
+        "render.com",
+    }
+)
+
+
+def canonical_domain(url: str | None) -> str | None:
+    """Return the registrable host for ``url`` to use as a dedup key, or None.
+
+    Returns None — meaning "do not use this domain for deduplication" — when:
+    - ``url`` is None or yields no host, or
+    - the host is, or is a subdomain of, a :data:`SHARED_HOSTING_DOMAINS` entry
+      (multi-tenant platforms where different companies legitimately coexist).
+
+    Otherwise returns :func:`hostname` (lowercased, ``www.`` stripped). A non-None
+    result is safe to treat as an identity signal: two companies sharing it are
+    the same real-world entity.
+    """
+    if not url:
+        return None
+    host = hostname(url)
+    if not host:
+        return None
+    for shared in SHARED_HOSTING_DOMAINS:
+        if host == shared or host.endswith("." + shared):
+            return None
+    return host

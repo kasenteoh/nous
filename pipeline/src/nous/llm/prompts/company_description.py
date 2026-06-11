@@ -49,6 +49,27 @@ class CompanyDescription(BaseModel):
             "founder roles) named on the site. Empty list if none are stated."
         ),
     )
+    hq_city: str | None = Field(
+        default=None,
+        description=(
+            "Headquarters city, when clearly stated in the text. "
+            "Null if not stated — never guess."
+        ),
+    )
+    hq_state: str | None = Field(
+        default=None,
+        description=(
+            "Headquarters US state as a 2-letter code (e.g. 'CA', 'NY') when "
+            "determinable. Null if not stated or not US — never guess."
+        ),
+    )
+    industry: str | None = Field(
+        default=None,
+        description=(
+            "Coarse industry bucket (e.g. 'fintech', 'developer tools', "
+            "'AI infrastructure', 'healthcare'). Null if unclear — never guess."
+        ),
+    )
 
 
 PROMPT_TEMPLATE = """\
@@ -72,6 +93,14 @@ Rules:
   C-level or founder roles) that the site actually names — typically from an
   about/team/leadership page. Use the role exactly as stated. Return an EMPTY
   list if the site does not clearly name them. Do NOT guess or fabricate names.
+- `hq_city` / `hq_state`: the company's headquarters location, US-focused.
+  Extract these ONLY when the text clearly states them (an address, a
+  "headquartered in ..." line, or a contact/footer location). `hq_state` must
+  be a 2-letter US state code; leave it null if the HQ is outside the US or the
+  state is not given. Return null — do NOT guess a location the text doesn't state.
+- `industry`: a coarse industry bucket like "fintech", "developer tools",
+  "AI infrastructure", or "healthcare". Return null if the text does not make
+  the industry clear. Never fabricate one.
 
 Company name: {company_name}
 

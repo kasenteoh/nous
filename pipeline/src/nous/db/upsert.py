@@ -9,15 +9,18 @@ from __future__ import annotations
 from datetime import timedelta
 from uuid import UUID
 
-from sqlalchemy import and_, delete, func, select
+from sqlalchemy import and_, delete, func, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from nous.db.models import (
     Company,
+    CompanyInvestor,
+    Competitor,
     FundingRound,
     FundingRoundInvestor,
     Investor,
+    NewsArticle,
     Person,
     RawPage,
 )
@@ -25,6 +28,7 @@ from nous.llm.prompts.company_description import PersonExtraction
 from nous.llm.prompts.funding_extraction import FundingExtraction
 from nous.util.investor_name import canonicalize_investor_name
 from nous.util.slugify import normalize_name, slug_with_disambiguator, slugify
+from nous.util.url import canonical_domain
 
 
 async def _find_by_normalized_name(session: AsyncSession, norm: str) -> Company | None:
@@ -234,9 +238,15 @@ async def auto_create_company(
       it from the scraped homepage, which is more authoritative than any
       VC-portfolio one-liner.
     """
-    existing = await find_company_by_name(
-        session, name, similarity_threshold=similarity_threshold
-    )
+    # Domain dedup first — a shared canonical website domain is a far stronger
+    # identity signal than a fuzzy name match, and stops the duplicate before
+    # two rows are ever created (shared-hosting domains never match). Fall back
+    # to name matching when there's no website or no domain hit.
+    existing = await find_company_by_domain(session, website)
+    if existing is None:
+        existing = await find_company_by_name(
+            session, name, similarity_threshold=similarity_threshold
+        )
     if existing is not None:
         if existing.website is None and website:
             existing.website = website
@@ -425,3 +435,274 @@ async def link_round_investor(
         )
     )
     await session.execute(stmt)
+
+
+# ---------------------------------------------------------------------------
+# Company-level investor link (used by refresh-vc-portfolios)
+# ---------------------------------------------------------------------------
+
+
+async def link_company_investor(
+    session: AsyncSession,
+    *,
+    company_id: UUID,
+    investor_id: UUID,
+    source: str,
+    is_lead: bool = False,
+) -> None:
+    """Upsert a company-level (company, investor) link.
+
+    Sticky ``is_lead``: once True it stays True even if a later signal omits
+    the lead distinction — same rationale as :func:`link_round_investor`.
+    ``source`` records how we learned of the investment (e.g. 'vc_portfolio')
+    and is left untouched on conflict so the first-recorded source wins.
+
+    Implemented via INSERT ... ON CONFLICT DO UPDATE on the (company_id,
+    investor_id) unique constraint, so re-running the discovering stage never
+    duplicates the link.
+    """
+    stmt = (
+        pg_insert(CompanyInvestor)
+        .values(
+            company_id=company_id,
+            investor_id=investor_id,
+            source=source,
+            is_lead=is_lead,
+        )
+        .on_conflict_do_update(
+            constraint="uq_company_investors_company_investor",
+            set_={
+                "is_lead": CompanyInvestor.is_lead.op("OR")(is_lead),
+            },
+        )
+    )
+    await session.execute(stmt)
+
+
+# ---------------------------------------------------------------------------
+# Company de-duplication: domain match + merge primitive (used by dedup-companies)
+# ---------------------------------------------------------------------------
+
+
+# Company scalar/array/jsonb columns that merge_companies fills on the survivor
+# from the loser when the survivor's value is NULL (one-directional gap-fill).
+_MERGE_FILL_COLUMNS: tuple[str, ...] = (
+    "website",
+    "logo_url",
+    "description_short",
+    "description_long",
+    "primary_category",
+    "tags",
+    "hq_city",
+    "hq_state",
+    "hq_country",
+    "industry_group",
+    "year_incorporated",
+    "last_enriched_at",
+    "last_enriched_payload",
+    "website_resolved_at",
+)
+
+
+async def find_company_by_domain(
+    session: AsyncSession, website: str | None
+) -> Company | None:
+    """Find an existing Company that shares ``website``'s canonical domain.
+
+    Returns None when ``website`` is None/empty or its host is a shared-hosting
+    domain (``canonical_domain`` returns None) — those carry no identity signal,
+    so we must not collapse rows on them.
+
+    Two stages:
+    1. A cheap, index-assisted prefilter: ``website ILIKE %domain%`` narrows the
+       candidate set without normalizing every row in SQL.
+    2. An exact host check in Python: keep the first candidate whose own
+       ``canonical_domain(website)`` equals ``domain``. The ILIKE can over-match
+       (e.g. ``domain='acme.com'`` would also catch ``notacme.com`` or a path
+       segment), so the normalized equality is what makes the match correct.
+    """
+    domain = canonical_domain(website)
+    if domain is None:
+        return None
+
+    stmt = select(Company).where(
+        Company.website.is_not(None),
+        Company.website.ilike(f"%{domain}%"),
+    )
+    result = await session.execute(stmt)
+    for candidate in result.scalars():
+        if canonical_domain(candidate.website) == domain:
+            return candidate
+    return None
+
+
+async def merge_companies(
+    session: AsyncSession, *, survivor_id: UUID, loser_id: UUID
+) -> None:
+    """Fold the ``loser`` company into ``survivor``, then delete the loser.
+
+    Every child row that references ``loser_id`` is repointed to ``survivor_id``,
+    handling each table's unique constraints so no IntegrityError can occur:
+
+    - **raw_pages** — unique (company_id, url): move loser rows whose url the
+      survivor lacks; delete the rest (survivor already has that url).
+    - **news_articles** — url is globally unique (no per-company constraint):
+      blanket repoint company_id.
+    - **funding_rounds** — no unique beyond the pk: blanket repoint. Their
+      ``funding_round_investors`` hang off funding_round_id and follow along.
+    - **company_investors** — unique (company_id, investor_id): move links the
+      survivor lacks; delete loser links the survivor already has (OR-promoting
+      is_lead first).
+    - **competitors.company_id** — unique (company_id, rank): DELETE the loser's
+      rows outright (regenerated by analyze-competitors; avoids rank collisions).
+    - **competitors.competitor_company_id** — nullable FK: repoint to survivor,
+      then drop self-references and de-duplicate the resulting pairs.
+    - **people** — unique (company_id, rank): adopt the loser's people only when
+      the survivor has none (enrich is write-once); otherwise the survivor's win.
+
+    The survivor's NULL scalar/array/jsonb fields are then filled from the loser
+    (see :data:`_MERGE_FILL_COLUMNS`) — a one-directional "fill the gaps" so we
+    keep whatever the survivor already had and only borrow what it was missing.
+
+    Finally the loser row is deleted. This function does NOT commit — the caller
+    owns the transaction. It is a one-way fold: after it runs, ``loser_id`` no
+    longer exists, so a re-run cannot double-apply.
+    """
+    if survivor_id == loser_id:
+        raise ValueError("merge_companies: survivor_id and loser_id are identical")
+
+    # --- raw_pages: unique (company_id, url) --------------------------------
+    survivor_urls_subq = select(RawPage.url).where(RawPage.company_id == survivor_id)
+    # Delete loser rows whose url the survivor already has.
+    await session.execute(
+        delete(RawPage).where(
+            RawPage.company_id == loser_id,
+            RawPage.url.in_(survivor_urls_subq),
+        )
+    )
+    # Move the remaining loser rows (urls the survivor lacks).
+    await session.execute(
+        update(RawPage)
+        .where(RawPage.company_id == loser_id)
+        .values(company_id=survivor_id)
+    )
+
+    # --- news_articles: url globally unique, no per-company constraint ------
+    await session.execute(
+        update(NewsArticle)
+        .where(NewsArticle.company_id == loser_id)
+        .values(company_id=survivor_id)
+    )
+
+    # --- funding_rounds: no unique beyond pk -------------------------------
+    await session.execute(
+        update(FundingRound)
+        .where(FundingRound.company_id == loser_id)
+        .values(company_id=survivor_id)
+    )
+
+    # --- company_investors: unique (company_id, investor_id) ---------------
+    survivor_investors_subq = select(CompanyInvestor.investor_id).where(
+        CompanyInvestor.company_id == survivor_id
+    )
+    # Preserve sticky is_lead: if the loser flags a shared investor as lead,
+    # promote the survivor's link to lead before dropping the loser's duplicate.
+    loser_lead_subq = select(CompanyInvestor.investor_id).where(
+        CompanyInvestor.company_id == loser_id,
+        CompanyInvestor.is_lead.is_(True),
+    )
+    await session.execute(
+        update(CompanyInvestor)
+        .where(
+            CompanyInvestor.company_id == survivor_id,
+            CompanyInvestor.investor_id.in_(loser_lead_subq),
+        )
+        .values(is_lead=True)
+    )
+    await session.execute(
+        delete(CompanyInvestor).where(
+            CompanyInvestor.company_id == loser_id,
+            CompanyInvestor.investor_id.in_(survivor_investors_subq),
+        )
+    )
+    await session.execute(
+        update(CompanyInvestor)
+        .where(CompanyInvestor.company_id == loser_id)
+        .values(company_id=survivor_id)
+    )
+
+    # --- competitors.company_id: drop the loser's ranked set ----------------
+    await session.execute(
+        delete(Competitor).where(Competitor.company_id == loser_id)
+    )
+
+    # --- competitors.competitor_company_id: repoint, then clean up ----------
+    await session.execute(
+        update(Competitor)
+        .where(Competitor.competitor_company_id == loser_id)
+        .values(competitor_company_id=survivor_id)
+    )
+    # Drop self-references the repoint may have produced.
+    await session.execute(
+        delete(Competitor).where(
+            Competitor.company_id == survivor_id,
+            Competitor.competitor_company_id == survivor_id,
+        )
+    )
+    # De-duplicate any (company_id, competitor_company_id) pairs the repoint
+    # created — keep the lowest-id row per pair, delete the rest.
+    dup_self = Competitor.__table__.alias("dup_self")
+    dup_other = Competitor.__table__.alias("dup_other")
+    duplicate_ids_subq = (
+        select(dup_self.c.id)
+        .select_from(dup_self.join(
+            dup_other,
+            and_(
+                dup_self.c.company_id == dup_other.c.company_id,
+                dup_self.c.competitor_company_id == dup_other.c.competitor_company_id,
+                dup_self.c.competitor_company_id.is_not(None),
+                dup_self.c.id > dup_other.c.id,
+            ),
+        ))
+    )
+    await session.execute(
+        delete(Competitor).where(
+            Competitor.id.in_(duplicate_ids_subq)
+        )
+    )
+
+    # --- people: unique (company_id, rank) ---------------------------------
+    survivor_has_people = (
+        await session.execute(
+            select(Person.id).where(Person.company_id == survivor_id).limit(1)
+        )
+    ).first() is not None
+    if survivor_has_people:
+        await session.execute(delete(Person).where(Person.company_id == loser_id))
+    else:
+        await session.execute(
+            update(Person)
+            .where(Person.company_id == loser_id)
+            .values(company_id=survivor_id)
+        )
+
+    # --- fill survivor NULLs from loser ------------------------------------
+    survivor = await session.get(Company, survivor_id)
+    loser = await session.get(Company, loser_id)
+    if survivor is None or loser is None:
+        raise ValueError(
+            f"merge_companies: survivor {survivor_id} or loser {loser_id} not found"
+        )
+    for column in _MERGE_FILL_COLUMNS:
+        if getattr(survivor, column) is None:
+            loser_value = getattr(loser, column)
+            if loser_value is not None:
+                setattr(survivor, column, loser_value)
+    session.add(survivor)
+
+    # --- delete the loser ---------------------------------------------------
+    # Flush first so the FK repoints above are visible to the delete; the loser
+    # now has no children pointing at it.
+    await session.flush()
+    await session.delete(loser)
+    await session.flush()

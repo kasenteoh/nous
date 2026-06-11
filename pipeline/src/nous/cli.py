@@ -380,6 +380,61 @@ def analyze_competitors(limit: int, ttl_days: int, dry_run: bool) -> None:
     asyncio.run(_run())
 
 
+@cli.command("dedup-companies")
+@click.option(
+    "--llm-limit",
+    type=int,
+    default=200,
+    show_default=True,
+    help="Maximum LLM judgments for the fuzzy pass per run (highest-similarity first).",
+)
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    default=False,
+    help="Run reads + LLM calls but skip the merges/commits.",
+)
+def dedup_companies(llm_limit: int, dry_run: bool) -> None:
+    """Collapse duplicate company rows (exact-domain, then LLM-gated fuzzy)."""
+    import asyncio
+
+    from nous.db.session import AsyncSessionLocal
+    from nous.pipeline.dedup_companies import run_dedup_companies
+
+    async def _run() -> None:
+        async with AsyncSessionLocal() as session:
+            summary = await run_dedup_companies(
+                session,
+                llm_limit=llm_limit,
+                dry_run=dry_run,
+            )
+            click.echo(summary.model_dump_json(indent=2))
+
+    asyncio.run(_run())
+
+
+@cli.command("cleanup-form-d")
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    default=False,
+    help="Report counts but perform no re-tag/delete writes.",
+)
+def cleanup_form_d(dry_run: bool) -> None:
+    """Re-tag corroborated form_d companies (vc_portfolio/news), delete the rest."""
+    import asyncio
+
+    from nous.db.session import AsyncSessionLocal
+    from nous.pipeline.cleanup_form_d import run_cleanup_form_d
+
+    async def _run() -> None:
+        async with AsyncSessionLocal() as session:
+            summary = await run_cleanup_form_d(session, dry_run=dry_run)
+            click.echo(summary.model_dump_json(indent=2))
+
+    asyncio.run(_run())
+
+
 @cli.command("estimate-employees")
 def estimate_employees() -> None:
     _stub("estimate-employees")
