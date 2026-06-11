@@ -53,6 +53,14 @@ class Company(Base):
     employee_count_min: Mapped[int | None]
     employee_count_max: Mapped[int | None]
     employee_count_source: Mapped[str | None]
+    # When the estimate-employees stage last attempted this company (success or
+    # not) — drives the refetch-staleness / back-off eligibility query. Indexed
+    # because it appears in that WHERE clause.
+    employee_count_checked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        index=True,
+    )
 
     # Tracks when LLM enrichment last ran for this company
     last_enriched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
