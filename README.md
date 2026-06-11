@@ -63,7 +63,11 @@ Open <http://localhost:3000>. Each company page renders description, key facts, 
 
 1. **Supabase project.** Create a free-tier project. Use the Session pooler `DATABASE_URL` (rewritten to `postgresql+psycopg://`).
 2. **Vercel.** Connect the GitHub repo, set the root directory to `web/`, add env vars `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY`. Vercel auto-deploys on push to `main`.
-3. **GitHub Actions secrets.** Add `DATABASE_URL`, `SEC_USER_AGENT`, and `DEEPSEEK_API_KEY` so the weekly cron can run all stages (homepage + enrich + news + funding).
+3. **GitHub Actions secrets.** Add `DATABASE_URL`, `SEC_USER_AGENT`, and `DEEPSEEK_API_KEY` so the scheduled crons can run all stages (homepage + enrich + news + funding).
 4. **First backfill.** Trigger the `backfill-discovery` workflow manually (`workflow_dispatch`) to seed companies from VC portfolios + TechCrunch.
 
-The weekly cron (every Monday 09:00 UTC) then keeps the data fresh on its own. The monthly VC-portfolio refresh additionally runs `dedup-companies` to merge duplicate rows that slip through discovery.
+Three scheduled workflows then keep the data fresh on their own, serialized via a shared `concurrency` group so they never write the `companies` table at the same time:
+
+- **`discovery.yml`** (weekly, Mon 02:00 UTC) — `refresh-vc-portfolios` → `dedup-companies` → `analyze-competitors`.
+- **`descriptions.yml`** (weekly, Mon 06:00 UTC) — `resolve-homepages` → `scrape-homepages` → `enrich-companies`.
+- **`funding-news.yml`** (daily, 14:00 UTC) — `ingest-news` → `extract-funding` → `extract-funding-website`.

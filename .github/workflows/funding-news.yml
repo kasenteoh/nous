@@ -1,0 +1,92 @@
+name: funding-news
+
+# Daily funding + news refresh: pull funding-keyword news (per-company Google
+# News RSS + TechCrunch venture-tag broad sweep), then extract structured
+# rounds / investors via the LLM. Runs daily so newly announced rounds surface
+# fast. extract-funding only processes unprocessed articles, so steady-state
+# daily spend is bounded by actual daily article volume. No browser needed:
+# ingest-news fetches RSS and extract-funding-website reads already-scraped
+# raw_pages, so the Playwright install (present in descriptions.yml) is omitted.
+on:
+  schedule:
+    # Daily 14:00 UTC, offset from the Monday-morning discovery/descriptions
+    # slots. On Mondays this run queues behind those weekly jobs via the shared
+    # `concurrency` group below — that's the intended serialization.
+    - cron: "0 14 * * *"
+  workflow_dispatch:
+    inputs:
+      skip_news:
+        description: "Skip the Ingest news stage."
+        required: false
+        type: boolean
+        default: false
+      skip_funding:
+        description: "Skip the Extract funding stage."
+        required: false
+        type: boolean
+        default: false
+      news_lookback_days:
+        description: "Ingest news: lookback window in days. Default: 7."
+        required: false
+        type: string
+
+# Serialize against every other workflow that mutates the companies table (see
+# discovery.yml). ingest-news auto-creates companies from the TechCrunch sweep
+# and extract-funding writes funding rows, both of which race the dedup DELETEs
+# in discovery.yml. cancel-in-progress: false so a queued run waits its turn.
+concurrency:
+  group: nous-pipeline-db
+  cancel-in-progress: false
+
+jobs:
+  funding-news:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: pipeline
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}
+      # All LLM calls run on DeepSeek (see pipeline Settings).
+      DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+
+      - name: Install pipeline dependencies
+        run: uv sync
+
+      - name: Apply migrations
+        run: uv run alembic upgrade head
+
+      - name: Ingest news
+        if: ${{ inputs.skip_news != true }}
+        # Per-company Google News RSS + TechCrunch venture-tag broad sweep.
+        # continue-on-error: a transient Google News block shouldn't fail the run.
+        run: |
+          ARGS=()
+          if [ -n "${{ inputs.news_lookback_days }}" ]; then
+            ARGS+=(--lookback-days "${{ inputs.news_lookback_days }}")
+          fi
+          uv run nous ingest-news "${ARGS[@]}"
+        continue-on-error: true
+
+      - name: Extract funding
+        if: ${{ inputs.skip_funding != true }}
+        # --limit 1000 caps per-run LLM spend on DeepSeek (now a daily ceiling).
+        # continue-on-error per the same rate-limit logic as enrich-companies.
+        run: uv run nous extract-funding --limit 1000
+        continue-on-error: true
+
+      - name: Extract funding (website fallback)
+        if: ${{ inputs.skip_funding != true }}
+        # Gap-fill only: runs for companies that still have no funding rounds
+        # after the TechCrunch/news pass above, so TechCrunch stays primary.
+        run: uv run nous extract-funding-website
+        continue-on-error: true
