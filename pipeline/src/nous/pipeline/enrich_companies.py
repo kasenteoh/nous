@@ -17,7 +17,9 @@ from datetime import UTC, datetime, timedelta
 
 from pydantic import BaseModel
 from sqlalchemy import ColumnElement, exists, or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm.exc import StaleDataError
 
 from nous.db.models import Company, RawPage
 from nous.db.upsert import replace_people
@@ -169,7 +171,20 @@ async def run_enrich_companies(
         )
         summary.people_written += n_people
 
-        await session.commit()
+        try:
+            await session.commit()
+        except (StaleDataError, IntegrityError):
+            # The company was deleted mid-enrich (almost always a concurrent
+            # dedup-companies merge): the row UPDATE raises StaleDataError, or the
+            # people INSERT raises an FK IntegrityError. Skip it, don't crash.
+            await session.rollback()
+            logger.warning(
+                "Company %s disappeared mid-enrich (likely a concurrent merge)"
+                " — skipping.",
+                company.id,
+            )
+            summary.llm_failures += 1
+            continue
         summary.companies_enriched += 1
 
     return summary

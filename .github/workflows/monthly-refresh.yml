@@ -2,10 +2,13 @@ name: monthly-refresh
 
 on:
   schedule:
-    # 09:00 UTC on the 1st of each month. Both VC portfolios and competitor
-    # analysis move slowly; one monthly job keeps the weekly pipeline lean
-    # and respects external sites + LLM spend.
-    - cron: "0 9 1 * *"
+    # 02:00 UTC on the 1st of each month — deliberately OFFSET from the weekly
+    # pipeline's Monday 09:00 slot so the two never run concurrently. They share
+    # the companies table, and this job's dedup-companies step DELETEs merged
+    # rows; an overlapping weekly run updating those same rows would crash with a
+    # StaleDataError (this happened when the 1st falls on a Monday). The 7h gap
+    # lets the monthly job finish well before any weekly run starts.
+    - cron: "0 2 1 * *"
   workflow_dispatch:
     inputs:
       firms:
