@@ -129,10 +129,29 @@ export interface PersonRow {
   updated_at: string;
 }
 
-/** Full company detail assembled from four DB queries. */
+/** Company-level investor (VC firm), shaped from the company_investors join. */
+export interface CompanyInvestorRow {
+  name: string;
+  website: string | null;
+  isLead: boolean;
+  source: string;
+}
+
+/** Row from the `news_articles` table, for the News section. */
+export interface NewsArticleRow {
+  id: string;
+  url: string;
+  title: string;
+  source: string;
+  published_date: string | null;
+}
+
+/** Full company detail assembled from the DB queries. */
 export interface CompanyDetail {
   company: CompanyRow;
   people: PersonRow[]; // ordered by rank ascending
   fundingRounds: FundingRoundWithInvestors[]; // sorted by announced_date desc (nulls last)
   competitors: CompetitorWithResolved[]; // sorted by rank ascending
+  investors: CompanyInvestorRow[]; // company-level investors (VC firms)
+  news: NewsArticleRow[]; // recent news articles, newest first
 }

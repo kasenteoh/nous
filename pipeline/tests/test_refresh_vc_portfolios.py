@@ -82,7 +82,13 @@ def _stub_client() -> HomepageClient:
 
 
 def _entry(
-    firm: str, name: str, *, website: str | None = "https://example.com"
+    # website defaults to None: a shared placeholder URL would now collapse
+    # distinct fixtures via auto_create_company's domain de-dup. Tests that
+    # need a website pass one explicitly.
+    firm: str,
+    name: str,
+    *,
+    website: str | None = None,
 ) -> PortfolioEntry:
     return PortfolioEntry(
         firm=firm,

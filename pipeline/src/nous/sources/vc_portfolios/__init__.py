@@ -26,4 +26,16 @@ ADAPTERS: dict[str, PortfolioAdapter] = {
     "khosla": KhoslaAdapter(),
 }
 
-__all__ = ["ADAPTERS", "PortfolioAdapter", "PortfolioEntry"]
+# Proper investor display names per firm slug — used when recording the
+# discovering firm as a company-level investor (refresh-vc-portfolios).
+FIRM_DISPLAY_NAMES: dict[str, str] = {
+    "yc": "Y Combinator",
+    "a16z": "Andreessen Horowitz",
+    "sequoia": "Sequoia Capital",
+    "lightspeed": "Lightspeed Venture Partners",
+    "founders_fund": "Founders Fund",
+    "greylock": "Greylock",
+    "khosla": "Khosla Ventures",
+}
+
+__all__ = ["ADAPTERS", "FIRM_DISPLAY_NAMES", "PortfolioAdapter", "PortfolioEntry"]

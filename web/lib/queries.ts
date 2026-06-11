@@ -5,12 +5,14 @@
 import { createSupabaseServerClient } from "@/lib/db";
 import type {
   CompanyDetail,
+  CompanyInvestorRow,
   CompanyListRow,
   CompanyRow,
   CompetitorRow,
   CompetitorWithResolved,
   FundingRound,
   FundingRoundWithInvestors,
+  NewsArticleRow,
   PersonRow,
 } from "@/lib/types";
 
@@ -36,6 +38,18 @@ interface NestedResolvedCompany {
 
 type CompetitorJoin = CompetitorRow & {
   competitor_company: NestedResolvedCompany | NestedResolvedCompany[] | null;
+};
+
+// Nested shape from the company_investors → investors select.
+interface NestedInvestorFull {
+  name: string | null;
+  website: string | null;
+}
+
+type CompanyInvestorJoin = {
+  is_lead: boolean | null;
+  source: string | null;
+  investors: NestedInvestorFull | NestedInvestorFull[] | null;
 };
 
 /**
@@ -125,24 +139,36 @@ export async function getCompanyBySlug(
 
   // 2, 3 & 4: fetch people, funding rounds (with nested investor joins), and
   // competitors (with resolved company) in parallel.
-  const [peopleResult, roundsResult, competitorsResult] = await Promise.all([
-    supabase
-      .from("people")
-      .select("*")
-      .eq("company_id", companyId)
-      .order("rank", { ascending: true }),
+  const [peopleResult, roundsResult, competitorsResult, investorsResult, newsResult] =
+    await Promise.all([
+      supabase
+        .from("people")
+        .select("*")
+        .eq("company_id", companyId)
+        .order("rank", { ascending: true }),
 
-    supabase
-      .from("funding_rounds")
-      .select("*, funding_round_investors(is_lead, investors(name))")
-      .eq("company_id", companyId),
+      supabase
+        .from("funding_rounds")
+        .select("*, funding_round_investors(is_lead, investors(name))")
+        .eq("company_id", companyId),
 
-    supabase
-      .from("competitors")
-      .select("*, competitor_company:companies!competitor_company_id(slug, name)")
-      .eq("company_id", companyId)
-      .order("rank", { ascending: true }),
-  ]);
+      supabase
+        .from("competitors")
+        .select("*, competitor_company:companies!competitor_company_id(slug, name)")
+        .eq("company_id", companyId)
+        .order("rank", { ascending: true }),
+
+      supabase
+        .from("company_investors")
+        .select("is_lead, source, investors(name, website)")
+        .eq("company_id", companyId),
+
+      supabase
+        .from("news_articles")
+        .select("id, url, title, source, published_date")
+        .eq("company_id", companyId)
+        .order("published_date", { ascending: false, nullsFirst: false }),
+    ]);
 
   if (peopleResult.error) {
     console.error(
@@ -160,6 +186,18 @@ export async function getCompanyBySlug(
     console.error(
       "[getCompanyBySlug] competitors query failed:",
       competitorsResult.error.message,
+    );
+  }
+  if (investorsResult.error) {
+    console.error(
+      "[getCompanyBySlug] company_investors query failed:",
+      investorsResult.error.message,
+    );
+  }
+  if (newsResult.error) {
+    console.error(
+      "[getCompanyBySlug] news_articles query failed:",
+      newsResult.error.message,
     );
   }
 
@@ -219,10 +257,29 @@ export async function getCompanyBySlug(
     return { ...rest, resolved };
   });
 
+  const investors: CompanyInvestorRow[] = (
+    (investorsResult.data ?? []) as CompanyInvestorJoin[]
+  ).flatMap((row) => {
+    const inv = Array.isArray(row.investors) ? row.investors[0] : row.investors;
+    if (!inv?.name) return [];
+    return [
+      {
+        name: inv.name,
+        website: inv.website ?? null,
+        isLead: row.is_lead === true,
+        source: row.source ?? "",
+      },
+    ];
+  });
+
+  const news = (newsResult.data ?? []) as NewsArticleRow[];
+
   return {
     company: company as unknown as CompanyRow,
     people,
     fundingRounds,
     competitors,
+    investors,
+    news,
   };
 }

@@ -270,3 +270,42 @@ class Person(Base):
     __table_args__ = (
         UniqueConstraint("company_id", "rank", name="uq_people_company_rank"),
     )
+
+
+class CompanyInvestor(Base):
+    """Company-level investor link. Distinct from
+    :class:`FundingRoundInvestor`, which ties an investor to a specific
+    funding round; this records that an investor is in a company at all,
+    regardless of which round. Populated by the refresh-vc-portfolios stage:
+    the firm whose portfolio surfaced a company IS an investor in it.
+
+    Unique on the (company, investor) pair so a re-run of the stage can't
+    double-link the same firm to the same company. ``is_lead`` is kept for
+    symmetry with the round-level table (a portfolio page rarely tells us who
+    led, so it defaults False).
+    """
+
+    __tablename__ = "company_investors"
+    __table_args__ = (
+        UniqueConstraint(
+            "company_id",
+            "investor_id",
+            name="uq_company_investors_company_investor",
+        ),
+    )
+
+    company_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("companies.id", ondelete="CASCADE"),
+        index=True,
+    )
+    investor_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("investors.id", ondelete="CASCADE"),
+        index=True,
+    )
+    # How we learned of the investment, e.g. 'vc_portfolio'.
+    source: Mapped[str] = mapped_column(String, nullable=False)
+    is_lead: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default="false"
+    )

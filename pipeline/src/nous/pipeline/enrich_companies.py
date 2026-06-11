@@ -148,6 +148,18 @@ async def run_enrich_companies(
         company.last_enriched_at = now
         company.last_enriched_payload = description.model_dump(mode="json")
 
+        # Location + industry from the website. Only fill these when the LLM
+        # returned a value AND the column is currently empty — don't clobber
+        # values already set by another source.
+        if description.hq_city and not company.hq_city:
+            company.hq_city = description.hq_city
+        if description.hq_state and not company.hq_state:
+            company.hq_state = description.hq_state
+        if description.industry and not company.industry_group:
+            company.industry_group = description.industry
+        if (company.hq_city or company.hq_state) and not company.hq_country:
+            company.hq_country = "US"
+
         session.add(company)
 
         # People (CEO/CTO/founders) come from the same scraped pages; attribute

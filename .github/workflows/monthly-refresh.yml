@@ -62,6 +62,11 @@ jobs:
           fi
           uv run nous refresh-vc-portfolios "${ARGS[@]}"
 
+      - name: Deduplicate companies
+        # Runs after discovery so competitor analysis works on de-duplicated
+        # rows. Exact-domain merges need no LLM; fuzzy candidates use DeepSeek.
+        run: uv run nous dedup-companies
+
       - name: Analyze competitors
         run: |
           LIMIT="${{ inputs.competitor_limit }}"

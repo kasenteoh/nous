@@ -24,9 +24,13 @@ import logging
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from nous.db.upsert import auto_create_company
+from nous.db.upsert import (
+    auto_create_company,
+    link_company_investor,
+    upsert_investor,
+)
 from nous.sources.homepage import HomepageClient
-from nous.sources.vc_portfolios import ADAPTERS, PortfolioEntry
+from nous.sources.vc_portfolios import ADAPTERS, FIRM_DISPLAY_NAMES, PortfolioEntry
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +48,8 @@ class RefreshVcPortfoliosSummary(BaseModel):
     """auto_create_company returned (row, False) — found existing match."""
     companies_created: int = 0
     """auto_create_company returned (row, True) — inserted new row."""
+    investors_linked: int = 0
+    """Per-entry company<->investor links written (one per successful entry)."""
     adapter_failures: dict[str, str] = {}
     """firm slug -> error message; missing = success."""
 
@@ -97,7 +103,7 @@ async def run_refresh_vc_portfolios(
         for entry in entries:
             summary.entries_seen += 1
             try:
-                _, created = await auto_create_company(
+                company, created = await auto_create_company(
                     session,
                     name=entry.name,
                     website=entry.website,
@@ -108,6 +114,21 @@ async def run_refresh_vc_portfolios(
                     summary.companies_created += 1
                 else:
                     summary.companies_matched += 1
+
+                # The discovering firm IS an investor in this company. Record
+                # the company-level link with the firm's proper display name.
+                # Both helpers are idempotent, so this commits atomically with
+                # the company and is safe to re-run.
+                display_name = FIRM_DISPLAY_NAMES.get(entry.firm, entry.firm)
+                investor, _ = await upsert_investor(session, name=display_name)
+                await link_company_investor(
+                    session,
+                    company_id=company.id,
+                    investor_id=investor.id,
+                    source="vc_portfolio",
+                )
+                summary.investors_linked += 1
+
                 await session.commit()
             except Exception:  # noqa: BLE001 — keep going on per-entry failure
                 logger.exception(
