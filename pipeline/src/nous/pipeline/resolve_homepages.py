@@ -112,6 +112,7 @@ async def run_resolve_homepages(
                 client,
                 slug_base=slug_base,
                 company_name=company.name,
+                rejected_urls=company.rejected_urls or (),
             )
         except Exception:
             logger.exception("Unexpected error resolving homepage for %s", company.name)

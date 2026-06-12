@@ -702,9 +702,9 @@ _SALE_PHRASES: tuple[str, ...] = (
 # Registrar / domain-marketplace brands: only parked when a sale-intent
 # phrase co-occurs (brand names appear in footers of real sites).
 _MARKETPLACE_BRANDS: tuple[str, ...] = (
-    "spaceship",
+    "spaceship.com",  # domain-qualified: "spaceship" alone is a common noun (space-tourism copy false-positives)
     "godaddy",
-    "sedo",
+    "sedo.com",
     "afternic",
     "dan.com",
     "hugedomains",

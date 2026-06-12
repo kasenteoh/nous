@@ -21,8 +21,10 @@ from selectolax.parser import HTMLParser
 from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
 
 from nous.sources.duckduckgo import DuckDuckGoSearch, is_aggregator
+from nous.sources.parked import looks_parked
 from nous.sources.robots import RobotsBlockedError, RobotsCache
 from nous.util.slugify import strip_corporate_suffix
+from nous.util.url import canonical_domain
 
 # Re-export for backwards compatibility — callers that did
 # `from nous.sources.homepage import RobotsBlockedError` continue to work,
@@ -303,21 +305,37 @@ async def resolve_homepage(
     company_name: str,
     *,
     tlds: Iterable[str] = CANDIDATE_TLDS,
+    rejected_urls: Iterable[str] = (),
 ) -> str | None:
     """Phase 1: try ``{slug_base}{tld}`` for each TLD in order.
 
-    On a 200 response, validates that the page's visible text contains
-    ``slug_base`` (case-insensitive). Returns the first plausible URL on match.
+    Candidates whose canonical domain matches a previously rejected URL
+    (``rejected_urls`` — confirmed-wrong domains recorded by enrichment) are
+    skipped before fetching. On a 200 response, parked/for-sale pages are
+    rejected (see nous.sources.parked), then the page's visible text is
+    validated to contain ``slug_base`` (case-insensitive). Returns the first
+    plausible URL on match.
 
     Phase 2: if all TLD guesses miss, query DuckDuckGo for
     ``"{company_name}" startup``, filter out aggregator domains, and return the
-    first candidate whose page contains the company name.
+    first candidate whose page contains the company name (same parked/rejected
+    checks).
 
     Returns None if both phases miss.
     """
+    # Note: canonical_domain returns None for shared-hosting hosts (its
+    # dedup-identity contract), so rejected URLs on shared hosting are not
+    # blocked here — acceptable because the parked/enrichment checks re-reject
+    # them on refetch.
+    rejected_domains = {
+        d for d in (canonical_domain(u) for u in rejected_urls) if d is not None
+    }
+
     # Phase 1: TLD heuristic
     for tld in tlds:
         url = f"https://{slug_base}{tld}"
+        if canonical_domain(url) in rejected_domains:
+            continue
         try:
             result = await client.fetch(url)
         except RobotsBlockedError:
@@ -325,6 +343,11 @@ async def resolve_homepage(
         except httpx.HTTPStatusError:
             continue
         except httpx.RequestError:
+            continue
+
+        # A parked page always mentions the domain name, so this check MUST
+        # run before the name-mention acceptance below.
+        if looks_parked(result.content):
             continue
 
         # Validate: does visible page text mention the slug?
@@ -355,9 +378,13 @@ async def resolve_homepage(
     for candidate_url in candidates:
         if is_aggregator(candidate_url):
             continue
+        if canonical_domain(candidate_url) in rejected_domains:
+            continue
         try:
             result = await client.fetch(candidate_url)
         except (RobotsBlockedError, httpx.HTTPStatusError, httpx.RequestError):
+            continue
+        if looks_parked(result.content):
             continue
         visible_text = HTMLParser(result.content).text(strip=True).lower()
         # OR: either the suffix-stripped name or the full name appears in text.
