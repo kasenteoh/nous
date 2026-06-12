@@ -7,6 +7,7 @@ import { SpotlightDeck } from "@/components/SpotlightDeck";
 import { buildSpotlightPool } from "@/lib/spotlight";
 import {
   countCompanies,
+  countNewThisWeek,
   getIndustrySummary,
   listNewestCompanies,
   listRecentFundings,
@@ -17,13 +18,15 @@ const labelClass =
   "text-[11px] font-medium uppercase tracking-[0.14em] text-ink-muted";
 
 export default async function FrontPage() {
-  const [spotlights, fundings, newest, industries, total] = await Promise.all([
-    buildSpotlightPool(),
-    listRecentFundings(5),
-    listNewestCompanies(4),
-    getIndustrySummary(6),
-    countCompanies(),
-  ]);
+  const [spotlights, fundings, newest, industries, total, newCounts] =
+    await Promise.all([
+      buildSpotlightPool(),
+      listRecentFundings(5),
+      listNewestCompanies(4),
+      getIndustrySummary(6),
+      countCompanies(),
+      countNewThisWeek(),
+    ]);
 
   const hasMarginNotes = fundings.length > 0 || newest.length > 0;
 
@@ -59,6 +62,24 @@ export default async function FrontPage() {
         {/* ── Margin notes (~⅓, hairline left border) ─────────────────── */}
         {hasMarginNotes && (
           <aside className="md:border-l md:border-edge md:pl-10 space-y-10 min-w-0">
+            {/* "New this week" count line — hidden when both counts are 0 so
+                the aside layout is unchanged during quiet weeks. */}
+            {(newCounts.companies > 0 || newCounts.rounds > 0) && (
+              <section aria-label="New this week">
+                <p className="text-sm font-mono text-ink-muted leading-snug">
+                  <Link
+                    href="/new"
+                    className="text-accent hover:underline underline-offset-2"
+                  >
+                    New this week
+                  </Link>
+                  {": "}
+                  {newCounts.companies.toLocaleString("en-US")} companies,{" "}
+                  {newCounts.rounds.toLocaleString("en-US")} rounds →
+                </p>
+              </section>
+            )}
+
             {fundings.length > 0 && (
               <section aria-label="Recent fundings">
                 <h2 className={labelClass}>Recent fundings</h2>
