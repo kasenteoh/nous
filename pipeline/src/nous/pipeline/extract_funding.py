@@ -5,6 +5,11 @@ prompt and persist the structured round/investor data. Marks the article
 ``processed=true`` either way (success, "not a funding announcement", or
 low-confidence skip) so re-runs only revisit truly-unprocessed rows.
 
+Also applies company status events (acquired / shut_down / ipo) reported by
+the same extraction — see ``_apply_status_event``. This happens BEFORE the
+is_funding_announcement gate, because exit articles are usually not funding
+announcements.
+
 Idempotency:
 - ``processed`` flag is the work-queue gate; once set, the article is never
   re-extracted.
@@ -24,6 +29,7 @@ from __future__ import annotations
 
 import logging
 from datetime import UTC, datetime, timedelta
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel
@@ -63,6 +69,63 @@ class _RoundPersistCounts(BaseModel):
     funding_rounds_merged: int = 0
     investors_created: int = 0
     investor_links_created: int = 0
+
+
+def _apply_status_event(
+    company: Company,
+    extraction: FundingExtraction,
+    *,
+    source_url: str | None,
+) -> Literal["changed", "backfilled"] | None:
+    """Apply an acquired/shut_down/ipo event from *extraction* to *company*.
+
+    Returns "changed" when ``status`` itself transitioned, "backfilled" when
+    only a missing ``status_source_url`` was filled in, and None when the row
+    is untouched. Any non-None outcome means the caller must ensure a commit.
+
+    Rules:
+    - Only acts on medium/high ``status_confidence`` — low is noise.
+    - Never downgrades: a non-active status is never overwritten by the
+      pipeline (manual correction is the escape hatch). A re-confirmation of
+      the SAME status may backfill a missing ``status_source_url``.
+    - ``status_source_url`` is always set together with ``status`` — every
+      fact rendered on a company page needs a recorded source.
+
+    Both mutations are logged at INFO: status flips are rare and high-impact,
+    and the never-downgrade rule presumes a human can spot (and manually
+    correct) a wrong one — the log line is what makes that review possible.
+    """
+    if extraction.status_event is None:
+        return None
+    if extraction.status_confidence not in ("medium", "high"):
+        return None
+
+    if company.status == "active":
+        company.status = extraction.status_event
+        company.status_source_url = source_url
+        logger.info(
+            "Company status applied: %r -> '%s' (source: %s)",
+            company.name,
+            extraction.status_event,
+            source_url,
+        )
+        return "changed"
+
+    if (
+        company.status == extraction.status_event
+        and company.status_source_url is None
+        and source_url is not None
+    ):
+        company.status_source_url = source_url
+        logger.info(
+            "Company status source backfilled: %r stays '%s' (source: %s)",
+            company.name,
+            company.status,
+            source_url,
+        )
+        return "backfilled"
+
+    return None
 
 
 async def _persist_round_and_investors(
@@ -122,6 +185,10 @@ class ExtractFundingSummary(_RoundPersistCounts):
     skipped_not_funding: int = 0
     skipped_low_confidence: int = 0
     skipped_rate_limited: int = 0
+    # Companies whose `status` value actually transitioned (active -> exit).
+    status_changes_applied: int = 0
+    # Same-status re-confirmations that only filled a NULL status_source_url.
+    status_sources_backfilled: int = 0
 
 
 async def run_extract_funding(
@@ -182,6 +249,20 @@ async def run_extract_funding(
 
         summary.articles_processed += 1
 
+        # Status events (acquired / shut_down / ipo) apply BEFORE the
+        # is_funding_announcement gate: acquisition/shutdown articles are
+        # usually NOT funding announcements, and catching them is the whole
+        # point of the field.
+        status_outcome = _apply_status_event(
+            company, extraction, source_url=article.url
+        )
+        if status_outcome is not None:
+            if status_outcome == "changed":
+                summary.status_changes_applied += 1
+            else:
+                summary.status_sources_backfilled += 1
+            session.add(company)
+
         if not extraction.is_funding_announcement:
             summary.skipped_not_funding += 1
             article.processed = True
@@ -195,6 +276,11 @@ async def run_extract_funding(
             # (or `--include-low-confidence`) can retry. "Not a funding
             # announcement" is terminal-skip above; "low confidence" is a
             # transient-skip pending better extraction.
+            if status_outcome is not None:
+                # The ROUND extraction is deferred, but the status event has
+                # its own (medium/high) confidence — persist it now rather
+                # than leaving it pending on a path that never commits.
+                await session.commit()
             continue
 
         await _persist_round_and_investors(
@@ -221,6 +307,10 @@ class ExtractFundingWebsiteSummary(_RoundPersistCounts):
     skipped_not_funding: int = 0
     skipped_low_confidence: int = 0
     skipped_rate_limited: int = 0
+    # Companies whose `status` value actually transitioned (active -> exit).
+    status_changes_applied: int = 0
+    # Same-status re-confirmations that only filled a NULL status_source_url.
+    status_sources_backfilled: int = 0
 
 
 async def run_extract_funding_website(
@@ -311,6 +401,22 @@ async def run_extract_funding_website(
                 )
                 summary.llm_failures += 1
             else:
+                # Own-site status notices ("we've been acquired by X", "we are
+                # winding down") apply regardless of whether the page states
+                # funding. The prompt caps status_confidence at 'medium',
+                # which still passes the helper's medium/high gate. The
+                # end-of-loop stamp commit persists the change.
+                status_outcome = _apply_status_event(
+                    company,
+                    extraction,
+                    source_url=company.website
+                    or (pages[0].url if pages else None),
+                )
+                if status_outcome == "changed":
+                    summary.status_changes_applied += 1
+                elif status_outcome == "backfilled":
+                    summary.status_sources_backfilled += 1
+
                 if not extraction.is_funding_announcement:
                     summary.skipped_not_funding += 1
                 elif skip_low_confidence and extraction.confidence == "low":

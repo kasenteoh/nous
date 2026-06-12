@@ -84,6 +84,8 @@ def _make_extraction(
     leads: list[str] | None = None,
     others: list[str] | None = None,
     confidence: str = "high",
+    status_event: str | None = None,
+    status_confidence: str | None = None,
 ) -> FundingExtraction:
     return FundingExtraction(
         is_funding_announcement=is_funding,
@@ -95,6 +97,8 @@ def _make_extraction(
         lead_investors=leads if leads is not None else ["Lightspeed"],
         other_investors=others if others is not None else ["Founders Fund"],
         confidence=confidence,  # type: ignore[arg-type]
+        status_event=status_event,  # type: ignore[arg-type]
+        status_confidence=status_confidence,  # type: ignore[arg-type]
     )
 
 
@@ -598,3 +602,297 @@ async def test_website_fallback_stamps_attempt_even_without_funding(
 
     await db.refresh(company)
     assert company.website_funding_checked_at is not None
+
+
+# ---------------------------------------------------------------------------
+# Status events (acquired / shut_down / ipo)
+# ---------------------------------------------------------------------------
+
+
+async def test_acquisition_article_sets_status_and_marks_processed(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An acquisition article is usually NOT a funding announcement; the status
+    must still be applied (with the article as source) and the article must
+    still be marked processed — same as any other non-funding article."""
+    company = _make_company("AcquiredCo")
+    db.add(company)
+    await db.flush()
+    article = _make_article(company.id, url="https://news.example.com/acquired")
+    db.add(article)
+    await db.flush()
+    await db.commit()
+
+    async def _fake(prompt: str, schema: type) -> FundingExtraction:
+        return _make_extraction(
+            is_funding=False,
+            leads=[],
+            others=[],
+            status_event="acquired",
+            status_confidence="high",
+        )
+
+    monkeypatch.setattr(
+        "nous.pipeline.extract_funding.complete_json", _fake
+    )
+
+    summary = await run_extract_funding(db, limit=10)
+    assert summary.skipped_not_funding == 1
+    assert summary.funding_rounds_created == 0
+    assert summary.status_changes_applied == 1
+
+    await db.refresh(company)
+    assert company.status == "acquired"
+    assert company.status_source_url == "https://news.example.com/acquired"
+
+    refetched = await db.get(NewsArticle, article.id)
+    assert refetched is not None
+    assert refetched.processed is True
+
+
+async def test_low_confidence_round_branch_commits_status_event(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A funding article with a LOW round confidence but a HIGH-confidence
+    status event takes the transient-skip `continue` — which never reaches the
+    end-of-loop commit, so the branch must commit the status itself.
+
+    The conftest harness turns every `session.commit()` into a SAVEPOINT
+    release inside an outer transaction, so rolling the session back after the
+    run discards exactly the work the stage left uncommitted. If the in-branch
+    commit were removed, the status change would die in that rollback and the
+    re-fetch below would see 'active'."""
+    company = _make_company("LowConfExitCo")
+    db.add(company)
+    await db.flush()
+    article = _make_article(company.id, url="https://news.example.com/low-conf-exit")
+    db.add(article)
+    await db.flush()
+    await db.commit()
+    company_id = company.id
+    article_id = article.id
+
+    async def _fake(prompt: str, schema: type) -> FundingExtraction:
+        return _make_extraction(
+            is_funding=True,
+            confidence="low",
+            status_event="acquired",
+            status_confidence="high",
+        )
+
+    monkeypatch.setattr(
+        "nous.pipeline.extract_funding.complete_json", _fake
+    )
+
+    summary = await run_extract_funding(db, limit=10, skip_low_confidence=True)
+    assert summary.status_changes_applied == 1
+    assert summary.skipped_low_confidence == 1
+    assert summary.funding_rounds_created == 0
+
+    # Throw away anything the stage left pending: only explicitly committed
+    # work survives this rollback.
+    await db.rollback()
+
+    refetched = await db.get(Company, company_id)
+    assert refetched is not None
+    assert refetched.status == "acquired"
+    assert refetched.status_source_url == "https://news.example.com/low-conf-exit"
+
+    # The ROUND extraction stays retryable: low confidence is a transient
+    # skip, so the article must remain unprocessed.
+    refetched_article = await db.get(NewsArticle, article_id)
+    assert refetched_article is not None
+    assert refetched_article.processed is False
+
+
+async def test_low_confidence_status_event_is_ignored(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """status_confidence='low' is noise — the company stays active."""
+    company = _make_company("MaybeDeadCo")
+    db.add(company)
+    await db.flush()
+    db.add(_make_article(company.id, url="https://news.example.com/maybe-dead"))
+    await db.flush()
+    await db.commit()
+
+    async def _fake(prompt: str, schema: type) -> FundingExtraction:
+        return _make_extraction(
+            is_funding=False,
+            leads=[],
+            others=[],
+            status_event="shut_down",
+            status_confidence="low",
+        )
+
+    monkeypatch.setattr(
+        "nous.pipeline.extract_funding.complete_json", _fake
+    )
+
+    summary = await run_extract_funding(db, limit=10)
+    assert summary.status_changes_applied == 0
+    assert summary.status_sources_backfilled == 0
+
+    await db.refresh(company)
+    assert company.status == "active"
+    assert company.status_source_url is None
+
+
+async def test_status_event_never_downgrades_existing_status(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A non-active status is never overwritten — manual correction is the
+    escape hatch. A later 'shut_down' article must not clobber 'acquired'."""
+    company = _make_company("AlreadyAcquiredCo")
+    company.status = "acquired"
+    company.status_source_url = "https://news.example.com/original-acquisition"
+    db.add(company)
+    await db.flush()
+    db.add(_make_article(company.id, url="https://news.example.com/shutdown-later"))
+    await db.flush()
+    await db.commit()
+
+    async def _fake(prompt: str, schema: type) -> FundingExtraction:
+        return _make_extraction(
+            is_funding=False,
+            leads=[],
+            others=[],
+            status_event="shut_down",
+            status_confidence="high",
+        )
+
+    monkeypatch.setattr(
+        "nous.pipeline.extract_funding.complete_json", _fake
+    )
+
+    summary = await run_extract_funding(db, limit=10)
+    assert summary.status_changes_applied == 0
+    assert summary.status_sources_backfilled == 0
+
+    await db.refresh(company)
+    assert company.status == "acquired"
+    assert (
+        company.status_source_url == "https://news.example.com/original-acquisition"
+    )
+
+    # The article is still consumed by the queue.
+    articles = (await db.execute(select(NewsArticle))).scalars().all()
+    assert all(a.processed for a in articles)
+
+
+async def test_same_status_reconfirmation_fills_null_source_url(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Re-confirming the SAME status may backfill a missing source URL (e.g.
+    a manually set status without attribution) — but never replaces one. The
+    status value itself does not change, so the backfill counts under
+    status_sources_backfilled, NOT status_changes_applied."""
+    company = _make_company("ManualAcquiredCo")
+    company.status = "acquired"
+    company.status_source_url = None
+    db.add(company)
+    await db.flush()
+    db.add(_make_article(company.id, url="https://news.example.com/confirm-acq"))
+    await db.flush()
+    await db.commit()
+
+    async def _fake(prompt: str, schema: type) -> FundingExtraction:
+        return _make_extraction(
+            is_funding=False,
+            leads=[],
+            others=[],
+            status_event="acquired",
+            status_confidence="medium",
+        )
+
+    monkeypatch.setattr(
+        "nous.pipeline.extract_funding.complete_json", _fake
+    )
+
+    summary = await run_extract_funding(db, limit=10)
+    assert summary.status_changes_applied == 0
+    assert summary.status_sources_backfilled == 1
+
+    await db.refresh(company)
+    assert company.status == "acquired"
+    assert company.status_source_url == "https://news.example.com/confirm-acq"
+
+
+async def test_null_status_event_leaves_company_active(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A plain funding extraction (status_event=None) never touches status."""
+    company = _make_company("StillAliveCo")
+    db.add(company)
+    await db.flush()
+    db.add(_make_article(company.id, url="https://news.example.com/normal-round"))
+    await db.flush()
+    await db.commit()
+
+    async def _fake(prompt: str, schema: type) -> FundingExtraction:
+        return _make_extraction()
+
+    monkeypatch.setattr(
+        "nous.pipeline.extract_funding.complete_json", _fake
+    )
+
+    summary = await run_extract_funding(db, limit=10)
+    assert summary.funding_rounds_created == 1
+    assert summary.status_changes_applied == 0
+    assert summary.status_sources_backfilled == 0
+
+    await db.refresh(company)
+    assert company.status == "active"
+    assert company.status_source_url is None
+
+
+async def test_website_status_event_applies_with_medium_confidence(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The website path applies an own-site status notice (prompt caps it at
+    'medium', which passes the medium/high gate) with the company website as
+    the source URL — and still stamps the rotation marker."""
+    company = _make_company("WindDownCo")
+    company.website = "https://winddownco.example/"
+    db.add(company)
+    await db.flush()
+    db.add(_add_raw_page(company.id, "https://winddownco.example/about"))
+    await db.flush()
+    await db.commit()
+
+    async def _fake(prompt: str, schema: type) -> FundingExtraction:
+        return _make_extraction(
+            is_funding=False,
+            leads=[],
+            others=[],
+            status_event="shut_down",
+            status_confidence="medium",
+        )
+
+    monkeypatch.setattr(
+        "nous.pipeline.extract_funding.complete_json", _fake
+    )
+
+    summary = await run_extract_funding_website(db, limit=10)
+    assert summary.companies_seen == 1
+    assert summary.status_changes_applied == 1
+    assert summary.funding_rounds_created == 0
+
+    await db.refresh(company)
+    assert company.status == "shut_down"
+    assert company.status_source_url == "https://winddownco.example/"
+    assert company.website_funding_checked_at is not None
+
+
+async def test_companies_status_check_rejects_invalid_values(
+    db: AsyncSession,
+) -> None:
+    """The CHECK constraint blocks any status outside the four known values."""
+    from sqlalchemy.exc import IntegrityError
+
+    company = _make_company("ZombieCo")
+    company.status = "zombie"
+    db.add(company)
+    with pytest.raises(IntegrityError):
+        await db.flush()
+    await db.rollback()

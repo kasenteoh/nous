@@ -112,7 +112,7 @@ export async function listCompanies(
   let query = supabase
     .from("companies")
     .select(
-      "slug, name, hq_city, hq_state, industry_group, description_short",
+      "slug, name, hq_city, hq_state, industry_group, description_short, status",
       { count: "exact" },
     );
 
@@ -165,6 +165,7 @@ export async function listCompanies(
     hq_state: (c.hq_state as string | null) ?? null,
     industry_group: (c.industry_group as string | null) ?? null,
     description_short: (c.description_short as string | null) ?? null,
+    status: c.status as string,
   }));
 
   return { rows, total: count ?? rows.length };

@@ -26,9 +26,21 @@ class Company(Base):
 
     Companies enter the DB via VC portfolio scrapes, funding news, or the
     TechCrunch venture feed (see ``discovered_via``).
+
+    ``status`` tracks the company's lifecycle ('active' | 'acquired' |
+    'shut_down' | 'ipo') — VC portfolios list their exits, so without it
+    acquired/dead companies would render as live startups. extract-funding
+    sets it from explicit announcements; ``status_source_url`` records the
+    article (or company page) that announced the event.
     """
 
     __tablename__ = "companies"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('active', 'acquired', 'shut_down', 'ipo')",
+            name="ck_companies_status",
+        ),
+    )
 
     name: Mapped[str]
     slug: Mapped[str] = mapped_column(unique=True, index=True)
@@ -105,6 +117,17 @@ class Company(Base):
     discovered_via: Mapped[str] = mapped_column(
         String, nullable=False, server_default="unknown"
     )
+
+    # Lifecycle status — 'active' | 'acquired' | 'shut_down' | 'ipo' (CHECK in
+    # __table_args__). Set by extract-funding when an article or the company's
+    # own site explicitly announces the event with medium/high confidence; a
+    # non-active value is never overwritten by the pipeline (manual correction
+    # is the escape hatch). status_source_url records the announcing article/
+    # page, per the every-fact-has-a-source rule.
+    status: Mapped[str] = mapped_column(
+        String, nullable=False, server_default="active"
+    )
+    status_source_url: Mapped[str | None] = mapped_column(String, nullable=True)
 
 
 class RawPage(Base):
