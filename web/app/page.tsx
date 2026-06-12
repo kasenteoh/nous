@@ -2,7 +2,9 @@
 // the route stays static + ISR; old /?q=… URLs simply render this page.
 export const revalidate = 21600;
 
+import type { Metadata } from "next";
 import Link from "next/link";
+import { JsonLd } from "@/components/JsonLd";
 import { SpotlightDeck } from "@/components/SpotlightDeck";
 import { buildSpotlightPool } from "@/lib/spotlight";
 import {
@@ -13,6 +15,13 @@ import {
   listRecentFundings,
 } from "@/lib/queries";
 import { formatDate, formatUsd } from "@/lib/format";
+import { SITE_NAME, siteOrigin } from "@/lib/site";
+
+// Title and description inherit the layout defaults; only the canonical is
+// page-specific (resolved against metadataBase).
+export const metadata: Metadata = {
+  alternates: { canonical: "/" },
+};
 
 const labelClass =
   "text-[11px] font-medium uppercase tracking-[0.14em] text-ink-muted";
@@ -30,8 +39,33 @@ export default async function FrontPage() {
 
   const hasMarginNotes = fundings.length > 0 || newest.length > 0;
 
+  const origin = siteOrigin();
+
   return (
     <main className="flex-1 w-full max-w-6xl mx-auto px-6 flex flex-col">
+      {/* Structured data: the site operator + sitelinks-searchbox wiring into
+          the /companies?q=… search the masthead form already exposes. */}
+      <JsonLd
+        data={{
+          "@context": "https://schema.org",
+          "@type": "Organization",
+          name: SITE_NAME,
+          url: origin,
+        }}
+      />
+      <JsonLd
+        data={{
+          "@context": "https://schema.org",
+          "@type": "WebSite",
+          name: SITE_NAME,
+          url: origin,
+          potentialAction: {
+            "@type": "SearchAction",
+            target: `${origin}/companies?q={search_term_string}`,
+            "query-input": "required name=search_term_string",
+          },
+        }}
+      />
       <div className="flex-1 grid gap-12 md:grid-cols-3 py-14 md:py-20">
         {/* ── Spotlight deck (~⅔) ─────────────────────────────────────── */}
         <div className="md:col-span-2">

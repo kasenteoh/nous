@@ -1,9 +1,11 @@
 import type { Metadata } from "next";
 
 export const metadata: Metadata = {
-  title: "About — nous",
+  // The layout's title template appends " — nous".
+  title: "About",
   description:
     "How nous discovers US software startups, where its data comes from, and how its company pages are built.",
+  alternates: { canonical: "/about" },
 };
 
 export default function AboutPage() {
