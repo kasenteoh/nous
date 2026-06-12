@@ -608,3 +608,182 @@ export async function getCompanyBySlug(
     news,
   };
 }
+
+// ─── "New this week" queries ──────────────────────────────────────────────────
+
+/** One row in the new-companies feed. */
+export interface NewThisWeekCompanyRow {
+  slug: string;
+  name: string;
+  description_short: string | null;
+  industry_group: string | null;
+  created_at: string;
+}
+
+/** One row in the new-funding-rounds feed. */
+export interface NewThisWeekFundingRow {
+  round_type: string | null;
+  amount_raised: number | null;
+  announced_date: string | null;
+  created_at: string;
+  companySlug: string;
+  companyName: string;
+}
+
+/** Counts of companies and rounds extracted in the last N days. */
+export interface NewThisWeekCounts {
+  companies: number;
+  rounds: number;
+}
+
+/** Companies extracted (created_at) in the last `days` days, newest first. */
+export async function listNewThisWeekCompanies(
+  days = 7,
+  cap = 200,
+): Promise<NewThisWeekCompanyRow[]> {
+  let supabase: ReturnType<typeof createSupabaseServerClient>;
+  try {
+    supabase = createSupabaseServerClient();
+  } catch (err) {
+    console.warn(
+      "[listNewThisWeekCompanies] Supabase not configured:",
+      (err as Error).message,
+    );
+    return [];
+  }
+
+  const cutoff = new Date(Date.now() - days * 86400e3).toISOString();
+
+  const { data, error } = await supabase
+    .from("companies")
+    .select("slug, name, description_short, industry_group, created_at")
+    .gte("created_at", cutoff)
+    .order("created_at", { ascending: false })
+    .limit(cap);
+
+  if (error) {
+    console.error("[listNewThisWeekCompanies] query failed:", error.message);
+    return [];
+  }
+
+  return (data ?? []).map((row) => ({
+    slug: row.slug as string,
+    name: row.name as string,
+    description_short: (row.description_short as string | null) ?? null,
+    industry_group: (row.industry_group as string | null) ?? null,
+    created_at: row.created_at as string,
+  }));
+}
+
+/**
+ * Funding rounds extracted (created_at) in the last `days` days, newest first.
+ * Uses extraction time — NOT announced_date — as the honesty claim is
+ * "extracted this week". Rows with a missing company join are dropped (spec
+ * requires every fact to link to a company page).
+ */
+export async function listNewThisWeekFundingRounds(
+  days = 7,
+  cap = 200,
+): Promise<NewThisWeekFundingRow[]> {
+  let supabase: ReturnType<typeof createSupabaseServerClient>;
+  try {
+    supabase = createSupabaseServerClient();
+  } catch (err) {
+    console.warn(
+      "[listNewThisWeekFundingRounds] Supabase not configured:",
+      (err as Error).message,
+    );
+    return [];
+  }
+
+  const cutoff = new Date(Date.now() - days * 86400e3).toISOString();
+
+  const { data, error } = await supabase
+    .from("funding_rounds")
+    .select(
+      "round_type, amount_raised, announced_date, created_at, companies(slug, name)",
+    )
+    .gte("created_at", cutoff)
+    .order("created_at", { ascending: false })
+    .limit(cap);
+
+  if (error) {
+    console.error("[listNewThisWeekFundingRounds] query failed:", error.message);
+    return [];
+  }
+
+  type Row = {
+    round_type: string | null;
+    amount_raised: number | null;
+    announced_date: string | null;
+    created_at: string;
+    companies: NestedFundingCompany | NestedFundingCompany[] | null;
+  };
+
+  return ((data ?? []) as Row[]).flatMap((row) => {
+    const company = Array.isArray(row.companies)
+      ? row.companies[0]
+      : row.companies;
+    if (!company?.name || !company.slug) return [];
+    return [
+      {
+        round_type: row.round_type,
+        amount_raised: row.amount_raised,
+        announced_date: row.announced_date,
+        created_at: row.created_at,
+        companySlug: company.slug,
+        companyName: company.name,
+      },
+    ];
+  });
+}
+
+/**
+ * Head-only counts of companies and funding rounds extracted in the last 7
+ * days. Used by the homepage aside to decide whether to render the summary
+ * line. Returns {companies: 0, rounds: 0} on any error so the page degrades
+ * gracefully.
+ */
+export async function countNewThisWeek(days = 7): Promise<NewThisWeekCounts> {
+  let supabase: ReturnType<typeof createSupabaseServerClient>;
+  try {
+    supabase = createSupabaseServerClient();
+  } catch (err) {
+    console.warn(
+      "[countNewThisWeek] Supabase not configured:",
+      (err as Error).message,
+    );
+    return { companies: 0, rounds: 0 };
+  }
+
+  const cutoff = new Date(Date.now() - days * 86400e3).toISOString();
+
+  const [companiesResult, roundsResult] = await Promise.all([
+    supabase
+      .from("companies")
+      .select("id", { count: "exact", head: true })
+      .gte("created_at", cutoff),
+    supabase
+      .from("funding_rounds")
+      .select("id", { count: "exact", head: true })
+      .gte("created_at", cutoff),
+  ]);
+
+  if (companiesResult.error) {
+    console.error(
+      "[countNewThisWeek] companies count failed:",
+      companiesResult.error.message,
+    );
+  }
+  if (roundsResult.error) {
+    console.error(
+      "[countNewThisWeek] rounds count failed:",
+      roundsResult.error.message,
+    );
+  }
+
+  return {
+    companies: companiesResult.count ?? 0,
+    rounds: roundsResult.count ?? 0,
+  };
+}
