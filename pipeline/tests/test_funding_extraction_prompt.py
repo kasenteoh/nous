@@ -45,8 +45,10 @@ def test_build_prompt_truncates_long_article_text() -> None:
     assert "a" * (MAX_ARTICLE_CHARS + 1) not in prompt
     # Sanity: the rest of the template is a small fixed overhead, so the
     # rendered prompt length is the truncated body plus the template scaffolding.
+    # (Ceiling bumped 2,000 → 2,500 when the total_raised_usd rule landed; it
+    # still guards against runaway template bloat.)
     template_overhead = len(prompt) - MAX_ARTICLE_CHARS
-    assert 0 < template_overhead < 2_000
+    assert 0 < template_overhead < 2_500
 
 
 def test_build_prompt_short_article_is_unchanged() -> None:
@@ -248,6 +250,56 @@ def test_status_event_schema_description_carries_direction_clause() -> None:
     desc = schema["properties"]["status_event"]["description"]
     assert "If the named company is the acquirer" in desc
     assert "named company itself is the company being bought" in desc
+
+
+# ---------------------------------------------------------------------------
+# Stated cumulative total (total_raised_usd)
+# ---------------------------------------------------------------------------
+
+
+def test_total_raised_defaults_to_none_on_legacy_payloads() -> None:
+    """Payloads predating total_raised_usd still validate, defaulting to None —
+    old fixtures and cached LLM payloads must keep parsing unchanged (same
+    compat contract as the status_event fields)."""
+    obj = FundingExtraction.model_validate_json(json.dumps(VALID_FUNDING_PAYLOAD))
+    assert obj.total_raised_usd is None
+
+    neg = FundingExtraction.model_validate_json(json.dumps(NOT_FUNDING_PAYLOAD))
+    assert neg.total_raised_usd is None
+
+
+def test_total_raised_round_trips() -> None:
+    """A stated cumulative total parses and survives a dump/validate round-trip
+    — including on a NON-funding payload (totals appear in acquisition
+    coverage too)."""
+    payload = {**NOT_FUNDING_PAYLOAD, "total_raised_usd": 285000000}
+    obj = FundingExtraction.model_validate_json(json.dumps(payload))
+    assert obj.is_funding_announcement is False
+    assert obj.total_raised_usd == Decimal("285000000")
+
+    again = FundingExtraction.model_validate(obj.model_dump())
+    assert again.total_raised_usd == Decimal("285000000")
+
+
+def test_news_prompt_contains_total_raised_rule() -> None:
+    """The news template must ask for an article-STATED cumulative total —
+    even on non-funding articles — and forbid the model computing one."""
+    prompt = build_prompt(company_name="Acme", article_text="x")
+    assert "total_raised_usd" in prompt
+    assert "to date" in prompt
+    assert "never sum or infer one yourself" in prompt
+    assert "amount_raised_usd (the round being announced)" in prompt
+    # Totals appear in non-funding coverage (e.g. acquisition articles), so the
+    # rule must carve out the "leave other fields null" instruction.
+    assert prompt.count("even when is_funding_announcement is false") >= 2
+
+
+def test_website_prompt_contains_total_raised_rule() -> None:
+    """The website template carries the equivalent rule — sites often state
+    "we've raised $X" without it being a round announcement."""
+    prompt = build_website_prompt(company_name="Acme", page_text="x")
+    assert "total_raised_usd" in prompt
+    assert "never sum" in prompt
 
 
 # ---------------------------------------------------------------------------

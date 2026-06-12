@@ -44,7 +44,10 @@ Throw at module load (server-only) so misconfigs fail fast and loud.
 The detail page sums `amount_raised` across all rounds; if
 `reconcile_funding_round` ever fails to merge two articles about the same round,
 the tile double-counts. Document the assumption near the sum; longer-term add a
-`round_correction_of` pointer for amended rounds.
+`round_correction_of` pointer for amended rounds. Since the hybrid total-raised
+change, an article-stated cumulative total caps the displayed figure whenever
+articles state one that exceeds the sum (the tile shows max(stated, sum) —
+partial mitigation); the reconcile-merge risk itself stands.
 
 ### `formatUsd` rounding collapses distinct amounts [S]
 $1.51M and $1.49M both render as "$1.5M" with no way to see exact figures.
