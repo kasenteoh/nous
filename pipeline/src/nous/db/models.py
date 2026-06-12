@@ -12,6 +12,7 @@ from sqlalchemy import (
     Numeric,
     SmallInteger,
     String,
+    Text,
     UniqueConstraint,
     func,
 )
@@ -33,6 +34,14 @@ class Company(Base):
     acquired/dead companies would render as live startups. extract-funding
     sets it from explicit announcements; ``status_source_url`` records the
     article (or company page) that announced the event.
+
+    ``total_raised_usd`` is a STATED cumulative total from an article ("has
+    raised $285M to date"), distinct from the sum of funding_rounds rows —
+    news discovery's 7-day lookback means historical rounds are never
+    backfilled, so the sum undercounts older companies. Every rendered fact
+    needs a source, hence ``total_raised_source_url``; ``total_raised_as_of``
+    (the stating article's published date) gives newest-article-wins
+    semantics when claims conflict.
     """
 
     __tablename__ = "companies"
@@ -140,6 +149,20 @@ class Company(Base):
         String, nullable=False, server_default="active"
     )
     status_source_url: Mapped[str | None] = mapped_column(String, nullable=True)
+
+    # Stated cumulative "total raised to date" — a figure an article (or the
+    # company's own site) explicitly states, NOT a sum of funding_rounds rows.
+    # Applied by extract-funding (_apply_total_raised) with newest-article-wins
+    # semantics ordered by total_raised_as_of; total_raised_source_url records
+    # the stating article/page, per the every-fact-has-a-source rule. All
+    # three columns always travel together.
+    total_raised_usd: Mapped[Decimal | None] = mapped_column(
+        Numeric(20, 2), nullable=True
+    )
+    total_raised_source_url: Mapped[str | None] = mapped_column(
+        Text, nullable=True
+    )
+    total_raised_as_of: Mapped[date | None] = mapped_column(Date, nullable=True)
 
 
 class RawPage(Base):

@@ -10,6 +10,12 @@ the same extraction — see ``_apply_status_event``. This happens BEFORE the
 is_funding_announcement gate, because exit articles are usually not funding
 announcements.
 
+Article-STATED cumulative totals ("has raised $285M to date") are applied the
+same way — see ``_apply_total_raised`` — because they too appear in
+non-funding coverage (acquisition articles recap funding history). They land
+on the company row (total_raised_usd/_source_url/_as_of) with
+newest-article-wins semantics; the web tile shows max(stated, sum-of-rounds).
+
 Idempotency:
 - ``processed`` flag is the work-queue gate; once set, the article is never
   re-extracted.
@@ -28,7 +34,7 @@ Quota discipline (spec §11):
 from __future__ import annotations
 
 import logging
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Literal
 from uuid import UUID
 
@@ -60,6 +66,20 @@ logger = logging.getLogger(__name__)
 
 # Minimum cleaned website text length to bother extracting from.
 _MIN_TEXT_CHARS = 200
+
+# Phrases that signal an article states a cumulative funding total. Used by
+# the --requery-totals backfill to pick already-processed articles worth a
+# second LLM pass; matched case-insensitively via ILIKE.
+# Note: leading-wildcard ILIKE over news_articles.raw_content is deliberately
+# unindexable — acceptable as a manual one-off lever bounded by --limit (the
+# CLAUDE.md index-every-WHERE rule is for hot paths, not this backfill).
+_TOTAL_PHRASES: tuple[str, ...] = (
+    "%to date%",
+    "%in total%",
+    "%total funding%",
+    "%total raised%",
+    "%altogether%",
+)
 
 
 class _RoundPersistCounts(BaseModel):
@@ -128,6 +148,61 @@ def _apply_status_event(
     return None
 
 
+def _apply_total_raised(
+    company: Company,
+    extraction: FundingExtraction,
+    *,
+    source_url: str | None,
+    as_of: date,
+) -> bool:
+    """Apply an article-stated cumulative "total raised" to *company*.
+
+    Returns True when the row was updated (the caller must ensure a commit),
+    False when untouched.
+
+    Rules:
+    - Only acts when the extraction carries a stated total. The prompt forbids
+      the model from summing or inferring one, so a non-null value is always
+      an explicit claim in the source text — never fabricated here either.
+    - Newest-article-wins: records when the company has no stated total yet,
+      or when *as_of* is strictly newer than the recorded total_raised_as_of.
+      A newer-but-SMALLER stated total still wins — it is the most recent
+      source claim, and the web tile shows max(stated, sum-of-rounds), so an
+      understated claim can never drag the display below the known rounds.
+      Same-day or older claims never overwrite, keeping re-runs idempotent.
+      An existing claim with a NULL as_of (manual edit) can't assert recency,
+      so any dated claim supersedes it.
+    - All three columns travel together: ``total_raised_source_url``
+      satisfies the every-rendered-fact-needs-a-source rule and
+      ``total_raised_as_of`` orders future claims.
+
+    Applied totals are logged at INFO, like status events: newest-wins
+    presumes a human can spot (and manually correct) a bad claim, and the
+    log line is what makes that review possible.
+    """
+    if extraction.total_raised_usd is None:
+        return False
+
+    if (
+        company.total_raised_usd is not None
+        and company.total_raised_as_of is not None
+        and as_of <= company.total_raised_as_of
+    ):
+        return False
+
+    company.total_raised_usd = extraction.total_raised_usd
+    company.total_raised_source_url = source_url
+    company.total_raised_as_of = as_of
+    logger.info(
+        "Company total raised recorded: %r -> %s USD as of %s (source: %s)",
+        company.name,
+        extraction.total_raised_usd,
+        as_of,
+        source_url,
+    )
+    return True
+
+
 async def _persist_round_and_investors(
     session: AsyncSession,
     counts: _RoundPersistCounts,
@@ -189,6 +264,8 @@ class ExtractFundingSummary(_RoundPersistCounts):
     status_changes_applied: int = 0
     # Same-status re-confirmations that only filled a NULL status_source_url.
     status_sources_backfilled: int = 0
+    # Companies whose stated cumulative total was recorded/superseded.
+    totals_recorded: int = 0
 
 
 async def run_extract_funding(
@@ -197,16 +274,38 @@ async def run_extract_funding(
     limit: int = 1000,
     skip_low_confidence: bool = True,
     proximity_days: int = 60,
+    requery_totals: bool = False,
 ) -> ExtractFundingSummary:
-    """Walk unprocessed news_articles oldest-first and extract funding rounds."""
+    """Walk unprocessed news_articles oldest-first and extract funding rounds.
+
+    With ``requery_totals=True`` the selection flips to a one-time backfill:
+    articles ALREADY processed whose text matches a cumulative-total phrase
+    (``_TOTAL_PHRASES``, case-insensitive) and whose company has no stated
+    total yet — totals landed in the schema after those articles were
+    consumed, so this is the lever that re-reads them. The articles re-run
+    the exact same extraction+apply path, which is idempotent end to end:
+    rounds reconcile into existing rows, status never downgrades, totals
+    apply newest-wins, and the articles stay processed (the flag is never
+    cleared, so the normal queue is unaffected).
+    """
     summary = ExtractFundingSummary()
 
-    stmt = (
-        select(NewsArticle)
-        .where(NewsArticle.processed.is_(False))
-        .order_by(NewsArticle.published_date.desc().nulls_last(), NewsArticle.created_at.asc())
-        .limit(limit)
-    )
+    if requery_totals:
+        stmt = (
+            select(NewsArticle)
+            .join(Company, Company.id == NewsArticle.company_id)
+            .where(NewsArticle.processed.is_(True))
+            .where(
+                or_(*(NewsArticle.raw_content.ilike(p) for p in _TOTAL_PHRASES))
+            )
+            .where(Company.total_raised_usd.is_(None))
+        )
+    else:
+        stmt = select(NewsArticle).where(NewsArticle.processed.is_(False))
+    stmt = stmt.order_by(
+        NewsArticle.published_date.desc().nulls_last(),
+        NewsArticle.created_at.asc(),
+    ).limit(limit)
     result = await session.execute(stmt)
     articles = result.scalars().all()
 
@@ -263,6 +362,21 @@ async def run_extract_funding(
                 summary.status_sources_backfilled += 1
             session.add(company)
 
+        # Stated cumulative totals also apply BEFORE the gate: they appear in
+        # non-funding coverage too (e.g. acquisition articles recapping the
+        # company's funding history). as_of falls back to today when the feed
+        # gave no published date, so the claim still participates in the
+        # newest-wins ordering.
+        total_recorded = _apply_total_raised(
+            company,
+            extraction,
+            source_url=article.url,
+            as_of=article.published_date or datetime.now(tz=UTC).date(),
+        )
+        if total_recorded:
+            summary.totals_recorded += 1
+            session.add(company)
+
         if not extraction.is_funding_announcement:
             summary.skipped_not_funding += 1
             article.processed = True
@@ -276,10 +390,11 @@ async def run_extract_funding(
             # (or `--include-low-confidence`) can retry. "Not a funding
             # announcement" is terminal-skip above; "low confidence" is a
             # transient-skip pending better extraction.
-            if status_outcome is not None:
-                # The ROUND extraction is deferred, but the status event has
-                # its own (medium/high) confidence — persist it now rather
-                # than leaving it pending on a path that never commits.
+            if status_outcome is not None or total_recorded:
+                # The ROUND extraction is deferred, but the status event /
+                # stated total carry their own validity — persist them now
+                # rather than leaving them pending on a path that never
+                # commits.
                 await session.commit()
             continue
 
@@ -311,6 +426,8 @@ class ExtractFundingWebsiteSummary(_RoundPersistCounts):
     status_changes_applied: int = 0
     # Same-status re-confirmations that only filled a NULL status_source_url.
     status_sources_backfilled: int = 0
+    # Companies whose stated cumulative total was recorded/superseded.
+    totals_recorded: int = 0
 
 
 async def run_extract_funding_website(
@@ -416,6 +533,20 @@ async def run_extract_funding_website(
                     summary.status_changes_applied += 1
                 elif status_outcome == "backfilled":
                     summary.status_sources_backfilled += 1
+
+                # Own-site stated totals ("we've raised $X to date") apply
+                # regardless of whether the page states a round. as_of is
+                # today — a live page asserts its claim now, and there is no
+                # publication date to prefer. The end-of-loop stamp commit
+                # persists the change.
+                if _apply_total_raised(
+                    company,
+                    extraction,
+                    source_url=company.website
+                    or (pages[0].url if pages else None),
+                    as_of=datetime.now(tz=UTC).date(),
+                ):
+                    summary.totals_recorded += 1
 
                 if not extraction.is_funding_announcement:
                     summary.skipped_not_funding += 1

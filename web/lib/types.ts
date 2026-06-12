@@ -29,6 +29,16 @@ export interface CompanyRow {
   status: string;
   // Article/page that announced the status event; null while status='active'.
   status_source_url: string | null;
+  // Hybrid "total raised" (migration 0021): an article-STATED cumulative
+  // total ("has raised $285M to date"), distinct from the sum of
+  // funding_rounds — news discovery never backfills historical rounds, so the
+  // sum undercounts older companies. Optional (`?`), not just nullable: prod
+  // rows lack these columns until the migration runs there, and select("*")
+  // simply omits unknown columns, so the keys may be absent at runtime.
+  // Treat undefined as null. The three fields always travel together.
+  total_raised_usd?: number | null;
+  total_raised_source_url?: string | null;
+  total_raised_as_of?: string | null; // ISO date (YYYY-MM-DD) or null
   // Consecutive homepage-fetch failures across scrape-homepages runs. The
   // scraper bumps this on a total fetch failure, resets it on success, and
   // leaves it unchanged on a robots.txt block. A high value is a low-confidence

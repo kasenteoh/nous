@@ -1,13 +1,9 @@
 """Tests for the extract-funding stage.
 
-DB-gated integration tests covering:
-- Round + investor creation from a fixture FundingExtraction.
-- Re-extraction within the proximity window merges into the existing round.
-- Different round_type or out-of-window date creates a separate round.
-- is_funding_announcement=False marks article processed without creating rounds.
-- Low confidence skipped by default; opt-in via skip_low_confidence=False.
-- limit caps articles per run.
-- Lead-then-other for the same investor stays sticky-lead.
+DB-gated integration tests. For coverage by area see the section banners
+throughout this file (Core extraction, Reconciliation, Investor link
+stickiness, Limit, CHECK constraint, Website fallback, Status events,
+Stated cumulative totals, --requery-totals one-time backfill).
 """
 
 from __future__ import annotations
@@ -62,6 +58,8 @@ def _make_article(
     url: str,
     title: str = "Article",
     published: date | None = None,
+    raw_content: str | None = None,
+    processed: bool = False,
 ) -> NewsArticle:
     return NewsArticle(
         company_id=company_id,  # type: ignore[arg-type]
@@ -69,7 +67,9 @@ def _make_article(
         title=title,
         source="techcrunch.com",
         published_date=published,
-        raw_content="Body of the article, used as prompt input. " * 30,
+        raw_content=raw_content
+        or "Body of the article, used as prompt input. " * 30,
+        processed=processed,
     )
 
 
@@ -86,6 +86,7 @@ def _make_extraction(
     confidence: str = "high",
     status_event: str | None = None,
     status_confidence: str | None = None,
+    total_raised: Decimal | None = None,
 ) -> FundingExtraction:
     return FundingExtraction(
         is_funding_announcement=is_funding,
@@ -99,6 +100,7 @@ def _make_extraction(
         confidence=confidence,  # type: ignore[arg-type]
         status_event=status_event,  # type: ignore[arg-type]
         status_confidence=status_confidence,  # type: ignore[arg-type]
+        total_raised_usd=total_raised,
     )
 
 
@@ -896,3 +898,532 @@ async def test_companies_status_check_rejects_invalid_values(
     with pytest.raises(IntegrityError):
         await db.flush()
     await db.rollback()
+
+
+# ---------------------------------------------------------------------------
+# Stated cumulative totals ("has raised $X to date")
+# ---------------------------------------------------------------------------
+
+
+async def test_total_raised_recorded_from_funding_article(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A funding article that also states a cumulative total records all three
+    columns together: the figure, the article as source, and the article's
+    published date as the as-of."""
+    company = _make_company("FreshaLikeCo")
+    db.add(company)
+    await db.flush()
+    db.add(
+        _make_article(
+            company.id,
+            url="https://news.example.com/round-with-total",
+            published=date(2026, 5, 20),
+        )
+    )
+    await db.flush()
+    await db.commit()
+
+    async def _fake(prompt: str, schema: type) -> FundingExtraction:
+        return _make_extraction(
+            amount=Decimal("80000000.00"),
+            total_raised=Decimal("285000000.00"),
+        )
+
+    monkeypatch.setattr(
+        "nous.pipeline.extract_funding.complete_json", _fake
+    )
+
+    summary = await run_extract_funding(db, limit=10)
+    assert summary.totals_recorded == 1
+    assert summary.funding_rounds_created == 1
+
+    await db.refresh(company)
+    assert company.total_raised_usd == Decimal("285000000.00")
+    assert (
+        company.total_raised_source_url
+        == "https://news.example.com/round-with-total"
+    )
+    assert company.total_raised_as_of == date(2026, 5, 20)
+
+
+async def test_total_raised_recorded_from_non_funding_article(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Totals appear in non-funding coverage too (e.g. acquisition articles
+    recapping funding history) — the apply must run BEFORE the
+    is_funding_announcement gate, and the article still gets consumed."""
+    company = _make_company("AcqRecapCo")
+    db.add(company)
+    await db.flush()
+    article = _make_article(
+        company.id,
+        url="https://news.example.com/acq-with-total",
+        published=date(2026, 6, 1),
+    )
+    db.add(article)
+    await db.flush()
+    await db.commit()
+
+    async def _fake(prompt: str, schema: type) -> FundingExtraction:
+        return _make_extraction(
+            is_funding=False,
+            leads=[],
+            others=[],
+            total_raised=Decimal("285000000.00"),
+        )
+
+    monkeypatch.setattr(
+        "nous.pipeline.extract_funding.complete_json", _fake
+    )
+
+    summary = await run_extract_funding(db, limit=10)
+    assert summary.totals_recorded == 1
+    assert summary.skipped_not_funding == 1
+    assert summary.funding_rounds_created == 0
+
+    await db.refresh(company)
+    assert company.total_raised_usd == Decimal("285000000.00")
+    assert company.total_raised_source_url == "https://news.example.com/acq-with-total"
+
+    refetched = await db.get(NewsArticle, article.id)
+    assert refetched is not None
+    assert refetched.processed is True
+
+
+async def test_newer_article_total_supersedes_even_when_smaller(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Newest-article-wins: a newer article's stated total replaces an older
+    claim even when the new figure is SMALLER — it is the most recent source
+    claim, and the web tile shows max(stated, sum-of-rounds) anyway."""
+    company = _make_company("SupersededCo")
+    company.total_raised_usd = Decimal("300000000.00")
+    company.total_raised_source_url = "https://news.example.com/old-claim"
+    company.total_raised_as_of = date(2026, 4, 1)
+    db.add(company)
+    await db.flush()
+    db.add(
+        _make_article(
+            company.id,
+            url="https://news.example.com/new-claim",
+            published=date(2026, 5, 20),
+        )
+    )
+    await db.flush()
+    await db.commit()
+
+    async def _fake(prompt: str, schema: type) -> FundingExtraction:
+        return _make_extraction(
+            is_funding=False,
+            leads=[],
+            others=[],
+            total_raised=Decimal("285000000.00"),
+        )
+
+    monkeypatch.setattr(
+        "nous.pipeline.extract_funding.complete_json", _fake
+    )
+
+    summary = await run_extract_funding(db, limit=10)
+    assert summary.totals_recorded == 1
+
+    await db.refresh(company)
+    assert company.total_raised_usd == Decimal("285000000.00")
+    assert company.total_raised_source_url == "https://news.example.com/new-claim"
+    assert company.total_raised_as_of == date(2026, 5, 20)
+
+
+async def test_older_or_same_day_article_total_is_ignored(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Claims dated on or before the recorded as-of never overwrite — older
+    coverage is stale, and same-day no-ops keep re-runs idempotent."""
+    company = _make_company("FreshClaimCo")
+    company.total_raised_usd = Decimal("285000000.00")
+    company.total_raised_source_url = "https://news.example.com/current-claim"
+    company.total_raised_as_of = date(2026, 5, 1)
+    db.add(company)
+    await db.flush()
+    db.add(
+        _make_article(
+            company.id,
+            url="https://news.example.com/same-day",
+            published=date(2026, 5, 1),
+        )
+    )
+    db.add(
+        _make_article(
+            company.id,
+            url="https://news.example.com/older",
+            published=date(2026, 4, 1),
+        )
+    )
+    await db.flush()
+    await db.commit()
+
+    async def _fake(prompt: str, schema: type) -> FundingExtraction:
+        return _make_extraction(
+            is_funding=False,
+            leads=[],
+            others=[],
+            total_raised=Decimal("100000000.00"),
+        )
+
+    monkeypatch.setattr(
+        "nous.pipeline.extract_funding.complete_json", _fake
+    )
+
+    summary = await run_extract_funding(db, limit=10)
+    assert summary.articles_processed == 2
+    assert summary.totals_recorded == 0
+
+    await db.refresh(company)
+    assert company.total_raised_usd == Decimal("285000000.00")
+    assert company.total_raised_source_url == "https://news.example.com/current-claim"
+    assert company.total_raised_as_of == date(2026, 5, 1)
+
+
+async def test_dated_total_supersedes_existing_claim_with_null_as_of(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An existing claim with a NULL as_of (e.g. a manual edit) can't assert
+    recency, so any dated claim supersedes it — the guard must never treat a
+    missing as-of as blocking, and all three columns travel together."""
+    company = _make_company("NullAsOfCo")
+    company.total_raised_usd = Decimal("300000000.00")
+    company.total_raised_source_url = "https://example.com/manual-edit"
+    company.total_raised_as_of = None
+    db.add(company)
+    await db.flush()
+    db.add(
+        _make_article(
+            company.id,
+            url="https://news.example.com/dated-claim",
+            published=date(2026, 5, 20),
+        )
+    )
+    await db.flush()
+    await db.commit()
+
+    async def _fake(prompt: str, schema: type) -> FundingExtraction:
+        return _make_extraction(
+            is_funding=False,
+            leads=[],
+            others=[],
+            total_raised=Decimal("285000000.00"),
+        )
+
+    monkeypatch.setattr(
+        "nous.pipeline.extract_funding.complete_json", _fake
+    )
+
+    summary = await run_extract_funding(db, limit=10)
+    assert summary.totals_recorded == 1
+
+    await db.refresh(company)
+    assert company.total_raised_usd == Decimal("285000000.00")
+    assert company.total_raised_source_url == "https://news.example.com/dated-claim"
+    assert company.total_raised_as_of == date(2026, 5, 20)
+
+
+async def test_total_never_fabricated_when_extraction_field_null(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A plain round extraction (total_raised_usd=None) never invents a total
+    — the columns stay null, and the round amount is NOT copied over."""
+    company = _make_company("NoTotalCo")
+    db.add(company)
+    await db.flush()
+    db.add(_make_article(company.id, url="https://news.example.com/no-total"))
+    await db.flush()
+    await db.commit()
+
+    async def _fake(prompt: str, schema: type) -> FundingExtraction:
+        return _make_extraction()
+
+    monkeypatch.setattr(
+        "nous.pipeline.extract_funding.complete_json", _fake
+    )
+
+    summary = await run_extract_funding(db, limit=10)
+    assert summary.funding_rounds_created == 1
+    assert summary.totals_recorded == 0
+
+    await db.refresh(company)
+    assert company.total_raised_usd is None
+    assert company.total_raised_source_url is None
+    assert company.total_raised_as_of is None
+
+
+async def test_total_as_of_falls_back_to_today_when_published_null(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Articles without a published date still record the claim, dated today,
+    so it participates in newest-wins ordering."""
+    company = _make_company("UndatedArticleCo")
+    db.add(company)
+    await db.flush()
+    db.add(
+        _make_article(
+            company.id, url="https://news.example.com/undated", published=None
+        )
+    )
+    await db.flush()
+    await db.commit()
+
+    async def _fake(prompt: str, schema: type) -> FundingExtraction:
+        return _make_extraction(total_raised=Decimal("50000000.00"))
+
+    monkeypatch.setattr(
+        "nous.pipeline.extract_funding.complete_json", _fake
+    )
+
+    summary = await run_extract_funding(db, limit=10)
+    assert summary.totals_recorded == 1
+
+    await db.refresh(company)
+    assert company.total_raised_usd == Decimal("50000000.00")
+    assert company.total_raised_as_of == datetime.now(tz=UTC).date()
+
+
+async def test_low_confidence_round_branch_commits_total(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A low-confidence ROUND with a stated total takes the transient-skip
+    `continue` — which never reaches the end-of-loop commit, so the branch
+    must commit the total itself (same harness trick as the status-event
+    commit test: rollback discards anything left uncommitted)."""
+    company = _make_company("LowConfTotalCo")
+    db.add(company)
+    await db.flush()
+    article = _make_article(
+        company.id,
+        url="https://news.example.com/low-conf-total",
+        published=date(2026, 5, 20),
+    )
+    db.add(article)
+    await db.flush()
+    await db.commit()
+    company_id = company.id
+    article_id = article.id
+
+    async def _fake(prompt: str, schema: type) -> FundingExtraction:
+        return _make_extraction(
+            confidence="low",
+            total_raised=Decimal("285000000.00"),
+        )
+
+    monkeypatch.setattr(
+        "nous.pipeline.extract_funding.complete_json", _fake
+    )
+
+    summary = await run_extract_funding(db, limit=10, skip_low_confidence=True)
+    assert summary.totals_recorded == 1
+    assert summary.skipped_low_confidence == 1
+    assert summary.funding_rounds_created == 0
+
+    # Only explicitly committed work survives this rollback.
+    await db.rollback()
+
+    refetched = await db.get(Company, company_id)
+    assert refetched is not None
+    assert refetched.total_raised_usd == Decimal("285000000.00")
+    assert refetched.total_raised_source_url == "https://news.example.com/low-conf-total"
+
+    # The round extraction stays retryable.
+    refetched_article = await db.get(NewsArticle, article_id)
+    assert refetched_article is not None
+    assert refetched_article.processed is False
+
+
+async def test_website_path_records_total_with_today_as_of(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The website path records an own-site stated total ("we've raised $X")
+    with the company website as source and today as the as-of — even when the
+    page states no individual round."""
+    company = _make_company("SiteTotalCo")
+    company.website = "https://sitetotalco.example/"
+    db.add(company)
+    await db.flush()
+    db.add(_add_raw_page(company.id, "https://sitetotalco.example/about"))
+    await db.flush()
+    await db.commit()
+
+    async def _fake(prompt: str, schema: type) -> FundingExtraction:
+        return _make_extraction(
+            is_funding=False,
+            leads=[],
+            others=[],
+            total_raised=Decimal("50000000.00"),
+        )
+
+    monkeypatch.setattr(
+        "nous.pipeline.extract_funding.complete_json", _fake
+    )
+
+    summary = await run_extract_funding_website(db, limit=10)
+    assert summary.companies_seen == 1
+    assert summary.totals_recorded == 1
+    assert summary.funding_rounds_created == 0
+
+    await db.refresh(company)
+    assert company.total_raised_usd == Decimal("50000000.00")
+    assert company.total_raised_source_url == "https://sitetotalco.example/"
+    assert company.total_raised_as_of == datetime.now(tz=UTC).date()
+    assert company.website_funding_checked_at is not None
+
+
+# ---------------------------------------------------------------------------
+# --requery-totals one-time backfill
+# ---------------------------------------------------------------------------
+
+
+_TOTAL_PHRASE_BODY = (
+    "Coverage of the acquisition. The company has now raised "
+    "$285 million To Date, according to the announcement. " * 10
+)
+
+
+async def test_requery_totals_selects_only_matching_processed_null_total(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """requery_totals flips the selection to: PROCESSED articles whose text
+    matches a cumulative-total phrase (case-insensitive) AND whose company has
+    no stated total yet. Everything else — phrase-less processed articles,
+    companies with a total already, unprocessed articles — is excluded. The
+    re-run records the total and the article STAYS processed."""
+    # Eligible: processed + phrase ("To Date", mixed case → ILIKE) + null total.
+    eligible = _make_company("EligibleCo")
+    db.add(eligible)
+    await db.flush()
+    eligible_article = _make_article(
+        eligible.id,
+        url="https://news.example.com/eligible",
+        published=date(2026, 5, 20),
+        raw_content=_TOTAL_PHRASE_BODY,
+        processed=True,
+    )
+    db.add(eligible_article)
+
+    # Excluded: processed but no total phrase in the body.
+    no_phrase = _make_company("NoPhraseCo")
+    db.add(no_phrase)
+    await db.flush()
+    db.add(
+        _make_article(
+            no_phrase.id,
+            url="https://news.example.com/no-phrase",
+            processed=True,
+        )
+    )
+
+    # Excluded: company already has a stated total.
+    has_total = _make_company("HasTotalCo")
+    has_total.total_raised_usd = Decimal("10000000.00")
+    has_total.total_raised_source_url = "https://news.example.com/prior"
+    has_total.total_raised_as_of = date(2026, 1, 1)
+    db.add(has_total)
+    await db.flush()
+    db.add(
+        _make_article(
+            has_total.id,
+            url="https://news.example.com/has-total",
+            raw_content=_TOTAL_PHRASE_BODY,
+            processed=True,
+        )
+    )
+
+    # Excluded: phrase matches but the article is still unprocessed (the
+    # normal daily run owns it).
+    unprocessed = _make_company("UnprocessedCo")
+    db.add(unprocessed)
+    await db.flush()
+    db.add(
+        _make_article(
+            unprocessed.id,
+            url="https://news.example.com/unprocessed",
+            raw_content=_TOTAL_PHRASE_BODY,
+            processed=False,
+        )
+    )
+    await db.flush()
+    await db.commit()
+
+    prompts_seen: list[str] = []
+
+    async def _fake(prompt: str, schema: type) -> FundingExtraction:
+        prompts_seen.append(prompt)
+        return _make_extraction(
+            is_funding=False,
+            leads=[],
+            others=[],
+            total_raised=Decimal("285000000.00"),
+        )
+
+    monkeypatch.setattr(
+        "nous.pipeline.extract_funding.complete_json", _fake
+    )
+
+    summary = await run_extract_funding(db, limit=10, requery_totals=True)
+    assert len(prompts_seen) == 1  # only EligibleCo's article hit the LLM
+    assert summary.articles_processed == 1
+    assert summary.totals_recorded == 1
+
+    await db.refresh(eligible)
+    assert eligible.total_raised_usd == Decimal("285000000.00")
+    assert eligible.total_raised_source_url == "https://news.example.com/eligible"
+    assert eligible.total_raised_as_of == date(2026, 5, 20)
+
+    # Untouched companies stay untouched.
+    await db.refresh(has_total)
+    assert has_total.total_raised_usd == Decimal("10000000.00")
+    await db.refresh(no_phrase)
+    assert no_phrase.total_raised_usd is None
+    await db.refresh(unprocessed)
+    assert unprocessed.total_raised_usd is None
+
+    # The re-queried article stays processed.
+    refetched = await db.get(NewsArticle, eligible_article.id)
+    assert refetched is not None
+    assert refetched.processed is True
+
+
+async def test_requery_totals_respects_limit(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The backfill is capped by --limit like the normal path (LLM budget)."""
+    for i in range(3):
+        company = _make_company(f"BackfillCo{i}")
+        db.add(company)
+        await db.flush()
+        db.add(
+            _make_article(
+                company.id,
+                url=f"https://news.example.com/backfill-{i}",
+                raw_content=_TOTAL_PHRASE_BODY,
+                processed=True,
+            )
+        )
+    await db.flush()
+    await db.commit()
+
+    calls: list[Any] = []
+
+    async def _fake(prompt: str, schema: type) -> FundingExtraction:
+        calls.append(None)
+        return _make_extraction(
+            is_funding=False,
+            leads=[],
+            others=[],
+            total_raised=Decimal("285000000.00"),
+        )
+
+    monkeypatch.setattr(
+        "nous.pipeline.extract_funding.complete_json", _fake
+    )
+
+    summary = await run_extract_funding(db, limit=2, requery_totals=True)
+    assert len(calls) == 2
+    assert summary.totals_recorded == 2

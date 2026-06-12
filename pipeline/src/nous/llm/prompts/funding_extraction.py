@@ -119,6 +119,19 @@ class FundingExtraction(BaseModel):
             "status_event is null."
         ),
     )
+    # Defaults to None so payloads predating the field (cached LLM responses,
+    # fixtures) keep validating unchanged — same pattern as the status fields.
+    total_raised_usd: Decimal | None = Field(
+        default=None,
+        description=(
+            "Cumulative amount the company has raised TO DATE, in raw USD — "
+            "ONLY when the text explicitly states it (e.g. 'has raised $285 "
+            "million to date', 'total funding of $X', 'bringing total raised "
+            "to $X'). Return only a figure the text states; never sum or "
+            "infer one yourself. Null otherwise. Distinct from "
+            "amount_raised_usd (the single round being announced)."
+        ),
+    )
 
 
 PROMPT_TEMPLATE = """\
@@ -150,6 +163,12 @@ Return JSON matching the schema. Rules:
 - Leave status_event null unless the article explicitly states the event
   happened to this exact company. Rumors, "in talks", "exploring" a sale or
   IPO, pending/unclosed deals, or another company's exit → null. Never guess.
+- total_raised_usd: if the article explicitly states a cumulative amount
+  raised to date (e.g. "has raised $X to date", "total funding of $X",
+  "bringing total raised to $X"), return it as total_raised_usd —
+  even when is_funding_announcement is false. Only a figure the article
+  states — never sum or infer one yourself. Null otherwise. This is
+  distinct from amount_raised_usd (the round being announced).
 
 Article body:
 ---
@@ -196,6 +215,8 @@ Return JSON matching the schema. Rules:
 - A post saying {company_name} acquired ANOTHER company ("we acquired X") is
   NOT a status event for {company_name} — return null. Set 'acquired' only
   when {company_name} itself is the company being bought.
+- total_raised_usd: if the site explicitly states a cumulative total raised
+  (e.g. "we've raised $50M to date"), return it; never sum figures yourself.
 
 Website text (may be truncated):
 ---

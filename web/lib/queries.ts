@@ -539,18 +539,25 @@ export async function listAllCompanySlugs(): Promise<CompanySlugRow[]> {
 export interface CompanyOgData {
   name: string;
   industry_group: string | null;
-  /** Sum of known round amounts in USD; 0 when nothing is known. */
+  /**
+   * Hybrid total in USD: max(article-stated cumulative total, sum of known
+   * round amounts) — same display rule as the detail-page tile, minus the
+   * attribution text (no room on the card). 0 when nothing is known.
+   */
   totalRaised: number;
 }
 
 /**
  * Lean fetch for app/c/[slug]/opengraph-image.tsx — deliberately not
  * getCompanyBySlug, which fans out into five queries the card doesn't need.
- * One query: the company row with its rounds' amounts embedded
- * (`funding_rounds(amount_raised)`), summed in-process.
+ * One query: the company row (including the stated total_raised_* columns)
+ * with its rounds' amounts embedded (`funding_rounds(amount_raised)`);
+ * max(stated, sum) computed in-process.
  * Returns null when the slug is unknown (caller falls back to the site card).
  * Missing/empty rounds degrade to totalRaised = 0 — the card still renders,
- * just without the raised line.
+ * just without the raised line. Note: until migration 0021 reaches prod this
+ * explicit select 400s (unknown column), which lands on the same error path →
+ * site-card fallback; the route still never throws.
  */
 export async function getCompanyOgData(
   slug: string,
@@ -568,7 +575,9 @@ export async function getCompanyOgData(
 
   const { data: company, error: companyError } = await supabase
     .from("companies")
-    .select("name, industry_group, funding_rounds(amount_raised)")
+    .select(
+      "name, industry_group, total_raised_usd, funding_rounds(amount_raised)",
+    )
     .eq("slug", slug)
     .single();
 
@@ -582,26 +591,37 @@ export async function getCompanyOgData(
     return null;
   }
 
+  // Runtime-built select string → supabase-js can't parse the columns, so
+  // narrow through a local row shape (same idiom as scanCompanies).
+  const row = company as unknown as {
+    name: string;
+    industry_group: string | null;
+    total_raised_usd: number | null;
+    funding_rounds:
+      | { amount_raised: number | null }[]
+      | { amount_raised: number | null }
+      | null;
+  };
+
   // One-to-many embed: PostgREST returns an array, but guard null/object
   // shapes so a missing join degrades to 0 instead of breaking the card.
-  const roundsRaw = company.funding_rounds as
-    | { amount_raised: number | null }[]
-    | { amount_raised: number | null }
-    | null;
+  const roundsRaw = row.funding_rounds;
   const rounds = Array.isArray(roundsRaw)
     ? roundsRaw
     : roundsRaw != null
       ? [roundsRaw]
       : [];
 
-  const totalRaised = rounds.reduce<number>((acc, r) => {
+  const computedTotal = rounds.reduce<number>((acc, r) => {
     return r.amount_raised != null ? acc + Number(r.amount_raised) : acc;
   }, 0);
+  const statedTotal =
+    row.total_raised_usd != null ? Number(row.total_raised_usd) : 0;
 
   return {
-    name: company.name as string,
-    industry_group: (company.industry_group as string | null) ?? null,
-    totalRaised,
+    name: row.name,
+    industry_group: row.industry_group ?? null,
+    totalRaised: Math.max(statedTotal, computedTotal),
   };
 }
 

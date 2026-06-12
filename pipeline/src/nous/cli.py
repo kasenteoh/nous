@@ -338,7 +338,21 @@ def ingest_news(
     default=False,
     help="Persist rounds the LLM tagged as low-confidence (default: skip).",
 )
-def extract_funding(limit: int, include_low_confidence: bool) -> None:
+@click.option(
+    "--requery-totals",
+    is_flag=True,
+    default=False,
+    help=(
+        "One-time backfill: instead of unprocessed articles, re-run "
+        "ALREADY-processed articles whose text mentions a cumulative total "
+        "('to date', 'total funding', ...) and whose company has no stated "
+        "total yet, capped by --limit. Idempotent — rounds reconcile, status "
+        "never downgrades, totals apply newest-wins, articles stay processed."
+    ),
+)
+def extract_funding(
+    limit: int, include_low_confidence: bool, requery_totals: bool
+) -> None:
     """Run the funding-extraction LLM over unprocessed news_articles."""
     import asyncio
 
@@ -353,6 +367,7 @@ def extract_funding(limit: int, include_low_confidence: bool) -> None:
                     session,
                     limit=limit,
                     skip_low_confidence=not include_low_confidence,
+                    requery_totals=requery_totals,
                 )
                 click.echo(summary.model_dump_json(indent=2))
         finally:

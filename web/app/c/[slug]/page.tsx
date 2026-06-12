@@ -143,13 +143,28 @@ export default async function CompanyPage({ params }: Props) {
   const { company, people, fundingRounds, competitors, investors, news } = detail;
 
   // ── M3 key-facts derivations ──────────────────────────────────────────────
-  // totalRaised = sum of non-null amount_raised across all funding rounds.
-  // Sources = count of distinct primary_news_url across funding rounds.
-  // Both fall back to "—" when there are zero rounds (never fabricate).
-  const totalRaisedAmount = fundingRounds.reduce<number>((acc, r) => {
+  // Hybrid "total raised": computed = sum of non-null amount_raised across all
+  // rounds; stated = an article-stated cumulative total recorded by the
+  // pipeline (news discovery never backfills historical rounds, so the sum
+  // undercounts companies with a pre-nous funding history). The tile shows
+  // max(stated, computed); when the stated figure is what's shown (it wins
+  // ties), it is attributed to its source article. Falls back to "—" when
+  // neither exists (never fabricate).
+  // The total_raised_* fields may be undefined (prod rows predate migration
+  // 0021 until it runs there; select("*") omits unknown columns) — normalize
+  // through `?? null` / Number() so the computed path renders unharmed.
+  const computedTotal = fundingRounds.reduce<number>((acc, r) => {
     return r.amount_raised != null ? acc + Number(r.amount_raised) : acc;
   }, 0);
-  const hasAnyRaised = fundingRounds.some((r) => r.amount_raised != null);
+  const hasComputedTotal = fundingRounds.some((r) => r.amount_raised != null);
+  const statedTotal =
+    company.total_raised_usd != null ? Number(company.total_raised_usd) : null;
+  const statedWins = statedTotal != null && statedTotal >= computedTotal;
+  const displayedTotal = statedWins ? statedTotal : computedTotal;
+  const hasTotalRaised = hasComputedTotal || statedTotal != null;
+  const statedSourceUrl = company.total_raised_source_url ?? null;
+  const statedHostname = websiteHostname(statedSourceUrl);
+  const statedAsOf = company.total_raised_as_of ?? null;
   const distinctNewsSources = new Set(
     fundingRounds
       .map((r) => r.primary_news_url)
@@ -289,17 +304,40 @@ export default async function CompanyPage({ params }: Props) {
               Total raised
             </dt>
             <dd
-              className={`mt-1 text-base font-semibold ${hasAnyRaised ? "font-mono text-money" : "text-ink-faint"}`}
+              className={`mt-1 text-base font-semibold ${hasTotalRaised ? "font-mono text-money" : "text-ink-faint"}`}
             >
-              {hasAnyRaised ? formatUsd(totalRaisedAmount) : "—"}
+              {hasTotalRaised ? formatUsd(displayedTotal) : "—"}
             </dd>
-            {fundingRounds.length > 0 && (
+            {statedWins ? (
+              // The displayed figure is the article-stated cumulative total —
+              // attribute the stating article (every rendered number needs a
+              // visible source). Degrades to unlinked text when the source
+              // URL is missing or unparseable.
               <dd className="text-xs text-ink-muted">
-                from {distinctNewsSources.size}{" "}
-                {distinctNewsSources.size === 1
-                  ? "news source"
-                  : "news sources"}
+                per{" "}
+                {statedSourceUrl && statedHostname ? (
+                  <a
+                    href={statedSourceUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="underline underline-offset-2 decoration-ink-faint hover:text-ink"
+                  >
+                    {statedHostname}
+                  </a>
+                ) : (
+                  "press coverage"
+                )}
+                {statedAsOf && <> · {formatDate(statedAsOf)}</>}
               </dd>
+            ) : (
+              fundingRounds.length > 0 && (
+                <dd className="text-xs text-ink-muted">
+                  from {distinctNewsSources.size}{" "}
+                  {distinctNewsSources.size === 1
+                    ? "news source"
+                    : "news sources"}
+                </dd>
+              )
             )}
           </div>
         </dl>

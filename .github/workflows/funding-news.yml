@@ -40,6 +40,11 @@ on:
         description: "Website funding gap-fill: max companies per run. Default: 150."
         required: false
         type: string
+      requery_totals:
+        description: "Extract funding: one-time backfill — re-run already-processed articles that state a cumulative total ('to date', 'total funding', ...) for companies with no stated total yet. Default: false."
+        required: false
+        type: boolean
+        default: false
 
 # Serialize against every other workflow that mutates the companies table (see
 # discovery.yml). ingest-news auto-creates companies from the TechCrunch sweep
@@ -107,10 +112,17 @@ jobs:
         # --limit 1000 caps per-run LLM spend on DeepSeek (now a daily ceiling).
         # Bounded by unprocessed articles, so steady-state cost tracks actual
         # news volume. continue-on-error per the same rate-limit logic as
-        # enrich-companies.
+        # enrich-companies. --requery-totals (manual dispatch only) flips the
+        # selection to the one-time stated-total backfill over already-
+        # processed articles; same --limit cap applies.
         timeout-minutes: 60
         continue-on-error: true
-        run: uv run nous extract-funding --limit 1000
+        run: |
+          ARGS=(--limit 1000)
+          if [ "${{ inputs.requery_totals }}" = "true" ]; then
+            ARGS+=(--requery-totals)
+          fi
+          uv run nous extract-funding "${ARGS[@]}"
 
       - name: Extract funding (website fallback)
         id: funding_website
