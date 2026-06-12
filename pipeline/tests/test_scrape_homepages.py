@@ -293,6 +293,85 @@ async def test_failed_scrape_backs_off_on_next_run(
 
 
 # ---------------------------------------------------------------------------
+# Dead-site detection: consecutive_scrape_failures counter
+# ---------------------------------------------------------------------------
+
+
+async def test_failed_homepage_increments_failure_counter(db: AsyncSession) -> None:
+    """A total homepage fetch failure bumps consecutive_scrape_failures by 1."""
+    company = _make_company(
+        slug="deadsite-incr", website="https://deadsite-incr.example/"
+    )
+    db.add(company)
+    await db.flush()
+    await db.commit()
+
+    summary = await run_scrape_homepages(db, MockHomepageClient(error_paths={"/"}))
+    assert summary.pages_failed == 1
+
+    refetched = await db.get(Company, company.id)
+    assert refetched is not None
+    assert refetched.consecutive_scrape_failures == 1
+
+
+async def test_consecutive_failures_accumulate_across_runs(db: AsyncSession) -> None:
+    """Each failed scrape cycle adds one to the counter (back-off bypassed so
+    the company stays eligible run-to-run)."""
+    company = _make_company(
+        slug="deadsite-accum", website="https://deadsite-accum.example/"
+    )
+    db.add(company)
+    await db.flush()
+    await db.commit()
+
+    for expected in (1, 2, 3):
+        await run_scrape_homepages(
+            db,
+            MockHomepageClient(error_paths={"/"}),
+            failure_backoff_days=0,  # keep the dead company eligible every run
+        )
+        refetched = await db.get(Company, company.id)
+        assert refetched is not None
+        assert refetched.consecutive_scrape_failures == expected
+
+
+async def test_successful_homepage_resets_failure_counter(db: AsyncSession) -> None:
+    """A successful homepage fetch resets the counter to 0."""
+    company = _make_company(
+        slug="deadsite-reset", website="https://deadsite-reset.example/"
+    )
+    company.consecutive_scrape_failures = 4  # pretend prior runs failed
+    db.add(company)
+    await db.flush()
+    await db.commit()
+
+    summary = await run_scrape_homepages(db, MockHomepageClient())
+    assert summary.pages_fetched == 1
+
+    refetched = await db.get(Company, company.id)
+    assert refetched is not None
+    assert refetched.consecutive_scrape_failures == 0
+
+
+async def test_robots_block_leaves_failure_counter_unchanged(db: AsyncSession) -> None:
+    """A robots.txt block is not a dead site — the counter is untouched."""
+    company = _make_company(
+        slug="deadsite-robots", website="https://deadsite-robots.example/"
+    )
+    company.consecutive_scrape_failures = 2
+    db.add(company)
+    await db.flush()
+    await db.commit()
+
+    summary = await run_scrape_homepages(db, MockHomepageClient(always_block=True))
+    assert summary.pages_skipped_robots == 1
+
+    refetched = await db.get(Company, company.id)
+    assert refetched is not None
+    assert refetched.consecutive_scrape_failures == 2
+
+
+# ---------------------------------------------------------------------------
 # Runtime budget + stored-content semantics
 # ---------------------------------------------------------------------------
 

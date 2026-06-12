@@ -28,11 +28,6 @@ live startups — a correctness problem, not a feature. Add `companies.status`
 funding-extraction pass is already reading them), and badge non-active companies
 on the index and detail pages.
 
-### P1 [S] — Dead-site detection flag
-Repeated homepage fetch failures across scrape cycles ⇒ mark "possibly
-inactive". `last_scrape_attempt_at` already exists; add a consecutive-failure
-count and surface a muted flag on the company page.
-
 ### P1 [S] — DB-size watchdog + per-stage LLM cost ledger
 Log table sizes and LLM call/token counts at the end of each pipeline run; warn
 loudly at 80% of the 500MB cap. Half the product backlog below adds LLM calls —

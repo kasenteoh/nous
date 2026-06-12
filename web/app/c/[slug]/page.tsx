@@ -21,6 +21,11 @@ import { Investors } from "@/components/Investors";
 import { Competitors } from "@/components/Competitors";
 import { News } from "@/components/News";
 
+// At or above this many consecutive failed homepage scrapes, the detail page
+// shows a muted "possibly inactive" rider. Deliberately a low-confidence
+// heuristic — rendered as quiet text, not a badge (see the header below).
+const INACTIVE_FAILURE_THRESHOLD = 3;
+
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 type Props = {
@@ -252,6 +257,17 @@ export default async function CompanyPage({ params }: Props) {
             </div>
           )}
         </dl>
+
+        {/* Possibly-inactive rider — surfaced when the scraper has failed to
+            reach the homepage on several consecutive runs. This is a
+            low-confidence heuristic (a site can be down transiently or block
+            our scraper), so it renders as quiet plain text, intentionally
+            quieter than the StatusBadge pill above. */}
+        {company.consecutive_scrape_failures >= INACTIVE_FAILURE_THRESHOLD && (
+          <p className="mt-3 text-xs text-ink-faint">
+            Possibly inactive — site unreachable on recent checks
+          </p>
+        )}
 
         {/* Tagline — description_short as a muted paragraph below the meta strip */}
         {company.description_short && (

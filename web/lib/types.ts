@@ -29,6 +29,12 @@ export interface CompanyRow {
   status: string;
   // Article/page that announced the status event; null while status='active'.
   status_source_url: string | null;
+  // Consecutive homepage-fetch failures across scrape-homepages runs. The
+  // scraper bumps this on a total fetch failure, resets it on success, and
+  // leaves it unchanged on a robots.txt block. A high value is a low-confidence
+  // "possibly inactive" signal, surfaced as muted text (not a badge) on the
+  // detail page. See INACTIVE_FAILURE_THRESHOLD.
+  consecutive_scrape_failures: number;
   created_at: string;
   updated_at: string;
 }
