@@ -38,17 +38,6 @@ honest.
 
 ## Pipeline cleanups (P2)
 
-### Competitor self-reference is not blocked at the DB [S]
-[models.py](pipeline/src/nous/db/models.py): nothing prevents
-`company_id == competitor_company_id`. Add
-`CheckConstraint("competitor_company_id IS NULL OR competitor_company_id != company_id")`
-via a migration.
-
-### `news_articles.url` indexed twice [S]
-[0003_m3_schema.py:89](pipeline/alembic/versions/0003_m3_schema.py): both
-`UniqueConstraint("url")` and a redundant unique index. Drop
-`ix_news_articles_url` in a migration.
-
 ### Throttle/get helper triplicated across source clients [M]
 [homepage.py](pipeline/src/nous/sources/homepage.py),
 [news.py](pipeline/src/nous/sources/news.py), and
