@@ -6,31 +6,39 @@
    removes it when the visitor has chosen light. */
 @custom-variant dark (&:where(.dark, .dark *));
 
-/* Semantic theme tokens — Tokyo Night Day (light) / Tokyo Night (dark).
-   `--money` is deliberately Catppuccin green (Latte #40a02b / Mocha #a6e3a1),
-   a chosen cross-theme blend for funding amounts — not Tokyo Night's #9ece6a. */
+/* Semantic theme tokens — terminal palette shared with kasenteoh's personal
+   site (see docs/superpowers/specs/2026-06-12-terminal-theme-design.md).
+   Dark is the palette verbatim (true-black neutrals, terminal green accent);
+   light is a derived twin using the GitHub-light equivalents of the accents
+   for AA contrast on near-white. `--money` is the brighter hover-green so
+   funding amounts read slightly above links. `--warn` is semantic-only:
+   low-confidence flags and errors — never decorative (red next to dollar
+   amounts reads as loss). Replaced Tokyo Night 2026-06; the values changed,
+   the token system didn't. */
 :root {
   color-scheme: light;
-  --canvas: #e1e2e7;
-  --ink: #343b58;
-  --ink-soft: #565a6e;
-  --ink-muted: #848cb5;
-  --ink-faint: #c4c8da;
-  --edge: #c4c8da;
-  --accent: #2e7de9;
-  --money: #40a02b;
+  --canvas: #fafafa;
+  --ink: #1b1b1b;
+  --ink-soft: #515151;
+  --ink-muted: #8a8a8a;
+  --ink-faint: #d4d4d4;
+  --edge: #e2e2e2;
+  --accent: #1a7f37;
+  --money: #2da44e;
+  --warn: #cf222e;
 }
 
 .dark {
   color-scheme: dark;
-  --canvas: #1a1b26;
-  --ink: #c0caf5;
-  --ink-soft: #a9b1d6;
-  --ink-muted: #565f89;
-  --ink-faint: #3b4261;
-  --edge: #24283b;
-  --accent: #7aa2f7;
-  --money: #a6e3a1;
+  --canvas: #0a0a0a;
+  --ink: #e4e4e4;
+  --ink-soft: #9a9a9a;
+  --ink-muted: #5f5f5f;
+  --ink-faint: #3d3d3d;
+  --edge: #2a2a2a;
+  --accent: #7ee787;
+  --money: #a5f4ae;
+  --warn: #ff7b72;
 }
 
 @theme inline {
@@ -42,6 +50,7 @@
   --color-edge: var(--edge);
   --color-accent: var(--accent);
   --color-money: var(--money);
+  --color-warn: var(--warn);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
 }
