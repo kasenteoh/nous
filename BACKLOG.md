@@ -13,29 +13,6 @@ bottom of the appropriate section; close items by deleting them.
 
 ---
 
-## Now — correctness & cost (P0/P1)
-
-### P1 [S] — Wire the Vercel deploy hook after pipeline runs (completes M6)
-`VERCEL_DEPLOY_HOOK_URL` exists in [config.py](pipeline/src/nous/config.py) but
-nothing calls it. After a pipeline run the site serves up to 6h-stale ISR pages,
-and only refreshes pages that get traffic. Fix: final step in each scheduled
-workflow POSTs the hook (skip on failure).
-
-### P1 [M] — Company status detection (active / acquired / shut_down / ipo)
-VC portfolios list exits, so we currently render acquired and dead companies as
-live startups — a correctness problem, not a feature. Add `companies.status`
-(+ `status_source_url`), extract from news articles we already ingest (the
-funding-extraction pass is already reading them), and badge non-active companies
-on the index and detail pages.
-
-### P1 [S] — DB-size watchdog + per-stage LLM cost ledger
-Log table sizes and LLM call/token counts at the end of each pipeline run; warn
-loudly at 80% of the 500MB cap. Half the product backlog below adds LLM calls —
-we need the ledger before stacking stages, to keep the ~$1/week DeepSeek budget
-honest.
-
----
-
 ## Pipeline cleanups (P2)
 
 ### Throttle/get helper triplicated across source clients [M]
@@ -82,28 +59,6 @@ Show exact dollars in a `title` tooltip.
 ## Product backlog — Wave 1: free wins
 
 All buildable from data already in the DB; mostly frontend.
-
-### SEO pack [M]
-The site has no `sitemap.xml`, no `robots.txt`, no canonical URLs, no
-Organization JSON-LD, no OG/Twitter cards. For a programmatic-content site this
-is the cheapest distribution lever that exists. Includes dynamic OG images via
-`@vercel/og` (free) showing name / industry / total raised. Subsumes the old
-"No JSON-LD / canonical" backlog item.
-
-### "New this week" feed [S]
-Homepage section + `/new` page listing companies discovered and rounds
-extracted in the last 7 days (`created_at` queries). The pipeline runs weekly
-but the site never says what's new — cheapest possible freshness signal.
-
-### Tag pages — `/tag/[tag]` [S]
-`companies.tags` already exists. Long-tail SEO, trivial build.
-
-### Location pages — `/location/[state]` (and city) [S]
-"Startups in Austin" from `hq_city`/`hq_state` we already extract.
-
-### Per-page freshness line [S]
-"Profile updated May 30" from `last_enriched_at`. Honesty beats implied
-freshness, and it's one line in the header meta strip.
 
 ### "Report incorrect data" link [S]
 Prefilled GitHub-issue URL on every company page. Crowdsourced QA, zero backend.
