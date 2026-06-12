@@ -284,6 +284,31 @@ async def test_lightspeed_yields_no_websites() -> None:
     )
 
 
+async def test_lightspeed_strips_fund_badges_and_skips_india() -> None:
+    """The h5 on lsvp.com nests a fund-badge span ("LSVP and LSIP Investment" /
+    "LSIP Investment") that .text() used to concatenate into the company name
+    (prod had 96 such rows). data-investor='lsip' marks Lightspeed India
+    Partners-only holdings — out of scope for a US-only catalog."""
+    adapter = ADAPTERS["lightspeed"]
+    routes = _html_routes(adapter.PORTFOLIO_URL, FIXTURES / "lightspeed.html")  # type: ignore[attr-defined]
+    transport = _MockTransport(routes)
+
+    async with HomepageClient(USER_AGENT) as client:
+        _inject_transport(client, transport)
+        entries = await adapter.fetch(client)
+
+    names = [e.name for e in entries]
+    # No badge text may bleed into any name.
+    assert not [n for n in names if "LSVP" in n or "LSIP" in n]
+    # data-investor="both" cards are kept, with clean names (fixture has 31).
+    assert "1047 games" in names
+    # data-investor="lsip" cards (India-only, fixture has 65) are skipped.
+    assert "Airbound" not in names
+    # Fixture has 555 lsvp + 31 both = 586 cards (585 after name dedup);
+    # assert a safe floor well above the lsvp-only count.
+    assert len(names) >= 560
+
+
 # ---------------------------------------------------------------------------
 # Felicis — Sanity docs embedded in the Next.js RSC flight payload. The
 # excerpt -> description extraction is what distinguishes this adapter.
