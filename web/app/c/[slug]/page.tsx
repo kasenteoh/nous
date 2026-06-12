@@ -2,6 +2,7 @@
 export const revalidate = 21600;
 
 import type { Metadata } from "next";
+import Link from "next/link";
 import { notFound } from "next/navigation";
 import { getCompanyBySlug } from "@/lib/queries";
 import type { CompanyRow } from "@/lib/types";
@@ -185,7 +186,20 @@ export default async function CompanyPage({ params }: Props) {
           {(company.hq_city || company.hq_state) && (
             <div>
               <dt className="sr-only">Location</dt>
-              <dd>{formatLocation(company.hq_city, company.hq_state)}</dd>
+              <dd>
+                {company.hq_state ? (
+                  // Link the whole location string to the state page when a
+                  // state is known. City-only rows stay plain text.
+                  <Link
+                    href={`/location/${encodeURIComponent(company.hq_state)}`}
+                    className="hover:underline underline-offset-2"
+                  >
+                    {formatLocation(company.hq_city, company.hq_state)}
+                  </Link>
+                ) : (
+                  formatLocation(company.hq_city, company.hq_state)
+                )}
+              </dd>
             </div>
           )}
           {company.year_incorporated && (
@@ -283,12 +297,13 @@ export default async function CompanyPage({ params }: Props) {
           {company.tags && company.tags.length > 0 && (
             <div className="flex flex-wrap gap-2">
               {company.tags.map((tag) => (
-                <span
+                <Link
                   key={tag}
-                  className="rounded-full border border-edge px-2.5 py-0.5 text-xs text-ink-soft"
+                  href={`/tag/${encodeURIComponent(tag)}`}
+                  className="rounded-full border border-edge px-2.5 py-0.5 text-xs text-ink-soft hover:border-ink-muted hover:text-ink transition-colors"
                 >
                   {tag}
-                </span>
+                </Link>
               ))}
             </div>
           )}

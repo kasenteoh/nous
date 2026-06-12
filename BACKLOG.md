@@ -63,6 +63,8 @@ lock dicts, so HomepageClient and HeadlessBrowserClient do **not** actually
 cooperate on the 1 req/sec/domain budget despite the comment claiming they do.
 Extract a `ThrottledHTTPClient` in `sources/_http.py` with a shared registry.
 
+### Add btree index on `companies.hq_state` and GIN on `companies.tags` (now in `WHERE` via /location and /tag pages); batch with other unindexed filter columns (`industry_group`, `discovered_via`). [S]
+
 ---
 
 ## Frontend fixes (P2)
@@ -86,6 +88,10 @@ the tile double-counts. Document the assumption near the sum; longer-term add a
 ### `formatUsd` rounding collapses distinct amounts [S]
 $1.51M and $1.49M both render as "$1.5M" with no way to see exact figures.
 Show exact dollars in a `title` tooltip.
+
+### `hq_state` values are unnormalized (CA vs California) — location pages render stored casing; normalize at enrichment time. [S]
+
+### Tag sitemap: consider a min-companies threshold for tag URLs (LLM open vocabulary → long tail of single-company thin pages), and a sitemap index before companies+tags approach the 50k-URL sitemap cap. [S]
 
 ---
 
