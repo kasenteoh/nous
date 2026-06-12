@@ -7,6 +7,8 @@ primary category, and tags.
 
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 
@@ -70,6 +72,49 @@ class CompanyDescription(BaseModel):
             "'AI infrastructure', 'healthcare'). Null if unclear — never guess."
         ),
     )
+    website_state: Literal[
+        "ok",
+        "parked_or_for_sale",
+        "under_construction",
+        "unrelated_site",
+        "insufficient_info",
+    ] = Field(
+        ...,
+        description=(
+            "'ok' when the text reads like the company's own operating site. "
+            "'parked_or_for_sale' for domain-sale/parking/registrar pages. "
+            "'under_construction' for launching-soon/placeholder pages. "
+            "'unrelated_site' when the text is about a DIFFERENT business "
+            "than the named company. 'insufficient_info' when there is too "
+            "little text to tell."
+        ),
+    )
+    is_startup: bool | None = Field(
+        default=None,
+        description=(
+            "True when this reads like an operating startup: an independent, "
+            "private company founded within roughly the last 15 years. False "
+            "when it clearly is not (decades-old enterprise, publicly traded, "
+            "a subsidiary, a fund, a media site). Null when the text does not "
+            "support a confident call — never guess."
+        ),
+    )
+    not_startup_reason: str | None = Field(
+        default=None,
+        description="One short sentence; only when is_startup is false.",
+    )
+    founded_year: int | None = Field(
+        default=None,
+        description="Founding year ONLY if the text states it. Null otherwise.",
+    )
+    hq_country: str | None = Field(
+        default=None,
+        description=(
+            "Headquarters country as a 2-letter ISO code (e.g. 'US', 'IN', "
+            "'GB') ONLY when the text clearly states it. Null otherwise — "
+            "never guess."
+        ),
+    )
 
 
 PROMPT_TEMPLATE = """\
@@ -101,6 +146,21 @@ Rules:
 - `industry`: a coarse industry bucket like "fintech", "developer tools",
   "AI infrastructure", or "healthcare". Return null if the text does not make
   the industry clear. Never fabricate one.
+- `website_state`: classify the page itself. Use 'parked_or_for_sale' for
+  domain-sale/parking/registrar placeholder pages, 'under_construction' for
+  launching-soon pages with no product info, 'unrelated_site' when the text
+  describes a different business than {company_name}, 'insufficient_info'
+  when there is too little text to tell, and 'ok' otherwise. When the state
+  is not 'ok', still fill the description fields with a one-line factual note
+  (they will not be published).
+- `is_startup`: true only for an independent, PRIVATE company founded within
+  roughly the last 15 years. False for decades-old enterprises, publicly
+  traded companies, subsidiaries, funds, or media properties. If the text
+  does not support a confident call, return null. Never guess.
+- `not_startup_reason`: one short factual sentence, only when is_startup is
+  false (e.g. "Founded in 2000; publicly traded enterprise").
+- `founded_year` / `hq_country`: only when the text states them. `hq_country`
+  is a 2-letter ISO code. Null otherwise — never fabricate.
 
 Company name: {company_name}
 

@@ -44,6 +44,7 @@ VALID_PAYLOAD = {
     "description_long": "Paragraph one.\n\nParagraph two.",
     "primary_category": "developer tools",
     "tags": ["api", "cloud", "saas"],
+    "website_state": "ok",
 }
 
 
@@ -61,6 +62,7 @@ def test_company_description_tags_default_empty() -> None:
         "description_short": "Short.",
         "description_long": "Long.",
         "primary_category": "fintech",
+        "website_state": "ok",
     }
     obj = CompanyDescription.model_validate_json(json.dumps(payload))
     assert obj.tags == []

@@ -27,6 +27,7 @@ VALID_PAYLOAD: dict[str, Any] = {
     "description_long": "A longer description with detail.",
     "primary_category": "developer tools",
     "tags": ["api", "saas"],
+    "website_state": "ok",
 }
 
 INVALID_PAYLOAD: dict[str, Any] = {"description_long": "missing required fields"}
