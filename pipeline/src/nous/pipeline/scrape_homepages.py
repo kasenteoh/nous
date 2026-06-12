@@ -367,14 +367,23 @@ async def run_scrape_homepages(
             # Step 1: fetch the homepage.
             homepage = await _fetch_one(client, homepage_url)
             if homepage == "robots":
+                # robots.txt block ⇒ the site is alive, just disallowing us.
+                # Leave consecutive_scrape_failures untouched (not a dead site).
                 summary.pages_skipped_robots += 1
                 summary.companies_with_no_pages += 1
                 continue
             if homepage is None:
+                # Total fetch failure (network/HTTP error → no usable content):
+                # this is the dead-site signal. Bump the counter; it rides the
+                # finally-block commit below. Re-runs add one per failed cycle.
+                company.consecutive_scrape_failures += 1
                 summary.pages_failed += 1
                 summary.companies_with_no_pages += 1
                 continue
             assert isinstance(homepage, FetchResult)
+            # Homepage fetched successfully ⇒ the site is reachable. Reset the
+            # dead-site counter (persisted by the finally-block commit).
+            company.consecutive_scrape_failures = 0
 
             homepage_content, used_browser = await _resolve_content_with_fallback(
                 homepage, browser_client

@@ -88,6 +88,17 @@ class Company(Base):
         index=True,
     )
 
+    # Consecutive homepage-fetch failures across scrape-homepages runs. Bumped
+    # by one on a total fetch failure (network/HTTP error → no usable content),
+    # reset to 0 on a successful homepage fetch, and left unchanged on a
+    # robots.txt block (the site is alive, just disallowing us). When this
+    # crosses a small threshold the web surfaces a muted "possibly inactive"
+    # rider — a low-confidence signal, deliberately quieter than the status
+    # badge. Not indexed: never used in a WHERE in the pipeline.
+    consecutive_scrape_failures: Mapped[int] = mapped_column(
+        nullable=False, server_default="0"
+    )
+
     # When ingest-news last ran this company's Google News RSS query. Drives
     # the daily rotation: ORDER BY news_checked_at NULLS FIRST + LIMIT lets a
     # bounded run cover the whole table every ~table/limit days instead of
