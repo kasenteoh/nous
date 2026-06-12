@@ -132,6 +132,19 @@ jobs:
           if [ -z "$LIMIT" ]; then LIMIT=200; fi
           uv run nous estimate-employees --limit "$LIMIT" --max-runtime-minutes 30
 
+      - name: Snapshot companies
+        # No step id (deliberately): the deploy-hook gate below keys on
+        # contains(steps.*.outcome, 'success') over id'd steps only, and a
+        # snapshot is a side-channel time-series write, not a discovery stage —
+        # it must not influence whether we trigger a deploy. continue-on-error
+        # so a snapshot hiccup never fails the run; the weekly cadence means a
+        # missed week is a single absent data point, recoverable via
+        # `snapshot-companies --week`. One set-based upsert -> finishes fast.
+        if: ${{ !cancelled() }}
+        timeout-minutes: 10
+        continue-on-error: true
+        run: uv run nous snapshot-companies
+
       - name: Database stats
         # No step id — contains(steps.*.outcome, ...) on the Trigger step only
         # sees id'd steps; leaving this id-free means it cannot accidentally

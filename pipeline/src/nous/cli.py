@@ -569,6 +569,41 @@ def estimate_employees(
     asyncio.run(_run())
 
 
+@cli.command("snapshot-companies")
+@click.option(
+    "--week",
+    type=str,
+    default=None,
+    help=(
+        "Capture week as YYYY-MM-DD (normalized to that ISO week's Monday). "
+        "Default: the current ISO week's Monday. Use for backfill."
+    ),
+)
+def snapshot_companies(week: str | None) -> None:
+    """Snapshot every company's headcount + trailing-30-day news count.
+
+    One set-based upsert into company_snapshots, keyed by (company, ISO-week
+    Monday). Idempotent: re-running for the same week refreshes the row in
+    place. Cheap enough to run weekly; backfill a past week with --week.
+    """
+    import asyncio
+    from datetime import date as _date
+
+    from nous.db.session import AsyncSessionLocal
+    from nous.pipeline.snapshot_companies import run_snapshot_companies
+
+    parsed_week: _date | None = (
+        _date.fromisoformat(week) if week is not None else None
+    )
+
+    async def _run() -> None:
+        async with AsyncSessionLocal() as session:
+            summary = await run_snapshot_companies(session, week=parsed_week)
+            click.echo(summary.model_dump_json(indent=2))
+
+    asyncio.run(_run())
+
+
 @cli.command("db-stats")
 @click.option(
     "--cap-mb",

@@ -8,6 +8,7 @@ from sqlalchemy import (
     Date,
     DateTime,
     ForeignKey,
+    Integer,
     Numeric,
     SmallInteger,
     String,
@@ -380,4 +381,56 @@ class CompanyInvestor(Base):
     source: Mapped[str] = mapped_column(String, nullable=False)
     is_lead: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default="false"
+    )
+
+
+class CompanySnapshot(Base):
+    """A weekly time-series snapshot of a company's momentum signals.
+
+    Written by the snapshot-companies stage: one row per company per ISO week,
+    capturing the headcount range and trailing-30-day news volume as they stood
+    at capture time. Wave-4 momentum charts read this table; it costs nothing to
+    accumulate now and cannot be reconstructed retroactively, so we record
+    early ("record first, render later").
+
+    ``captured_week`` is the ISO-week Monday of capture. The UNIQUE
+    (company_id, captured_week) is the idempotency key: a same-week re-run
+    upserts the row in place rather than appending, so values stay fresh while
+    the row count per company per week stays exactly one.
+
+    Deliberately NO job_postings_count column — no writer exists for it yet;
+    added when a stage produces the data, per the no-unattributed-fact rule.
+    """
+
+    __tablename__ = "company_snapshots"
+    __table_args__ = (
+        UniqueConstraint(
+            "company_id",
+            "captured_week",
+            name="uq_company_snapshots_company_week",
+        ),
+    )
+
+    company_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("companies.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    # ISO-week Monday of capture. Part of the unique idempotency key, but that
+    # composite UNIQUE leads with company_id and can't serve a captured_week-only
+    # predicate, so index it standalone (the post-upsert count filters on it).
+    # A --week backfill writes to the chosen week's Monday.
+    captured_week: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+
+    # Headcount range as it stood at capture time (mirrors Company.employee_count_*;
+    # nullable because many companies have no findable headcount yet).
+    employee_count_min: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    employee_count_max: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    # Count of news_articles for this company published in the trailing 30 days
+    # at capture time. NOT NULL: a company with no recent news snapshots a 0,
+    # which is a real signal (quiet week), not missing data.
+    news_count_30d: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default="0"
     )

@@ -132,11 +132,6 @@ source-priority idea: rank sources, overwrite only on higher quality.
 `/favicon.ico`/`apple-touch-icon` during scrape-homepages; render on cards and
 detail header.
 
-### Start history snapshots now [S]
-New `company_snapshots` table (employee counts, job-posting counts, captured
-weekly). Costs nothing today; Wave 4's momentum charts need the backfill.
-Record first, render later.
-
 ---
 
 ## Product backlog — Wave 2: the relationship graph (differentiator)
