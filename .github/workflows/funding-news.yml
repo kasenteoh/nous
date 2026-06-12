@@ -80,6 +80,7 @@ jobs:
         run: uv run alembic upgrade head
 
       - name: Ingest news
+        id: news
         if: ${{ inputs.skip_news != true }}
         # Per-company Google News RSS + TechCrunch venture-tag broad sweep.
         # --limit rotates the per-company sweep (least-recently-checked first,
@@ -101,6 +102,7 @@ jobs:
           uv run nous ingest-news "${ARGS[@]}"
 
       - name: Extract funding
+        id: funding
         if: ${{ inputs.skip_funding != true }}
         # --limit 1000 caps per-run LLM spend on DeepSeek (now a daily ceiling).
         # Bounded by unprocessed articles, so steady-state cost tracks actual
@@ -111,6 +113,7 @@ jobs:
         run: uv run nous extract-funding --limit 1000
 
       - name: Extract funding (website fallback)
+        id: funding_website
         if: ${{ inputs.skip_funding != true }}
         # Gap-fill only: runs for companies that still have no funding rounds
         # after the TechCrunch/news pass above, so TechCrunch stays primary.
@@ -124,3 +127,19 @@ jobs:
           WF_LIMIT="${{ inputs.website_funding_limit }}"
           if [ -z "$WF_LIMIT" ]; then WF_LIMIT=150; fi
           uv run nous extract-funding-website --limit "$WF_LIMIT"
+
+      - name: Trigger Vercel deploy
+        # contains(steps.*.outcome, ...) covers every id'd step; only pipeline
+        # stages carry ids in this file — keep it that way or scope this back
+        # to an explicit list.
+        if: ${{ !cancelled() && contains(steps.*.outcome, 'success') }}
+        env:
+          VERCEL_DEPLOY_HOOK_URL: ${{ secrets.VERCEL_DEPLOY_HOOK_URL }}
+        run: |
+          if [ -z "$VERCEL_DEPLOY_HOOK_URL" ]; then
+            echo "VERCEL_DEPLOY_HOOK_URL not set — skipping deploy hook."
+            exit 0
+          fi
+          curl -fsS -m 30 --retry 3 -o /dev/null -X POST "$VERCEL_DEPLOY_HOOK_URL" \
+            && echo "Vercel deploy hook triggered." \
+            || echo "::warning::Vercel deploy hook POST failed (non-fatal)"

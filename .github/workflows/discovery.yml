@@ -88,6 +88,7 @@ jobs:
         run: uv run alembic upgrade head
 
       - name: Refresh VC portfolios
+        id: refresh
         run: |
           ARGS=()
           if [ -n "${{ inputs.firms }}" ]; then
@@ -102,11 +103,13 @@ jobs:
           uv run nous refresh-vc-portfolios "${ARGS[@]}"
 
       - name: Deduplicate companies
+        id: dedup
         # Runs after discovery so competitor analysis works on de-duplicated
         # rows. Exact-domain merges need no LLM; fuzzy candidates use DeepSeek.
         run: uv run nous dedup-companies
 
       - name: Analyze competitors
+        id: competitors
         timeout-minutes: 60
         continue-on-error: true
         run: |
@@ -115,6 +118,7 @@ jobs:
           uv run nous analyze-competitors --limit "$LIMIT"
 
       - name: Estimate employees
+        id: estimate
         if: ${{ inputs.skip_estimate != true }}
         # Best-effort headcount probing across public sources (Wellfound, The
         # Org, GrowJo, careers-page job count, GitHub org). continue-on-error
@@ -127,3 +131,19 @@ jobs:
           LIMIT="${{ inputs.estimate_limit }}"
           if [ -z "$LIMIT" ]; then LIMIT=200; fi
           uv run nous estimate-employees --limit "$LIMIT" --max-runtime-minutes 30
+
+      - name: Trigger Vercel deploy
+        # contains(steps.*.outcome, ...) covers every id'd step; only pipeline
+        # stages carry ids in this file — keep it that way or scope this back
+        # to an explicit list.
+        if: ${{ !cancelled() && contains(steps.*.outcome, 'success') }}
+        env:
+          VERCEL_DEPLOY_HOOK_URL: ${{ secrets.VERCEL_DEPLOY_HOOK_URL }}
+        run: |
+          if [ -z "$VERCEL_DEPLOY_HOOK_URL" ]; then
+            echo "VERCEL_DEPLOY_HOOK_URL not set — skipping deploy hook."
+            exit 0
+          fi
+          curl -fsS -m 30 --retry 3 -o /dev/null -X POST "$VERCEL_DEPLOY_HOOK_URL" \
+            && echo "Vercel deploy hook triggered." \
+            || echo "::warning::Vercel deploy hook POST failed (non-fatal)"
