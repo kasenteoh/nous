@@ -109,7 +109,6 @@ def test_parse_employee_range(text: str | None, expected: tuple[int, int] | None
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
 async def test_theorg_parses_employee_range() -> None:
     body = b'<html><body><script>{"slug":"ramp","employeeRange":"200-500"}</script></body></html>'
     async with HomepageClient(user_agent=USER_AGENT) as client:
@@ -117,7 +116,6 @@ async def test_theorg_parses_employee_range() -> None:
         assert await theorg.get_employee_range(client, "Ramp") == (200, 500)
 
 
-@pytest.mark.asyncio
 async def test_theorg_returns_none_without_field() -> None:
     body = b"<html><body>no employee data here</body></html>"
     async with HomepageClient(user_agent=USER_AGENT) as client:
@@ -125,7 +123,6 @@ async def test_theorg_returns_none_without_field() -> None:
         assert await theorg.get_employee_range(client, "Ramp") is None
 
 
-@pytest.mark.asyncio
 async def test_theorg_returns_none_on_404() -> None:
     # No matching route -> 404 -> fetch raises -> client swallows -> None.
     routes = [_Route("theorg.com/robots.txt", b"", status=404)]
@@ -139,7 +136,6 @@ async def test_theorg_returns_none_on_404() -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
 async def test_wellfound_parses_company_size() -> None:
     body = b"<html><body><div>Company size</div><div>11-50 employees</div></body></html>"
     async with HomepageClient(user_agent=USER_AGENT) as client:
@@ -147,7 +143,6 @@ async def test_wellfound_parses_company_size() -> None:
         assert await wellfound.get_employee_range(client, "Acme") == (11, 50)
 
 
-@pytest.mark.asyncio
 async def test_wellfound_returns_none_when_blocked() -> None:
     async with HomepageClient(user_agent=USER_AGENT) as client:
         _inject_transport(
@@ -167,7 +162,6 @@ async def test_wellfound_returns_none_when_blocked() -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
 async def test_growjo_parses_employee_count() -> None:
     body = b"<html><body><p>Notion has 1,001 employees and growing</p></body></html>"
     async with HomepageClient(user_agent=USER_AGENT) as client:
@@ -180,7 +174,6 @@ async def test_growjo_parses_employee_count() -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
 async def test_careers_jobs_counts_greenhouse_openings() -> None:
     openings = b"".join(b'<div class="opening"><a>Role</a></div>' for _ in range(15))
     body = b"<html><body><div id='grnhse_app'>" + openings + b"</div></body></html>"
@@ -192,7 +185,6 @@ async def test_careers_jobs_counts_greenhouse_openings() -> None:
         assert await careers_jobs.count_job_listings(client, "https://example.com") == (11, 50)
 
 
-@pytest.mark.asyncio
 async def test_careers_jobs_none_when_no_listings() -> None:
     body = b"<html><body><p>We are not hiring right now.</p></body></html>"
     async with HomepageClient(
@@ -202,7 +194,6 @@ async def test_careers_jobs_none_when_no_listings() -> None:
         assert await careers_jobs.count_job_listings(client, "https://example.com") is None
 
 
-@pytest.mark.asyncio
 async def test_careers_jobs_none_without_website() -> None:
     async with HomepageClient(user_agent=USER_AGENT) as client:
         assert await careers_jobs.count_job_listings(client, None) is None
@@ -213,7 +204,6 @@ async def test_careers_jobs_none_without_website() -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
 async def test_github_org_maps_public_member_count() -> None:
     routes = [
         _Route(
@@ -239,14 +229,12 @@ async def test_github_org_maps_public_member_count() -> None:
         assert await github_org.get_employee_range(client, "Vercel", "tok") == (51, 200)
 
 
-@pytest.mark.asyncio
 async def test_github_org_returns_none_without_token() -> None:
     async with HomepageClient(user_agent=USER_AGENT) as client:
         # No transport needed — empty token short-circuits before any HTTP.
         assert await github_org.get_employee_range(client, "Vercel", "") is None
 
 
-@pytest.mark.asyncio
 async def test_github_org_returns_none_when_org_not_found() -> None:
     routes = [_Route("search/users", b'{"items":[]}', content_type="application/json")]
     async with HomepageClient(user_agent=USER_AGENT) as client:

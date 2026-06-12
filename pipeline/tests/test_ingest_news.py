@@ -422,3 +422,90 @@ async def test_queried_company_is_stamped_even_with_no_results(
 
     await db.refresh(company)
     assert company.news_checked_at is not None
+
+
+# ---------------------------------------------------------------------------
+# TC threshold plumbing
+# ---------------------------------------------------------------------------
+
+
+async def test_tc_path_passes_similarity_threshold_to_auto_create(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """run_ingest_news must forward similarity_threshold= to auto_create_company
+    on the TC broad-ingest path — the same way refresh_vc_portfolios.py does.
+
+    This is a unit test: we mock session.execute (returns no companies so the
+    per-company loop is skipped) and auto_create_company (captures kwargs).
+    No real DB needed.
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    tc_article = NewsArticleResult(
+        url="https://techcrunch.com/2026/06/01/thresholdco-raises-50m",
+        title="ThresholdCo raises $50M Series A",
+        source="techcrunch.com",
+        published_date=date(2026, 6, 1),
+        raw_content="snippet",
+    )
+
+    async def _tc(*args: Any, **kwargs: Any) -> list[NewsArticleResult]:
+        return [tc_article]
+
+    monkeypatch.setattr(
+        "nous.pipeline.ingest_news.fetch_techcrunch_funding_articles", _tc
+    )
+    _mock_headline(monkeypatch, is_funding=True, name="ThresholdCo")
+
+    # Capture auto_create_company calls.
+    received_kwargs: list[dict[str, Any]] = []
+
+    async def _capture_auto_create(
+        session: Any, *, name: str, website: Any, discovered_via: str,
+        similarity_threshold: float = 0.85,
+    ) -> tuple[Any, bool]:
+        received_kwargs.append({
+            "name": name,
+            "similarity_threshold": similarity_threshold,
+        })
+        fake_company = MagicMock()
+        fake_company.id = "00000000-0000-0000-0000-000000000001"
+        return fake_company, True
+
+    monkeypatch.setattr("nous.pipeline.ingest_news.auto_create_company", _capture_auto_create)
+
+    # Also patch _article_already_stored to return False (new URL), and
+    # session.add / session.commit to no-ops so no DB is needed.
+    monkeypatch.setattr(
+        "nous.pipeline.ingest_news._article_already_stored",
+        AsyncMock(return_value=False),
+    )
+
+    # Mock the session: execute returns an empty result (no existing companies
+    # in the per-company path), scalar / add / commit are no-ops.
+    mock_result = MagicMock()
+    mock_result.scalars.return_value.all.return_value = []
+    fake_session = MagicMock()
+    fake_session.execute = AsyncMock(return_value=mock_result)
+    fake_session.add = MagicMock()
+    fake_session.commit = AsyncMock()
+    fake_session.rollback = AsyncMock()
+
+    client = _MockNewsClient(
+        rss_results={},
+        bodies={tc_article.url: "TC body text " * 100},
+    )
+
+    custom_threshold = 0.72
+    await run_ingest_news(
+        fake_session,  # type: ignore[arg-type]
+        client,  # type: ignore[arg-type]
+        include_techcrunch_broad=True,
+        similarity_threshold=custom_threshold,
+    )
+
+    assert len(received_kwargs) == 1, "auto_create_company should have been called once"
+    assert received_kwargs[0]["similarity_threshold"] == custom_threshold, (
+        f"Expected threshold {custom_threshold!r}, got "
+        f"{received_kwargs[0]['similarity_threshold']!r}"
+    )

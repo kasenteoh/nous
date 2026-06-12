@@ -36,7 +36,13 @@ from nous.db.upsert import (
     reconcile_funding_round,
     upsert_investor,
 )
-from nous.llm.client import LLMError, LLMParseError, LLMRateLimitError, complete_json
+from nous.llm.client import (
+    MAX_PROMPT_INPUT_CHARS,
+    LLMError,
+    LLMParseError,
+    LLMRateLimitError,
+    complete_json,
+)
 from nous.llm.prompts.funding_extraction import (
     FundingExtraction,
     build_prompt,
@@ -277,7 +283,7 @@ async def run_extract_funding_website(
 
         parts = [extract_visible_text(page.content) for page in pages]
         combined = "\n\n".join(p for p in parts if p)
-        cleaned = truncate_to_chars(combined, 32_000)
+        cleaned = truncate_to_chars(combined, MAX_PROMPT_INPUT_CHARS)
 
         if len(cleaned) >= _MIN_TEXT_CHARS:
             prompt = build_website_prompt(company_name=company.name, page_text=cleaned)

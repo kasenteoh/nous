@@ -7,7 +7,6 @@ de-duplication matching on normalized company names.
 from __future__ import annotations
 
 import hashlib
-import os
 import re
 import unicodedata
 
@@ -95,17 +94,14 @@ def normalize_name(name: str) -> str:
     return re.sub(r"[^a-z0-9]+", "", cleaned)
 
 
-def slug_with_disambiguator(base: str, seed: str | None = None) -> str:
+def slug_with_disambiguator(base: str, seed: str) -> str:
     """Append a 6-hex-char suffix to a base slug to resolve collisions.
 
-    If *seed* is provided, the suffix is the first 6 hex chars of sha256(seed),
-    making it deterministic for the same seed.  If *seed* is None or empty, a
-    random 3-byte value is used (non-deterministic), which is the common case
-    now that companies no longer carry a stable external identifier.
+    The suffix is the first 6 hex chars of sha256(*seed*), making it
+    deterministic: the same (base, seed) pair always produces the same slug.
+    The established seed pattern is ``name + (website or "")``.
 
-    Example: "acme" → "acme-a3f9c2"
+    Example: "acme" + seed "Acmehttps://acme.com" → "acme-a3f9c2"
     """
-    suffix = (
-        hashlib.sha256(seed.encode()).hexdigest()[:6] if seed else os.urandom(3).hex()
-    )
+    suffix = hashlib.sha256(seed.encode()).hexdigest()[:6]
     return f"{base}-{suffix}"

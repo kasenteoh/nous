@@ -48,7 +48,7 @@ jobs:
         run: uv run alembic upgrade head
 
       - name: Pytest
-        run: uv run pytest -v
+        run: uv run pytest -v -rs
 
   web:
     runs-on: ubuntu-latest

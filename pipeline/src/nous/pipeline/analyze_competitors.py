@@ -282,8 +282,13 @@ async def run_analyze_competitors(
         # determine provenance: a competitor whose normalized name came from the
         # TechCrunch candidates is sourced to that article; everything else the
         # model added is "llm_inferred" (rendered as a *potential* competitor).
+        # Resolve each competitor and collect in LLM order (sorted by rank).
+        # The CompetitorAnalysis validator already guarantees contiguous 1..N
+        # ranks; this re-rank is belt-and-braces so a future relaxation of that
+        # validation can't violate the unique (company_id, rank) constraint.
+        llm_ordered = sorted(analysis.competitors, key=lambda x: x.rank)
         resolved: list[tuple[UUID | None, str, str, str, int, str, str | None]] = []
-        for c in analysis.competitors:
+        for contiguous_rank, c in enumerate(llm_ordered, start=1):
             cid = await resolve_competitor_company_id(session, name=c.name)
             article_url = candidate_map.get(normalize_name(c.name))
             if article_url is not None:
@@ -291,7 +296,7 @@ async def run_analyze_competitors(
             else:
                 source, source_url = _LLM_SOURCE, None
             resolved.append(
-                (cid, c.name, c.description, c.reasoning, c.rank, source, source_url)
+                (cid, c.name, c.description, c.reasoning, contiguous_rank, source, source_url)
             )
 
         if dry_run:

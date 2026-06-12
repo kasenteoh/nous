@@ -34,7 +34,7 @@ async def fetch_techcrunch_funding_articles(
     erroring out the whole pipeline run.
     """
     try:
-        xml_text = await client._fetch_text(TC_FUNDING_FEED)
+        xml_text = await client.fetch_text(TC_FUNDING_FEED)
     except RobotsBlockedError:
         logger.warning("TechCrunch venture feed blocked by robots.txt")
         return []

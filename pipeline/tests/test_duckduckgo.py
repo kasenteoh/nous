@@ -8,7 +8,6 @@ from __future__ import annotations
 import time
 
 import httpx
-import pytest
 
 from nous.sources.duckduckgo import (
     DuckDuckGoSearch,
@@ -153,7 +152,6 @@ def test_extract_result_urls_deduplicates() -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
 async def test_search_returns_empty_on_captcha() -> None:
     transport = DDGMockTransport(status=200, body=DDG_CAPTCHA_HTML)
     http_client, search = _make_client(transport)
@@ -164,7 +162,6 @@ async def test_search_returns_empty_on_captcha() -> None:
     assert results == []
 
 
-@pytest.mark.asyncio
 async def test_search_returns_empty_on_network_error() -> None:
     transport = DDGMockTransport(raise_error=True)
     http_client, search = _make_client(transport)
@@ -175,7 +172,6 @@ async def test_search_returns_empty_on_network_error() -> None:
     assert results == []
 
 
-@pytest.mark.asyncio
 async def test_search_returns_empty_on_non_200() -> None:
     transport = DDGMockTransport(status=503)
     http_client, search = _make_client(transport)
@@ -191,7 +187,6 @@ async def test_search_returns_empty_on_non_200() -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
 async def test_search_returns_urls_in_order() -> None:
     transport = DDGMockTransport(body=DDG_RESULTS_HTML)
     http_client, search = _make_client(transport)
@@ -206,7 +201,6 @@ async def test_search_returns_urls_in_order() -> None:
     ]
 
 
-@pytest.mark.asyncio
 async def test_search_respects_limit() -> None:
     transport = DDGMockTransport(body=DDG_RESULTS_HTML)
     http_client, search = _make_client(transport)
@@ -223,7 +217,6 @@ async def test_search_respects_limit() -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
 async def test_search_throttle_enforced() -> None:
     """Two consecutive searches wait at least seconds_between_requests apart."""
     throttle = 0.1  # 100ms — short enough to not slow the test suite much
@@ -304,7 +297,6 @@ class SequencedTransport(httpx.AsyncBaseTransport):
         )
 
 
-@pytest.mark.asyncio
 async def test_breaker_opens_after_consecutive_blocked_responses() -> None:
     """After 5 consecutive blocked responses (DDG 202 rate limit), the breaker
     opens: no further HTTP requests are made and search returns []."""
@@ -322,7 +314,6 @@ async def test_breaker_opens_after_consecutive_blocked_responses() -> None:
     await http_client.aclose()
 
 
-@pytest.mark.asyncio
 async def test_clean_response_resets_breaker_counter() -> None:
     """A successful 200 response resets the consecutive-blocked counter."""
     script = [(202, "")] * 4 + [(200, DDG_RESULTS_HTML)] + [(202, "")] * 4
@@ -338,7 +329,6 @@ async def test_clean_response_resets_breaker_counter() -> None:
     await http_client.aclose()
 
 
-@pytest.mark.asyncio
 async def test_captcha_body_counts_toward_breaker() -> None:
     """A 200 response carrying the anti-bot interstitial counts as blocked."""
     transport = SequencedTransport([(200, DDG_CAPTCHA_HTML)])

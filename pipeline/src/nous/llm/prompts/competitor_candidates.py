@@ -14,8 +14,10 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
-# Per-article text cap and number of articles fed into the candidate prompt, to
-# bound token cost. TechCrunch funding pieces are short; a handful is plenty.
+# Per-article text cap for the candidate prompt. Intentionally below the shared
+# MAX_PROMPT_INPUT_CHARS ceiling (32_000 in nous.llm.client): TechCrunch funding
+# pieces are short and only the competitor-name signal is needed, so a tight cap
+# bounds multi-article token cost without losing useful signal.
 MAX_ARTICLE_CHARS = 6_000
 MAX_ARTICLES = 8
 

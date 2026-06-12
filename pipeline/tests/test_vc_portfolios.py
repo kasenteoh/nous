@@ -111,7 +111,6 @@ window.AlgoliaOpts = {"app":"45BWZJ1SGC","key":"test-algolia-key"};
 """
 
 
-@pytest.mark.asyncio
 async def test_yc_adapter_drops_pre_seed_and_keeps_other_stages() -> None:
     algolia_body = (FIXTURES / "yc.json").read_bytes()
     routes = [
@@ -165,7 +164,6 @@ async def test_yc_adapter_drops_pre_seed_and_keeps_other_stages() -> None:
         ("general_catalyst", "general_catalyst.html", "Stripe", 50),
     ],
 )
-@pytest.mark.asyncio
 async def test_adapter_parses_fixture(
     firm: str,
     fixture: str,
@@ -212,7 +210,6 @@ _KHOSLA_CATEGORIES = (
 )
 
 
-@pytest.mark.asyncio
 async def test_khosla_adapter_aggregates_categories() -> None:
     adapter = ADAPTERS["khosla"]
     routes: list[_Route] = [
@@ -255,7 +252,6 @@ async def test_khosla_adapter_aggregates_categories() -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
 async def test_greylock_strips_logo_suffixes_from_names() -> None:
     """Greylock logo alts carry decorated suffixes ("X Logo Grey", "X Logo NEW
     2"); none of them should leak into the company name."""
@@ -275,7 +271,6 @@ async def test_greylock_strips_logo_suffixes_from_names() -> None:
     assert "Ramp" in names
 
 
-@pytest.mark.asyncio
 async def test_lightspeed_yields_no_websites() -> None:
     adapter = ADAPTERS["lightspeed"]
     routes = _html_routes(adapter.PORTFOLIO_URL, FIXTURES / "lightspeed.html")  # type: ignore[attr-defined]
@@ -295,7 +290,6 @@ async def test_lightspeed_yields_no_websites() -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
 async def test_felicis_parses_rsc_payload_with_descriptions() -> None:
     adapter = ADAPTERS["felicis"]
     routes = _html_routes(adapter.PORTFOLIO_URL, FIXTURES / "felicis.html")  # type: ignore[attr-defined]
@@ -323,7 +317,6 @@ async def test_felicis_parses_rsc_payload_with_descriptions() -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
 async def test_kleiner_perkins_enumerates_company_sitemap() -> None:
     adapter = ADAPTERS["kleiner_perkins"]
     routes = [

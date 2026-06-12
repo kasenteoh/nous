@@ -1,10 +1,13 @@
 """estimate-employees pipeline stage.
 
 For each company with no employee count (or a stale check), probe public
-sources in priority order — Wellfound → The Org → GrowJo → careers-page job
-count → GitHub org — and record the first non-null ``(min, max)`` range plus
-its source label. The source is stored so the company page can attribute the
-number (spec §3.4: every rendered fact has a recorded source).
+sources in priority order — The Org → GrowJo → careers-page job count →
+GitHub org → Wellfound — and record the first non-null ``(min, max)`` range
+plus its source label. The source is stored so the company page can attribute
+the number (spec §3.4: every rendered fact has a recorded source).
+
+Wellfound is tried last because it is mostly Cloudflare-blocked, burning a
+wasted request per company when placed earlier in the chain.
 
 Mirrors resolve-homepages: one commit per company so a mid-run crash leaves a
 clean state, ``employee_count_checked_at`` stamped on every attempt (success,
@@ -142,14 +145,11 @@ async def _probe_employee_count(
 ) -> tuple[tuple[int, int], str] | None:
     """Try each source in priority order; return the first ``(range, source)``.
 
-    First non-null wins, so Wellfound (most specific) is tried before the
-    GitHub member-count proxy (least specific).
+    Order: The Org → GrowJo → careers-page job count → GitHub → Wellfound.
+    Wellfound is placed last because it is mostly Cloudflare-blocked and would
+    burn a wasted request per company if tried earlier in the chain.
     """
     name = company.name
-
-    wf = await wellfound.get_employee_range(client, name)
-    if wf is not None:
-        return wf, "wellfound"
 
     org = await theorg.get_employee_range(client, name)
     if org is not None:
@@ -167,5 +167,11 @@ async def _probe_employee_count(
     gh = await github_org.get_employee_range(client, name, github_token)
     if gh is not None:
         return gh, "github"
+
+    # Wellfound last: mostly Cloudflare-blocked, so we keep it as a fallback
+    # rather than the first probe.
+    wf = await wellfound.get_employee_range(client, name)
+    if wf is not None:
+        return wf, "wellfound"
 
     return None

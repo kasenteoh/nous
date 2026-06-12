@@ -23,7 +23,13 @@ from sqlalchemy.orm.exc import StaleDataError
 
 from nous.db.models import Company, RawPage
 from nous.db.upsert import replace_people
-from nous.llm.client import LLMError, LLMParseError, LLMRateLimitError, complete_json
+from nous.llm.client import (
+    MAX_PROMPT_INPUT_CHARS,
+    LLMError,
+    LLMParseError,
+    LLMRateLimitError,
+    complete_json,
+)
 from nous.llm.prompts.company_description import CompanyDescription, build_prompt
 from nous.util.text import extract_visible_text, truncate_to_chars
 
@@ -117,7 +123,7 @@ async def run_enrich_companies(
         # Concatenate visible text from all pages.
         parts = [extract_visible_text(page.content) for page in pages]
         combined = "\n\n".join(p for p in parts if p)
-        cleaned = truncate_to_chars(combined, 32_000)
+        cleaned = truncate_to_chars(combined, MAX_PROMPT_INPUT_CHARS)
 
         if len(cleaned) < _MIN_TEXT_CHARS:
             logger.info(

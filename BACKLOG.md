@@ -15,14 +15,6 @@ bottom of the appropriate section; close items by deleting them.
 
 ## Now — correctness & cost (P0/P1)
 
-### P0 [M] — `raw_pages` stores full HTML and will exhaust the Supabase 500MB cap
-[scrape_homepages.py](pipeline/src/nous/pipeline/scrape_homepages.py) caches the
-complete raw HTML of ~4–5 pages per company. At a few thousand companies this is
-plausibly the majority of our 500MB free tier, and it grows every weekly run.
-The LLM only ever consumes extracted visible text. Fix: store extracted text
-(or compressed HTML) in `raw_pages.content`, with a one-time migration shrinking
-existing rows. This is the only backlog item with a hard (if hidden) deadline.
-
 ### P1 [S] — Wire the Vercel deploy hook after pipeline runs (completes M6)
 `VERCEL_DEPLOY_HOOK_URL` exists in [config.py](pipeline/src/nous/config.py) but
 nothing calls it. After a pipeline run the site serves up to 6h-stale ISR pages,
@@ -47,44 +39,15 @@ loudly at 80% of the 500MB cap. Half the product backlog below adds LLM calls �
 we need the ledger before stacking stages, to keep the ~$1/week DeepSeek budget
 honest.
 
-### P1 [S] — Confirm `cleanup-form-d` ran in prod, then delete the stage
-[cleanup_form_d.py](pipeline/src/nous/pipeline/cleanup_form_d.py) is a one-time
-migration that lives in no cron. If it never ran, legacy rows are still
-mis-tagged. Run it (dry-run first), then remove the stage and its tests.
-
 ---
 
 ## Pipeline cleanups (P2)
-
-### TC-path `auto_create_company` ignores the configured similarity threshold [S]
-[ingest_news.py](pipeline/src/nous/pipeline/ingest_news.py) calls without
-`similarity_threshold=`, defaulting to 0.85. Today that matches
-`Settings.COMPANY_FUZZY_MATCH_THRESHOLD`, but a config tweak silently desyncs
-the VC and TC paths. Plumb the setting through like
-[refresh_vc_portfolios.py](pipeline/src/nous/pipeline/refresh_vc_portfolios.py) does.
-
-### `find_company_by_name` over-matches short normalized names [S]
-[upsert.py](pipeline/src/nous/db/upsert.py): trigram similarity is unstable for
-very short strings — "AI", "Vue", "X" can fuzzy-match unrelated companies at
-0.85. Add a minimum-length guard (`if len(norm) < 6: return None`) inside the
-trigram branch.
-
-### Slug disambiguator still has a non-deterministic fallback [S]
-[slugify.py:109](pipeline/src/nous/util/slugify.py): the seeded-sha256 path
-shipped, but when no seed is provided it still falls back to
-`os.urandom(3).hex()`. Audit callers and pass a seed (name + website) everywhere
-so the fallback can be removed.
 
 ### Competitor self-reference is not blocked at the DB [S]
 [models.py](pipeline/src/nous/db/models.py): nothing prevents
 `company_id == competitor_company_id`. Add
 `CheckConstraint("competitor_company_id IS NULL OR competitor_company_id != company_id")`
 via a migration.
-
-### `competitors.rank` not enforced contiguous 1..N [S]
-[analyze_competitors.py](pipeline/src/nous/pipeline/analyze_competitors.py)
-trusts the LLM's `rank` as ordinal; sparse ranks (1, 2, 5) render as "Top 3,
-then #5". Re-rank the resolved list to 1..N before insert.
 
 ### `news_articles.url` indexed twice [S]
 [0003_m3_schema.py:89](pipeline/alembic/versions/0003_m3_schema.py): both
@@ -99,31 +62,6 @@ reimplement domain locks + throttled GET + tenacity. They also keep separate
 lock dicts, so HomepageClient and HeadlessBrowserClient do **not** actually
 cooperate on the 1 req/sec/domain budget despite the comment claiming they do.
 Extract a `ThrottledHTTPClient` in `sources/_http.py` with a shared registry.
-
-### `techcrunch.py` reaches into private `NewsClient._fetch_text` [S]
-[techcrunch.py:37](pipeline/src/nous/sources/techcrunch.py). Promote
-`_fetch_text` to public or fold the TC adapter into `news.py`.
-
-### Wellfound probe is mostly Cloudflare-blocked — demote it [S]
-[estimate_employees.py](pipeline/src/nous/pipeline/estimate_employees.py) tries
-Wellfound first, but it rarely returns data. Reorder the probe chain (or drop
-Wellfound) so the common case doesn't burn a blocked request per company.
-
-### Centralized prompt-input character limit [S]
-Each LLM-using stage has its own truncation constant
-([enrich_companies.py](pipeline/src/nous/pipeline/enrich_companies.py),
-[funding_extraction.py](pipeline/src/nous/llm/prompts/funding_extraction.py)).
-Centralize as `MAX_PROMPT_INPUT_CHARS` in `nous.llm.client`.
-
-### Redundant `@pytest.mark.asyncio` decorators [S]
-`asyncio_mode = "auto"` is set; explicit decorators across six test files
-(`test_duckduckgo.py`, `test_robots.py`, `test_homepage.py`, `test_news.py`,
-`test_vc_portfolios.py`, `test_employee_sources.py`) are no-ops. One sweep.
-
-### Add `-rs` to the pytest invocation in CI [S]
-[lint.yml:51](.github/workflows/lint.yml) runs `uv run pytest -v`; DB-gated
-tests skip silently. `-rs` names the skips so a missing DATABASE_URL can't hide
-test count.
 
 ---
 

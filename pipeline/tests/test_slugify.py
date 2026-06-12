@@ -150,22 +150,14 @@ class TestSlugWithDisambiguator:
         r2 = slug_with_disambiguator("acme", "0002222222")
         assert r1 != r2
 
-    def test_none_cik_non_deterministic(self) -> None:
-        # With no CIK, the function uses os.urandom — two calls should
-        # almost always differ (probability of collision is 1/16^6 ≈ 0).
-        r1 = slug_with_disambiguator("acme", None)
-        r2 = slug_with_disambiguator("acme", None)
-        # We just check the format; non-determinism is acceptable.
-        for r in (r1, r2):
-            assert r.startswith("acme-")
-            suffix = r[len("acme-"):]
-            assert len(suffix) == 6
-
-    def test_empty_cik_uses_random(self) -> None:
-        # Empty string is falsy → random suffix.
-        result = slug_with_disambiguator("widget", "")
-        assert result.startswith("widget-")
-        assert len(result) == len("widget-") + 6
+    def test_empty_seed_deterministic(self) -> None:
+        # Empty string is a valid (deterministic) seed — sha256("") is stable.
+        r1 = slug_with_disambiguator("acme", "")
+        r2 = slug_with_disambiguator("acme", "")
+        assert r1 == r2
+        assert r1.startswith("acme-")
+        suffix = r1[len("acme-"):]
+        assert len(suffix) == 6
 
     def test_suffix_length_always_6(self) -> None:
         for cik in ["0000000001", "9999999999", "0001858523"]:
