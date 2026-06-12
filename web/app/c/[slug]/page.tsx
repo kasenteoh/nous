@@ -14,6 +14,7 @@ import {
 } from "@/lib/format";
 import { JsonLd } from "@/components/JsonLd";
 import { Markdown } from "@/components/Markdown";
+import { StatusBadge } from "@/components/StatusBadge";
 import { Team } from "@/components/Team";
 import { FundingHistory } from "@/components/FundingHistory";
 import { Investors } from "@/components/Investors";
@@ -156,6 +157,13 @@ export default async function CompanyPage({ params }: Props) {
           <h1 className="text-4xl font-semibold tracking-tight text-ink">
             {company.name}
           </h1>
+          {/* Status badge — renders nothing while status='active'; otherwise
+              marks the exit (Acquired / Shut down / IPO), linking to the
+              announcement when a source URL was recorded. */}
+          <StatusBadge
+            status={company.status}
+            sourceUrl={company.status_source_url}
+          />
           {/* Discovery badge — every company has a discovered_via value
               ('vc_portfolio' | 'news' | 'techcrunch'), surfacing how nous
               first found the company. */}

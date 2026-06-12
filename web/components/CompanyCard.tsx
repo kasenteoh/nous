@@ -3,6 +3,7 @@
 
 import Link from "next/link";
 import { formatLocation } from "@/lib/format";
+import { StatusBadge } from "@/components/StatusBadge";
 import type { CompanyListRow } from "@/lib/types";
 
 interface CompanyCardProps {
@@ -19,9 +20,16 @@ export function CompanyCard({ company }: CompanyCardProps) {
       href={`/c/${company.slug}`}
       className="group block rounded-lg border border-edge p-5 hover:border-ink-muted transition-colors"
     >
-      <h2 className="font-semibold text-ink group-hover:underline underline-offset-2 leading-snug">
-        {company.name}
-      </h2>
+      {/* Status marker (Acquired / Shut down / IPO) is kept outside
+          the h2 so the group-hover underline applies to the name
+          only. No sourceUrl here — the whole card is already a link,
+          and nesting an <a> inside it would be invalid HTML. */}
+      <div className="flex flex-wrap items-center gap-2">
+        <h2 className="font-semibold text-ink group-hover:underline underline-offset-2 leading-snug">
+          {company.name}
+        </h2>
+        <StatusBadge status={company.status} />
+      </div>
 
       {company.description_short && (
         <p className="mt-2 text-sm text-ink-muted line-clamp-2 leading-snug">

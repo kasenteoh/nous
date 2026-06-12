@@ -95,6 +95,30 @@ class FundingExtraction(BaseModel):
             "data is only implied."
         ),
     )
+    # Status-event fields default to None so payloads predating them (cached
+    # LLM responses, fixtures) keep validating unchanged.
+    status_event: Literal["acquired", "shut_down", "ipo"] | None = Field(
+        default=None,
+        description=(
+            "Set ONLY if the text explicitly announces that the named company "
+            "itself was acquired, shut down / ceased operations, or completed "
+            "an IPO — even when is_funding_announcement is false. If the named "
+            "company is the acquirer (it bought another company), that is NOT "
+            "a status event — return null; 'acquired' applies only when the "
+            "named company itself is the company being bought. Rumors, "
+            "'in talks', 'exploring', or another company's exit → null. "
+            "Never guess."
+        ),
+    )
+    status_confidence: Literal["low", "medium", "high"] | None = Field(
+        default=None,
+        description=(
+            "Confidence that status_event happened to this exact company: "
+            "'high' for an unambiguous completed announcement; 'medium' when "
+            "the wording is indirect; 'low' when only implied. Null when "
+            "status_event is null."
+        ),
+    )
 
 
 PROMPT_TEMPLATE = """\
@@ -116,6 +140,16 @@ Return JSON matching the schema. Rules:
   go in other_investors.
 - confidence: 'high' if amount + lead are both stated explicitly; 'medium' if
   one is inferred; 'low' if the article is fuzzy or the data is implied.
+- status_event: if the article clearly announces that {company_name} itself
+  was acquired, shut down / ceased operations, or completed an IPO, set
+  status_event ('acquired' | 'shut_down' | 'ipo') and status_confidence —
+  even when is_funding_announcement is false.
+- If {company_name} is the acquirer (it bought another company), that is NOT
+  a status event for {company_name} — return null. Set 'acquired' only when
+  {company_name} itself is the company being bought.
+- Leave status_event null unless the article explicitly states the event
+  happened to this exact company. Rumors, "in talks", "exploring" a sale or
+  IPO, pending/unclosed deals, or another company's exit → null. Never guess.
 
 Article body:
 ---
@@ -156,6 +190,12 @@ Return JSON matching the schema. Rules:
   third-party publication.
 - confidence: at most 'medium' for website-sourced data; 'low' when the figure
   is only implied. A company's own site is less authoritative than news coverage.
+- status_event: only for an explicit notice on the company's OWN site (e.g.
+  "we've been acquired by X", "we are winding down");
+  cap status_confidence at 'medium'. Anything less explicit → null. Never guess.
+- A post saying {company_name} acquired ANOTHER company ("we acquired X") is
+  NOT a status event for {company_name} — return null. Set 'acquired' only
+  when {company_name} itself is the company being bought.
 
 Website text (may be truncated):
 ---

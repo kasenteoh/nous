@@ -24,6 +24,11 @@ export interface CompanyRow {
   // M3 — how this company first entered the DB.
   // One of: 'vc_portfolio' | 'news' | 'techcrunch'.
   discovered_via: string;
+  // Lifecycle status — 'active' | 'acquired' | 'shut_down' | 'ipo'. Set by the
+  // extract-funding stage from explicit announcements; defaults to 'active'.
+  status: string;
+  // Article/page that announced the status event; null while status='active'.
+  status_source_url: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -38,6 +43,7 @@ export interface CompanyListRow {
   hq_state: string | null;
   industry_group: string | null;
   description_short: string | null; // M2 — shown as preview on index cards
+  status: string; // 'active' | 'acquired' | 'shut_down' | 'ipo'
 }
 
 // ─── M3: funding-history rows ─────────────────────────────────────────────────
