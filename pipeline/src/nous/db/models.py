@@ -185,7 +185,10 @@ class NewsArticle(Base):
         ForeignKey("companies.id", ondelete="CASCADE"),
         index=True,
     )
-    url: Mapped[str] = mapped_column(unique=True, index=True)
+    # unique=True backs the uq_news_articles_url constraint (a unique index).
+    # No separate index=True — that produced a redundant ix_news_articles_url
+    # over the same column, dropped in migration 0020.
+    url: Mapped[str] = mapped_column(unique=True)
     title: Mapped[str]
     source: Mapped[str]  # hostname, e.g. "techcrunch.com"
     published_date: Mapped[date | None] = mapped_column(Date)
@@ -314,6 +317,12 @@ class Competitor(Base):
 
     __table_args__ = (
         UniqueConstraint("company_id", "rank", name="uq_competitors_company_rank"),
+        # A company can never be its own competitor. Enforced in the DB by
+        # migration 0020; mirrored here so the model and schema agree.
+        CheckConstraint(
+            "competitor_company_id IS NULL OR competitor_company_id <> company_id",
+            name="ck_competitors_no_self_reference",
+        ),
     )
 
 

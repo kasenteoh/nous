@@ -97,3 +97,21 @@ async def test_unique_company_rank_constraint(db: AsyncSession) -> None:
     )
     with pytest.raises(IntegrityError):
         await db.flush()
+
+
+async def test_self_reference_rejected(db: AsyncSession) -> None:
+    """ck_competitors_no_self_reference forbids a company being its own competitor."""
+    target = _make_company("Acme")
+    db.add(target)
+    await db.flush()
+
+    db.add(
+        Competitor(
+            company_id=target.id,
+            competitor_company_id=target.id,
+            competitor_name="Acme",
+            rank=1,
+        )
+    )
+    with pytest.raises(IntegrityError):
+        await db.flush()
