@@ -235,6 +235,9 @@ class Investor(Base):
 
     name: Mapped[str]
     name_normalized: Mapped[str] = mapped_column(unique=True, index=True)
+    # URL slug for /investor/[slug]. Backfilled in migration 0018 and assigned
+    # at insert time by upsert_investor; unique so the route is unambiguous.
+    slug: Mapped[str] = mapped_column(unique=True, index=True)
     # 'institutional' | 'angel' | 'unknown'
     type: Mapped[str] = mapped_column(String, nullable=False, server_default="unknown")
     description: Mapped[str | None]

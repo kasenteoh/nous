@@ -12,6 +12,10 @@ import type {
   CompetitorWithResolved,
   FundingRound,
   FundingRoundWithInvestors,
+  InvestorDetail,
+  InvestorListRow,
+  InvestorRoundRow,
+  InvestorSlugRow,
   NewsArticleRow,
   PersonRow,
 } from "@/lib/types";
@@ -1008,4 +1012,397 @@ export async function countNewThisWeek(days = 7): Promise<NewThisWeekCounts> {
     companies: companiesResult.count ?? 0,
     rounds: roundsResult.count ?? 0,
   };
+}
+
+// ─── Investor pages ───────────────────────────────────────────────────────────
+
+/** Paged result for the /investors index: rows for this page + total firm count. */
+export interface InvestorListResult {
+  rows: InvestorListRow[];
+  total: number;
+}
+
+/**
+ * A page of investors ranked by portfolio size (most holdings first), plus the
+ * total investor count for pagination.
+ *
+ * Ranking uses PostgREST's embedded-aggregate ordering: `company_investors(count)`
+ * embeds the per-investor holding count, and `.order("count", { referencedTable })`
+ * sorts by it server-side — no in-process sort over the whole table (which can
+ * run to thousands of firms). `name` is the deterministic tiebreaker so paging is
+ * stable when many firms share a count. `count: "exact"` returns the unfiltered
+ * total in the same round trip.
+ */
+export async function listInvestors(
+  opts: { limit?: number; offset?: number } = {},
+): Promise<InvestorListResult> {
+  const limit = opts.limit ?? 30;
+  const offset = opts.offset ?? 0;
+
+  let supabase: ReturnType<typeof createSupabaseServerClient>;
+  try {
+    supabase = createSupabaseServerClient();
+  } catch (err) {
+    console.warn("[listInvestors] Supabase not configured:", (err as Error).message);
+    return { rows: [], total: 0 };
+  }
+
+  const { data, error, count } = await supabase
+    .from("investors")
+    .select("slug, name, type, company_investors(count)", { count: "exact" })
+    .order("count", { referencedTable: "company_investors", ascending: false })
+    .order("name", { ascending: true })
+    .range(offset, offset + limit - 1);
+
+  if (error) {
+    console.error("[listInvestors] query failed:", error.message);
+    return { rows: [], total: 0 };
+  }
+
+  type Row = {
+    slug: string | null;
+    name: string | null;
+    type: string | null;
+    // Embedded aggregate comes back as [{ count: number }] (or [] / null).
+    company_investors: { count: number }[] | { count: number } | null;
+  };
+
+  const rows = ((data ?? []) as Row[]).flatMap((r) => {
+    if (!r.slug || !r.name) return [];
+    const agg = Array.isArray(r.company_investors)
+      ? r.company_investors[0]
+      : r.company_investors;
+    return [
+      {
+        slug: r.slug,
+        name: r.name,
+        type: r.type ?? "unknown",
+        portfolioCount: agg?.count ?? 0,
+      },
+    ];
+  });
+
+  return { rows, total: count ?? rows.length };
+}
+
+/**
+ * Full detail for a single investor by slug, or null when the slug is unknown.
+ *
+ * Three queries:
+ *   1. investors — the firm row (id, display fields).
+ *   2. company_investors → companies — the portfolio, shaped for CompanyCard.
+ *   3. funding_round_investors → funding_rounds → companies — rounds this firm
+ *      led or participated in, flattened with the funded company.
+ */
+export async function getInvestorBySlug(
+  slug: string,
+): Promise<InvestorDetail | null> {
+  let supabase: ReturnType<typeof createSupabaseServerClient>;
+  try {
+    supabase = createSupabaseServerClient();
+  } catch (err) {
+    console.warn(
+      "[getInvestorBySlug] Supabase not configured:",
+      (err as Error).message,
+    );
+    return null;
+  }
+
+  // 1. The investor row.
+  const { data: investor, error: investorError } = await supabase
+    .from("investors")
+    .select("id, slug, name, type, description, website")
+    .eq("slug", slug)
+    .single();
+
+  if (investorError || !investor) {
+    if (investorError?.code !== "PGRST116") {
+      console.error(
+        "[getInvestorBySlug] investor query failed:",
+        investorError?.message,
+      );
+    }
+    return null;
+  }
+
+  const investorId = investor.id as string;
+
+  // 2 & 3 in parallel: portfolio companies + rounds led/participated.
+  const [portfolioResult, roundsResult] = await Promise.all([
+    supabase
+      .from("company_investors")
+      .select(
+        "companies(slug, name, hq_city, hq_state, industry_group, description_short, status)",
+      )
+      .eq("investor_id", investorId),
+
+    supabase
+      .from("funding_round_investors")
+      .select(
+        "is_lead, funding_rounds(id, round_type, amount_raised, announced_date, primary_news_url, companies(slug, name))",
+      )
+      .eq("investor_id", investorId),
+  ]);
+
+  if (portfolioResult.error) {
+    console.error(
+      "[getInvestorBySlug] portfolio query failed:",
+      portfolioResult.error.message,
+    );
+  }
+  if (roundsResult.error) {
+    console.error(
+      "[getInvestorBySlug] rounds query failed:",
+      roundsResult.error.message,
+    );
+  }
+
+  // ── Portfolio: flatten the nested company, drop unresolved joins, sort by name.
+  type PortfolioJoin = {
+    companies:
+      | {
+          slug: string | null;
+          name: string | null;
+          hq_city: string | null;
+          hq_state: string | null;
+          industry_group: string | null;
+          description_short: string | null;
+          status: string | null;
+        }
+      | {
+          slug: string | null;
+          name: string | null;
+          hq_city: string | null;
+          hq_state: string | null;
+          industry_group: string | null;
+          description_short: string | null;
+          status: string | null;
+        }[]
+      | null;
+  };
+
+  const portfolio: CompanyListRow[] = ((portfolioResult.data ?? []) as PortfolioJoin[])
+    .flatMap((row) => {
+      const c = Array.isArray(row.companies) ? row.companies[0] : row.companies;
+      if (!c?.slug || !c.name) return [];
+      return [
+        {
+          slug: c.slug,
+          name: c.name,
+          hq_city: c.hq_city ?? null,
+          hq_state: c.hq_state ?? null,
+          industry_group: c.industry_group ?? null,
+          description_short: c.description_short ?? null,
+          status: c.status ?? "active",
+        },
+      ];
+    })
+    .sort((a, b) => a.name.localeCompare(b.name, "en-US", { sensitivity: "base" }));
+
+  // ── Rounds: flatten round + funded company, drop unresolved joins, newest first.
+  type RoundJoin = {
+    is_lead: boolean | null;
+    funding_rounds:
+      | {
+          id: string;
+          round_type: string | null;
+          amount_raised: number | null;
+          announced_date: string | null;
+          primary_news_url: string | null;
+          companies:
+            | { slug: string | null; name: string | null }
+            | { slug: string | null; name: string | null }[]
+            | null;
+        }
+      | {
+          id: string;
+          round_type: string | null;
+          amount_raised: number | null;
+          announced_date: string | null;
+          primary_news_url: string | null;
+          companies:
+            | { slug: string | null; name: string | null }
+            | { slug: string | null; name: string | null }[]
+            | null;
+        }[]
+      | null;
+  };
+
+  const rounds: InvestorRoundRow[] = ((roundsResult.data ?? []) as RoundJoin[])
+    .flatMap((row) => {
+      const fr = Array.isArray(row.funding_rounds)
+        ? row.funding_rounds[0]
+        : row.funding_rounds;
+      if (!fr) return [];
+      const c = Array.isArray(fr.companies) ? fr.companies[0] : fr.companies;
+      if (!c?.slug || !c.name) return [];
+      return [
+        {
+          roundId: fr.id,
+          isLead: row.is_lead === true,
+          round_type: fr.round_type,
+          amount_raised: fr.amount_raised,
+          announced_date: fr.announced_date,
+          primary_news_url: fr.primary_news_url,
+          companySlug: c.slug,
+          companyName: c.name,
+        },
+      ];
+    })
+    .sort((a, b) => {
+      // Newest first; nulls last. ISO date strings compare lexicographically.
+      if (a.announced_date === null && b.announced_date === null) return 0;
+      if (a.announced_date === null) return 1;
+      if (b.announced_date === null) return -1;
+      return b.announced_date.localeCompare(a.announced_date);
+    });
+
+  return {
+    slug: investor.slug as string,
+    name: investor.name as string,
+    type: (investor.type as string | null) ?? "unknown",
+    description: (investor.description as string | null) ?? null,
+    website: (investor.website as string | null) ?? null,
+    portfolio,
+    rounds,
+  };
+}
+
+/**
+ * Every investor's display name → slug, for linking investor pills on company
+ * pages. Keyset-paginated by slug (unique, strictly advancing) in 1000-row
+ * pages — PostgREST caps responses at 1000 rows, so a flat select would
+ * truncate once the firm catalog grows past that. Keyed on the lowercased name
+ * so the company page can resolve a pill's display name regardless of casing.
+ * Returns {} on error or missing env so company pages still render (pills just
+ * stay plain text).
+ */
+export async function getInvestorNameToSlugMap(): Promise<
+  Record<string, string>
+> {
+  let supabase: ReturnType<typeof createSupabaseServerClient>;
+  try {
+    supabase = createSupabaseServerClient();
+  } catch (err) {
+    console.warn(
+      "[getInvestorNameToSlugMap] Supabase not configured:",
+      (err as Error).message,
+    );
+    return {};
+  }
+
+  const pageSize = 1000;
+  const maxPages = 50;
+  const map: Record<string, string> = {};
+  let lastSlug: string | null = null;
+
+  for (let page = 0; page < maxPages; page++) {
+    let query = supabase
+      .from("investors")
+      .select("slug, name")
+      .order("slug", { ascending: true })
+      .limit(pageSize);
+    if (lastSlug !== null) {
+      query = query.gt("slug", lastSlug);
+    }
+
+    const { data, error } = await query;
+    if (error) {
+      console.error("[getInvestorNameToSlugMap] page failed:", error.message);
+      return map;
+    }
+
+    const rows = (data ?? []) as { slug: string; name: string }[];
+    for (const r of rows) {
+      if (r.name && r.slug) {
+        // First write wins on a casing collision — names are near-unique post
+        // canonicalization, so this is just defensive.
+        const key = r.name.trim().toLowerCase();
+        if (!(key in map)) map[key] = r.slug;
+      }
+    }
+
+    if (rows.length < pageSize) return map;
+    lastSlug = rows[rows.length - 1].slug;
+  }
+
+  console.warn(
+    `[getInvestorNameToSlugMap] hit maxPages=${maxPages}; map may be incomplete.`,
+  );
+  return map;
+}
+
+/**
+ * Every investor slug + a freshness timestamp, for app/sitemap.ts. Keyset-
+ * paginated by slug like the company-slug scan. The investors table has no
+ * updated_at exposed via this projection, so lastModified is left undefined
+ * (callers may pass null). Returns [] on error or missing env.
+ */
+export async function listAllInvestorSlugs(): Promise<InvestorSlugRow[]> {
+  let supabase: ReturnType<typeof createSupabaseServerClient>;
+  try {
+    supabase = createSupabaseServerClient();
+  } catch (err) {
+    console.warn(
+      "[listAllInvestorSlugs] Supabase not configured:",
+      (err as Error).message,
+    );
+    return [];
+  }
+
+  const pageSize = 1000;
+  const maxPages = 50;
+  const all: InvestorSlugRow[] = [];
+  let lastSlug: string | null = null;
+
+  for (let page = 0; page < maxPages; page++) {
+    let query = supabase
+      .from("investors")
+      .select("slug, updated_at")
+      .order("slug", { ascending: true })
+      .limit(pageSize);
+    if (lastSlug !== null) {
+      query = query.gt("slug", lastSlug);
+    }
+
+    const { data, error } = await query;
+    if (error) {
+      console.error("[listAllInvestorSlugs] page failed:", error.message);
+      return all;
+    }
+
+    const rows = (data ?? []) as { slug: string; updated_at: string | null }[];
+    for (const r of rows) {
+      all.push({ slug: r.slug, updated_at: r.updated_at ?? null });
+    }
+
+    if (rows.length < pageSize) return all;
+    lastSlug = rows[rows.length - 1].slug;
+  }
+
+  console.warn(
+    `[listAllInvestorSlugs] hit maxPages=${maxPages} (${all.length} rows); may be truncated.`,
+  );
+  return all;
+}
+
+/** Exact number of investors in the index (head-only count). */
+export async function countInvestors(): Promise<number> {
+  let supabase: ReturnType<typeof createSupabaseServerClient>;
+  try {
+    supabase = createSupabaseServerClient();
+  } catch (err) {
+    console.warn("[countInvestors] Supabase not configured:", (err as Error).message);
+    return 0;
+  }
+
+  const { count, error } = await supabase
+    .from("investors")
+    .select("id", { count: "exact", head: true });
+
+  if (error) {
+    console.error("[countInvestors] query failed:", error.message);
+    return 0;
+  }
+  return count ?? 0;
 }

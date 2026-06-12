@@ -176,6 +176,7 @@ async def test_investor_insert_and_read(db: AsyncSession) -> None:
     inv = Investor(
         name="Lightspeed Venture Partners",
         name_normalized="lightspeed venture partners",
+        slug="lightspeed-venture-partners",
         type="institutional",
         website="https://lsvp.com",
     )
@@ -190,10 +191,12 @@ async def test_investor_insert_and_read(db: AsyncSession) -> None:
 
 
 async def test_investor_name_normalized_uniqueness(db: AsyncSession) -> None:
-    db.add(Investor(name="Sequoia", name_normalized="sequoia"))
+    db.add(Investor(name="Sequoia", name_normalized="sequoia", slug="sequoia"))
     await db.flush()
 
-    db.add(Investor(name="SEQUOIA Capital", name_normalized="sequoia"))
+    db.add(
+        Investor(name="SEQUOIA Capital", name_normalized="sequoia", slug="sequoia-2")
+    )
     with pytest.raises(IntegrityError):
         await db.flush()
 
@@ -205,7 +208,7 @@ async def test_funding_round_investor_link_and_uniqueness(db: AsyncSession) -> N
 
     fr = FundingRound(company_id=company.id, round_type="Seed")
     db.add(fr)
-    inv = Investor(name="YC", name_normalized="yc")
+    inv = Investor(name="YC", name_normalized="yc", slug="yc")
     db.add(inv)
     await db.flush()
 

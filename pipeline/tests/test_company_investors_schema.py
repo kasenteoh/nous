@@ -29,7 +29,11 @@ def _make_company(name: str) -> Company:
 
 
 def _make_investor(name: str) -> Investor:
-    return Investor(name=name, name_normalized=canonicalize_investor_name(name))
+    return Investor(
+        name=name,
+        name_normalized=canonicalize_investor_name(name),
+        slug=f"{name.lower().replace(' ', '-')}-{os.urandom(3).hex()}",
+    )
 
 
 async def test_company_investor_round_trip(db: AsyncSession) -> None:

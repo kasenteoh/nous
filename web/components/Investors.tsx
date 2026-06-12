@@ -8,6 +8,7 @@
 // An investor is marked "lead" if it leads any round OR is flagged lead at the
 // company level. A website is shown when the company-level row supplies one.
 
+import Link from "next/link";
 import type {
   CompanyInvestorRow,
   FundingRoundWithInvestors,
@@ -16,6 +17,13 @@ import type {
 interface Props {
   investors: CompanyInvestorRow[];
   rounds: FundingRoundWithInvestors[];
+  /**
+   * Lowercased investor display name → /investor/[slug]. When a pill's name
+   * resolves here it links to the investor page; otherwise it falls back to the
+   * firm website (if any) or plain text. Optional so callers that don't have
+   * the map degrade gracefully.
+   */
+  nameToSlug?: Record<string, string>;
 }
 
 interface MergedInvestor {
@@ -65,7 +73,7 @@ function mergeInvestors(
   });
 }
 
-export function Investors({ investors, rounds }: Props) {
+export function Investors({ investors, rounds, nameToSlug }: Props) {
   const merged = mergeInvestors(investors, rounds);
 
   return (
@@ -76,12 +84,23 @@ export function Investors({ investors, rounds }: Props) {
         <p className="text-sm text-ink-muted">No investors recorded yet.</p>
       ) : (
         <ul className="flex flex-wrap gap-2">
-          {merged.map((inv) => (
+          {merged.map((inv) => {
+            const investorSlug = nameToSlug?.[inv.name.toLowerCase()];
+            return (
             <li
               key={inv.name.toLowerCase()}
               className="inline-flex items-center gap-1.5 rounded-full border border-edge px-3 py-1 text-sm text-ink-soft"
             >
-              {inv.website ? (
+              {investorSlug ? (
+                // Prefer the on-site investor page when we have one — it keeps
+                // the user in nous and surfaces the firm's full portfolio.
+                <Link
+                  href={`/investor/${investorSlug}`}
+                  className="hover:text-ink underline underline-offset-2 decoration-ink-faint"
+                >
+                  {inv.name}
+                </Link>
+              ) : inv.website ? (
                 <a
                   href={inv.website}
                   target="_blank"
@@ -99,7 +118,8 @@ export function Investors({ investors, rounds }: Props) {
                 </span>
               )}
             </li>
-          ))}
+            );
+          })}
         </ul>
       )}
     </section>

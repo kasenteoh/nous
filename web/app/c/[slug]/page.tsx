@@ -4,7 +4,7 @@ export const revalidate = 21600;
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { getCompanyBySlug } from "@/lib/queries";
+import { getCompanyBySlug, getInvestorNameToSlugMap } from "@/lib/queries";
 import type { CompanyRow } from "@/lib/types";
 import {
   formatDate,
@@ -131,7 +131,10 @@ function websiteHostname(url: string | null | undefined): string | null {
 
 export default async function CompanyPage({ params }: Props) {
   const { slug } = await params;
-  const detail = await getCompanyBySlug(slug);
+  const [detail, investorNameToSlug] = await Promise.all([
+    getCompanyBySlug(slug),
+    getInvestorNameToSlugMap(),
+  ]);
 
   if (!detail) {
     notFound();
@@ -341,7 +344,11 @@ export default async function CompanyPage({ params }: Props) {
       <FundingHistory rounds={fundingRounds} />
 
       {/* ── Investors ──────────────────────────────────────────────────── */}
-      <Investors investors={investors} rounds={fundingRounds} />
+      <Investors
+        investors={investors}
+        rounds={fundingRounds}
+        nameToSlug={investorNameToSlug}
+      />
 
       {/* ── Competitors (M4) ───────────────────────────────────────────── */}
       <Competitors competitors={competitors} />

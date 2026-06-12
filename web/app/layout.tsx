@@ -102,6 +102,14 @@ export default function RootLayout({
                   </li>
                   <li>
                     <Link
+                      href="/investors"
+                      className="hover:text-ink transition-colors"
+                    >
+                      Investors
+                    </Link>
+                  </li>
+                  <li>
+                    <Link
                       href="/surprise"
                       className="hover:text-ink transition-colors whitespace-nowrap"
                     >
