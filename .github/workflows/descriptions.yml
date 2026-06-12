@@ -129,6 +129,7 @@ jobs:
       # Idempotent stages make "skip today, catch up tomorrow" safe.
 
       - name: Resolve homepages
+        id: resolve
         if: ${{ inputs.skip_resolve != true }}
         timeout-minutes: 20
         continue-on-error: true
@@ -142,6 +143,7 @@ jobs:
           uv run nous resolve-homepages "${ARGS[@]}"
 
       - name: Scrape homepages
+        id: scrape
         if: ${{ inputs.skip_scrape != true }}
         timeout-minutes: 45
         continue-on-error: true
@@ -155,6 +157,7 @@ jobs:
           uv run nous scrape-homepages "${ARGS[@]}"
 
       - name: Enrich companies
+        id: enrich
         if: ${{ inputs.skip_enrich != true }}
         # --limit caps per-run LLM spend (DeepSeek is paid). continue-on-error
         # so a provider rate-limit / 5xx doesn't fail the whole run — the next
@@ -165,3 +168,19 @@ jobs:
           LIMIT="${{ inputs.enrich_limit }}"
           if [ -z "$LIMIT" ]; then LIMIT=250; fi
           uv run nous enrich-companies --limit "$LIMIT"
+
+      - name: Trigger Vercel deploy
+        # contains(steps.*.outcome, ...) covers every id'd step; only pipeline
+        # stages carry ids in this file — keep it that way or scope this back
+        # to an explicit list.
+        if: ${{ !cancelled() && contains(steps.*.outcome, 'success') }}
+        env:
+          VERCEL_DEPLOY_HOOK_URL: ${{ secrets.VERCEL_DEPLOY_HOOK_URL }}
+        run: |
+          if [ -z "$VERCEL_DEPLOY_HOOK_URL" ]; then
+            echo "VERCEL_DEPLOY_HOOK_URL not set — skipping deploy hook."
+            exit 0
+          fi
+          curl -fsS -m 30 --retry 3 -o /dev/null -X POST "$VERCEL_DEPLOY_HOOK_URL" \
+            && echo "Vercel deploy hook triggered." \
+            || echo "::warning::Vercel deploy hook POST failed (non-fatal)"
