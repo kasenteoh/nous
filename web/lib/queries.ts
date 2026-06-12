@@ -424,34 +424,49 @@ export interface CompanySlugRow {
   updated_at: string | null;
 }
 
+/** Result of a {@link scanTable} walk. */
+interface TableScanResult {
+  rows: Record<string, unknown>[];
+  /**
+   * False when Supabase was unconfigured or a page failed mid-scan — `rows`
+   * then holds only the pages fetched before the failure, and each caller
+   * decides whether that partial result is usable. Hitting the `maxPages`
+   * bound is NOT an error: the scan warns loudly and returns ok with what it
+   * has.
+   */
+  ok: boolean;
+}
+
 /**
- * Keyset-paginated full scan of the `companies` table, shared by the sitemap,
- * tag/location, and industry queries. PostgREST caps every response at 1000
- * rows regardless of `.limit()`, and the catalog holds ~4,200 companies, so
- * any single-shot select silently truncates. This walks the table ordered by `slug` (unique,
- * so the cursor strictly advances) in 1000-row pages via `.gt("slug", cursor)`
- * until a short page. Keyset beats offset `.range()` here: termination is
- * provable, and rows inserted mid-iteration can't shift offsets and cause
- * skips or duplicates. A hard `maxPages` bound caps the walk at 50k rows —
- * also Google's per-sitemap URL cap — so a pathological loop can never hang
- * the build; hitting the bound warns loudly instead of truncating silently.
+ * Keyset-paginated full scan of a slug-keyed table, shared by the sitemap,
+ * tag/location, industry, and investor queries. PostgREST caps every response
+ * at 1000 rows regardless of `.limit()`, and the company catalog already holds
+ * ~4,200 rows, so any single-shot select silently truncates. This walks the
+ * table ordered by `slug` (unique in both scanned tables, so the cursor
+ * strictly advances) in 1000-row pages via `.gt("slug", cursor)` until a short
+ * page. Keyset beats offset `.range()` here: termination is provable, and rows
+ * inserted mid-iteration can't shift offsets and cause skips or duplicates. A
+ * hard `maxPages` bound caps the walk at 50k rows — also Google's per-sitemap
+ * URL cap, so sitemap callers must split into multiple sitemaps before this
+ * cap may be raised — and guarantees a pathological loop can never hang the
+ * build; hitting the bound warns loudly instead of truncating silently.
  *
  * `select` must include `slug` (the cursor column). When `notNullColumn` is
- * given, rows where that column is null are filtered out server-side. Returns
- * null when Supabase is unconfigured or any page fails (both logged under
- * `label`) so callers can fall back to their empty value.
+ * given, rows where that column is null are filtered out server-side. Errors
+ * are logged under `label`.
  */
-async function scanCompanies(
+async function scanTable(
+  table: "companies" | "investors",
   label: string,
   select: string,
   notNullColumn?: string,
-): Promise<Record<string, unknown>[] | null> {
+): Promise<TableScanResult> {
   let supabase: ReturnType<typeof createSupabaseServerClient>;
   try {
     supabase = createSupabaseServerClient();
   } catch (err) {
     console.warn(`[${label}] Supabase not configured:`, (err as Error).message);
-    return null;
+    return { rows: [], ok: false };
   }
 
   const pageSize = 1000;
@@ -461,7 +476,7 @@ async function scanCompanies(
 
   for (let page = 0; page < maxPages; page++) {
     let query = supabase
-      .from("companies")
+      .from(table)
       .select(select)
       .order("slug", { ascending: true })
       .limit(pageSize);
@@ -476,7 +491,7 @@ async function scanCompanies(
 
     if (error) {
       console.error(`[${label}] page query failed:`, error.message);
-      return null;
+      return { rows: all, ok: false };
     }
 
     // supabase-js types `.select()` results by parsing the literal column
@@ -486,16 +501,31 @@ async function scanCompanies(
     all.push(...rows);
 
     // A short (or empty) page means we've drained the table.
-    if (rows.length < pageSize) return all;
+    if (rows.length < pageSize) return { rows: all, ok: true };
 
     lastSlug = rows[rows.length - 1].slug as string;
   }
 
   console.warn(
     `[${label}] hit maxPages=${maxPages} (${all.length} rows); ` +
-      "results may be truncated — split into multiple sitemaps before raising the cap.",
+      "results may be truncated — see scanTable's doc before raising the cap.",
   );
-  return all;
+  return { rows: all, ok: true };
+}
+
+/**
+ * {@link scanTable} over `companies`, with the all-or-nothing error shape the
+ * company callers rely on: null when Supabase is unconfigured or any page
+ * fails (partial pages are discarded) so callers can fall back to their empty
+ * value.
+ */
+async function scanCompanies(
+  label: string,
+  select: string,
+  notNullColumn?: string,
+): Promise<Record<string, unknown>[] | null> {
+  const { rows, ok } = await scanTable("companies", label, select, notNullColumn);
+  return ok ? rows : null;
 }
 
 /**
@@ -570,7 +600,7 @@ export async function getCompanyOgData(
   }
 
   // Runtime-built select string → supabase-js can't parse the columns, so
-  // narrow through a local row shape (same idiom as scanCompanies).
+  // narrow through a local row shape (same idiom as scanTable).
   const row = company as unknown as {
     name: string;
     industry_group: string | null;
@@ -1268,120 +1298,54 @@ export async function getInvestorBySlug(
 
 /**
  * Every investor's display name → slug, for linking investor pills on company
- * pages. Keyset-paginated by slug (unique, strictly advancing) in 1000-row
- * pages — PostgREST caps responses at 1000 rows, so a flat select would
- * truncate once the firm catalog grows past that. Keyed on the lowercased name
- * so the company page can resolve a pill's display name regardless of casing.
- * Returns {} on error or missing env so company pages still render (pills just
- * stay plain text).
+ * pages. Full keyset scan via {@link scanTable} — see its doc for why a flat
+ * select would truncate. Keyed on the lowercased name so the company page can
+ * resolve a pill's display name regardless of casing. A mid-scan page failure
+ * keeps the map built from the pages that did load (some linked pills beat
+ * none); missing env yields {} so company pages still render (pills just stay
+ * plain text).
  */
 export async function getInvestorNameToSlugMap(): Promise<
   Record<string, string>
 > {
-  let supabase: ReturnType<typeof createSupabaseServerClient>;
-  try {
-    supabase = createSupabaseServerClient();
-  } catch (err) {
-    console.warn(
-      "[getInvestorNameToSlugMap] Supabase not configured:",
-      (err as Error).message,
-    );
-    return {};
-  }
-
-  const pageSize = 1000;
-  const maxPages = 50;
-  const map: Record<string, string> = {};
-  let lastSlug: string | null = null;
-
-  for (let page = 0; page < maxPages; page++) {
-    let query = supabase
-      .from("investors")
-      .select("slug, name")
-      .order("slug", { ascending: true })
-      .limit(pageSize);
-    if (lastSlug !== null) {
-      query = query.gt("slug", lastSlug);
-    }
-
-    const { data, error } = await query;
-    if (error) {
-      console.error("[getInvestorNameToSlugMap] page failed:", error.message);
-      return map;
-    }
-
-    const rows = (data ?? []) as { slug: string; name: string }[];
-    for (const r of rows) {
-      if (r.name && r.slug) {
-        // First write wins on a casing collision — names are near-unique post
-        // canonicalization, so this is just defensive.
-        const key = r.name.trim().toLowerCase();
-        if (!(key in map)) map[key] = r.slug;
-      }
-    }
-
-    if (rows.length < pageSize) return map;
-    lastSlug = rows[rows.length - 1].slug;
-  }
-
-  console.warn(
-    `[getInvestorNameToSlugMap] hit maxPages=${maxPages}; map may be incomplete.`,
+  const { rows } = await scanTable(
+    "investors",
+    "getInvestorNameToSlugMap",
+    "slug, name",
   );
+
+  const map: Record<string, string> = {};
+  for (const row of rows) {
+    const slug = row.slug as string | null;
+    const name = row.name as string | null;
+    if (name && slug) {
+      // First write wins on a casing collision — names are near-unique post
+      // canonicalization, so this is just defensive.
+      const key = name.trim().toLowerCase();
+      if (!(key in map)) map[key] = slug;
+    }
+  }
   return map;
 }
 
 /**
- * Every investor slug + a freshness timestamp, for app/sitemap.ts. Keyset-
- * paginated by slug like the company-slug scan. The investors table has no
- * updated_at exposed via this projection, so lastModified is left undefined
- * (callers may pass null). Returns [] on error or missing env.
+ * Every investor slug + updated_at, for app/sitemap.ts. Full keyset scan via
+ * {@link scanTable} — see its doc for why a flat select would truncate. A
+ * mid-scan page failure keeps the rows from the pages that did load (a partial
+ * sitemap beats an empty one); returns [] on missing env — CI builds without
+ * Supabase secrets and the sitemap must still build with just its static
+ * entries.
  */
 export async function listAllInvestorSlugs(): Promise<InvestorSlugRow[]> {
-  let supabase: ReturnType<typeof createSupabaseServerClient>;
-  try {
-    supabase = createSupabaseServerClient();
-  } catch (err) {
-    console.warn(
-      "[listAllInvestorSlugs] Supabase not configured:",
-      (err as Error).message,
-    );
-    return [];
-  }
-
-  const pageSize = 1000;
-  const maxPages = 50;
-  const all: InvestorSlugRow[] = [];
-  let lastSlug: string | null = null;
-
-  for (let page = 0; page < maxPages; page++) {
-    let query = supabase
-      .from("investors")
-      .select("slug, updated_at")
-      .order("slug", { ascending: true })
-      .limit(pageSize);
-    if (lastSlug !== null) {
-      query = query.gt("slug", lastSlug);
-    }
-
-    const { data, error } = await query;
-    if (error) {
-      console.error("[listAllInvestorSlugs] page failed:", error.message);
-      return all;
-    }
-
-    const rows = (data ?? []) as { slug: string; updated_at: string | null }[];
-    for (const r of rows) {
-      all.push({ slug: r.slug, updated_at: r.updated_at ?? null });
-    }
-
-    if (rows.length < pageSize) return all;
-    lastSlug = rows[rows.length - 1].slug;
-  }
-
-  console.warn(
-    `[listAllInvestorSlugs] hit maxPages=${maxPages} (${all.length} rows); may be truncated.`,
+  const { rows } = await scanTable(
+    "investors",
+    "listAllInvestorSlugs",
+    "slug, updated_at",
   );
-  return all;
+  return rows.map((r) => ({
+    slug: r.slug as string,
+    updated_at: (r.updated_at as string | null) ?? null,
+  }));
 }
 
 /** Exact number of investors in the index (head-only count). */
