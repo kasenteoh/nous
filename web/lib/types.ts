@@ -149,6 +149,50 @@ export interface CompanyInvestorRow {
   source: string;
 }
 
+// ─── Investor pages ───────────────────────────────────────────────────────────
+
+/** One row on the /investors index: a firm plus its portfolio company count. */
+export interface InvestorListRow {
+  slug: string;
+  name: string;
+  type: string; // 'institutional' | 'angel' | 'unknown'
+  portfolioCount: number;
+}
+
+/**
+ * One funding round an investor participated in, flattened with the company it
+ * funded, for the investor detail page's activity/rounds sections.
+ */
+export interface InvestorRoundRow {
+  roundId: string;
+  isLead: boolean;
+  round_type: string | null;
+  amount_raised: number | null;
+  announced_date: string | null; // ISO date or null
+  primary_news_url: string | null;
+  companySlug: string;
+  companyName: string;
+}
+
+/** Full detail for a single investor, assembled in getInvestorBySlug. */
+export interface InvestorDetail {
+  slug: string;
+  name: string;
+  type: string;
+  description: string | null;
+  website: string | null;
+  /** Portfolio companies from the company_investors join (shaped for CompanyCard). */
+  portfolio: CompanyListRow[];
+  /** Funding rounds this investor led or participated in, newest first. */
+  rounds: InvestorRoundRow[];
+}
+
+/** Minimal per-investor row for the sitemap. */
+export interface InvestorSlugRow {
+  slug: string;
+  updated_at: string | null;
+}
+
 /** Row from the `news_articles` table, for the News section. */
 export interface NewsArticleRow {
   id: string;

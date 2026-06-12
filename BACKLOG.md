@@ -101,12 +101,6 @@ is the cheapest distribution lever that exists. Includes dynamic OG images via
 `@vercel/og` (free) showing name / industry / total raised. Subsumes the old
 "No JSON-LD / canonical" backlog item.
 
-### Investor pages — `/investor/[slug]` [M]
-Portfolio, rounds led, co-investors, recent activity. `company_investors` and
-`funding_round_investors` already hold everything; this is pure frontend + one
-query module. "What is Sequoia buying lately" is the killer page for the VC
-audience, and a major programmatic-SEO surface.
-
 ### "New this week" feed [S]
 Homepage section + `/new` page listing companies discovered and rounds
 extracted in the last 7 days (`created_at` queries). The pipeline runs weekly

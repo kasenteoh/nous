@@ -409,6 +409,43 @@ async def reconcile_funding_round(
     return new_round, True
 
 
+async def _is_investor_slug_taken(session: AsyncSession, slug: str) -> bool:
+    """Return True if *slug* is already in use by an investor row."""
+    result = await session.execute(select(Investor.id).where(Investor.slug == slug))
+    return result.scalar_one_or_none() is not None
+
+
+async def build_investor_slug(
+    session: AsyncSession, *, name: str, name_normalized: str
+) -> str:
+    """Generate a unique slug for an investor, deterministically disambiguated.
+
+    The base slug comes from ``slugify(name)``. Disambiguation is seeded by the
+    investor's unique ``name_normalized`` (NOT os.urandom or the display name),
+    so the same investor always resolves to the same slug — the in-migration
+    backfill and the live insert path agree, and re-runs are stable.
+
+    Mirrors :func:`_build_slug` for companies. The empty-base fallback (names
+    whose slug is "", e.g. all-symbol firms) uses ``"investor"`` so the route
+    never collapses to ``/investor/``; collisions there are still resolved by
+    the name_normalized-seeded suffix.
+    """
+    base = slugify(name)
+    if not base:
+        base = "investor"
+    candidate = base
+    if await _is_investor_slug_taken(session, candidate):
+        candidate = slug_with_disambiguator(base, name_normalized)
+        # If the deterministic candidate is itself taken (distinct firms whose
+        # names slugify identically AND whose seeds hash-collide, or the
+        # empty-base fallback), keep extending by hashing seed+counter until free.
+        counter = 1
+        while await _is_investor_slug_taken(session, candidate):
+            candidate = slug_with_disambiguator(base, name_normalized + str(counter))
+            counter += 1
+    return candidate
+
+
 async def upsert_investor(
     session: AsyncSession, *, name: str
 ) -> tuple[Investor, bool]:
@@ -417,6 +454,10 @@ async def upsert_investor(
     Display name (preserved on ``Investor.name``) keeps the first-seen casing;
     re-using an existing row does not rewrite the display name even if a later
     article uses a different casing.
+
+    New rows get a URL slug via :func:`build_investor_slug`, with deterministic
+    collision handling seeded by ``name_normalized`` — so the same investor
+    always lands on the same slug.
 
     Returns ``(row, created)``.
     """
@@ -431,7 +472,11 @@ async def upsert_investor(
     if existing is not None:
         return existing, False
 
-    investor = Investor(name=name.strip(), name_normalized=canonical)
+    display_name = name.strip()
+    slug = await build_investor_slug(
+        session, name=display_name, name_normalized=canonical
+    )
+    investor = Investor(name=display_name, name_normalized=canonical, slug=slug)
     session.add(investor)
     await session.flush()
     return investor, True

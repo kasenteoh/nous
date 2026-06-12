@@ -8,6 +8,7 @@ export const revalidate = 21600;
 import type { MetadataRoute } from "next";
 import {
   listAllCompanySlugs,
+  listAllInvestorSlugs,
   listAllTags,
   listAllStates,
 } from "@/lib/queries";
@@ -19,12 +20,14 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   const staticEntries: MetadataRoute.Sitemap = [
     { url: `${origin}/` },
     { url: `${origin}/companies` },
+    { url: `${origin}/investors` },
     { url: `${origin}/new` },
     { url: `${origin}/about` },
   ];
 
-  const [companies, tags, states] = await Promise.all([
+  const [companies, investors, tags, states] = await Promise.all([
     listAllCompanySlugs(),
+    listAllInvestorSlugs(),
     listAllTags(),
     listAllStates(),
   ]);
@@ -32,6 +35,11 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   const companyEntries: MetadataRoute.Sitemap = companies.map((c) => ({
     url: `${origin}/c/${c.slug}`,
     lastModified: c.updated_at ?? undefined,
+  }));
+
+  const investorEntries: MetadataRoute.Sitemap = investors.map((i) => ({
+    url: `${origin}/investor/${i.slug}`,
+    lastModified: i.updated_at ?? undefined,
   }));
 
   const tagEntries: MetadataRoute.Sitemap = tags.map((tag) => ({
@@ -42,5 +50,11 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
     url: `${origin}/location/${encodeURIComponent(state)}`,
   }));
 
-  return [...staticEntries, ...companyEntries, ...tagEntries, ...locationEntries];
+  return [
+    ...staticEntries,
+    ...companyEntries,
+    ...investorEntries,
+    ...tagEntries,
+    ...locationEntries,
+  ];
 }
