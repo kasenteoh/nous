@@ -8,7 +8,7 @@ import {
   listIndustryGroups,
   type CompanyListSort,
 } from "@/lib/queries";
-import { formatLocation } from "@/lib/format";
+import { CompanyCard } from "@/components/CompanyCard";
 
 export const metadata: Metadata = {
   // The layout's title template appends " — nous".
@@ -208,36 +208,7 @@ export default async function CompaniesPage({
       ) : (
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
           {companies.map((company) => (
-            <Link
-              key={company.slug}
-              href={`/c/${company.slug}`}
-              className="group block rounded-lg border border-edge p-5 hover:border-ink-muted transition-colors"
-            >
-              <h2 className="font-semibold text-ink group-hover:underline underline-offset-2 leading-snug">
-                {company.name}
-              </h2>
-
-              {company.description_short && (
-                <p className="mt-2 text-sm text-ink-muted line-clamp-2 leading-snug">
-                  {company.description_short}
-                </p>
-              )}
-
-              <dl className="mt-3 space-y-1 text-sm text-ink-muted">
-                {(company.hq_city || company.hq_state) && (
-                  <div className="flex justify-between gap-2">
-                    <dt className="sr-only">Location</dt>
-                    <dd>{formatLocation(company.hq_city, company.hq_state)}</dd>
-                  </div>
-                )}
-                {company.industry_group && (
-                  <div>
-                    <dt className="sr-only">Industry</dt>
-                    <dd className="truncate">{company.industry_group}</dd>
-                  </div>
-                )}
-              </dl>
-            </Link>
+            <CompanyCard key={company.slug} company={company} />
           ))}
         </div>
       )}

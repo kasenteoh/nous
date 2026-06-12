@@ -60,6 +60,10 @@ export interface CompanyListOptions {
   search?: string;
   industry_group?: string;
   discovered_via?: string;
+  /** Filter to companies whose `tags` array contains this exact value. */
+  tag?: string;
+  /** Filter to companies whose `hq_state` exactly matches this value. */
+  state?: string;
   sort?: CompanyListSort;
   limit?: number;
   offset?: number;
@@ -123,6 +127,14 @@ export async function listCompanies(
   }
   if (opts.discovered_via) {
     query = query.eq("discovered_via", opts.discovered_via);
+  }
+  if (opts.tag) {
+    // `contains` checks that the text[] column includes the exact element.
+    // Never use ilike here — a substring match would conflate e.g. "ai" with "ai-infrastructure".
+    query = query.contains("tags", [opts.tag]);
+  }
+  if (opts.state) {
+    query = query.eq("hq_state", opts.state);
   }
 
   switch (opts.sort) {
@@ -430,40 +442,49 @@ export interface CompanySlugRow {
 }
 
 /**
- * Every company slug + updated_at, for app/sitemap.ts. PostgREST caps any
- * response at 1000 rows, and the index holds ~4,200 companies, so this pages
- * by keyset (`slug > lastSlug`, ordered by slug) until a short page. Keyset
- * beats offset `.range()` here: each page strictly advances the slug cursor,
- * so termination is provable and rows inserted mid-iteration can't shift
- * offsets and cause skips or duplicates. A hard `maxPages` bound caps the walk
- * at 50k slugs — also Google's per-sitemap URL cap — so a pathological loop
- * can never hang the build.
- * Returns [] on error or missing env — CI builds without Supabase secrets and
- * the sitemap must still build with just its static entries.
+ * Keyset-paginated full scan of the `companies` table, shared by the sitemap
+ * queries below. PostgREST caps every response at 1000 rows regardless of
+ * `.limit()`, and the catalog holds ~4,200 companies, so any single-shot
+ * select silently truncates. This walks the table ordered by `slug` (unique,
+ * so the cursor strictly advances) in 1000-row pages via `.gt("slug", cursor)`
+ * until a short page. Keyset beats offset `.range()` here: termination is
+ * provable, and rows inserted mid-iteration can't shift offsets and cause
+ * skips or duplicates. A hard `maxPages` bound caps the walk at 50k rows —
+ * also Google's per-sitemap URL cap — so a pathological loop can never hang
+ * the build; hitting the bound warns loudly instead of truncating silently.
+ *
+ * `select` must include `slug` (the cursor column). When `notNullColumn` is
+ * given, rows where that column is null are filtered out server-side. Returns
+ * null when Supabase is unconfigured or any page fails (both logged under
+ * `label`) so callers can fall back to their empty value.
  */
-export async function listAllCompanySlugs(): Promise<CompanySlugRow[]> {
+async function scanCompanies(
+  label: string,
+  select: string,
+  notNullColumn?: string,
+): Promise<Record<string, unknown>[] | null> {
   let supabase: ReturnType<typeof createSupabaseServerClient>;
   try {
     supabase = createSupabaseServerClient();
   } catch (err) {
-    console.warn(
-      "[listAllCompanySlugs] Supabase not configured:",
-      (err as Error).message,
-    );
-    return [];
+    console.warn(`[${label}] Supabase not configured:`, (err as Error).message);
+    return null;
   }
 
   const pageSize = 1000;
-  const maxPages = 50; // 50k slugs — Google's per-sitemap URL cap.
-  const all: CompanySlugRow[] = [];
+  const maxPages = 50; // 50k rows — Google's per-sitemap URL cap.
+  const all: Record<string, unknown>[] = [];
   let lastSlug: string | null = null;
 
   for (let page = 0; page < maxPages; page++) {
     let query = supabase
       .from("companies")
-      .select("slug, updated_at")
+      .select(select)
       .order("slug", { ascending: true })
       .limit(pageSize);
+    if (notNullColumn !== undefined) {
+      query = query.not(notNullColumn, "is", null);
+    }
     if (lastSlug !== null) {
       query = query.gt("slug", lastSlug);
     }
@@ -471,27 +492,42 @@ export async function listAllCompanySlugs(): Promise<CompanySlugRow[]> {
     const { data, error } = await query;
 
     if (error) {
-      console.error("[listAllCompanySlugs] page query failed:", error.message);
-      return [];
+      console.error(`[${label}] page query failed:`, error.message);
+      return null;
     }
 
-    const rows = (data ?? []).map((r) => ({
-      slug: r.slug as string,
-      updated_at: (r.updated_at as string | null) ?? null,
-    }));
+    // supabase-js types `.select()` results by parsing the literal column
+    // string; with a runtime `string` it falls back to GenericStringError, so
+    // widen through unknown — callers narrow per-column as elsewhere in this file.
+    const rows = (data ?? []) as unknown as Record<string, unknown>[];
     all.push(...rows);
 
     // A short (or empty) page means we've drained the table.
     if (rows.length < pageSize) return all;
 
-    lastSlug = rows[rows.length - 1].slug;
+    lastSlug = rows[rows.length - 1].slug as string;
   }
 
   console.warn(
-    `[listAllCompanySlugs] hit maxPages=${maxPages} (${all.length} slugs); ` +
-      "sitemap may be truncated — split into multiple sitemaps before raising the cap.",
+    `[${label}] hit maxPages=${maxPages} (${all.length} rows); ` +
+      "results may be truncated — split into multiple sitemaps before raising the cap.",
   );
   return all;
+}
+
+/**
+ * Every company slug + updated_at, for app/sitemap.ts. Keyset-paginated via
+ * {@link scanCompanies} — see its doc for why a flat select would truncate.
+ * Returns [] on error or missing env — CI builds without Supabase secrets and
+ * the sitemap must still build with just its static entries.
+ */
+export async function listAllCompanySlugs(): Promise<CompanySlugRow[]> {
+  const rows = await scanCompanies("listAllCompanySlugs", "slug, updated_at");
+  if (rows === null) return [];
+  return rows.map((r) => ({
+    slug: r.slug as string,
+    updated_at: (r.updated_at as string | null) ?? null,
+  }));
 }
 
 /** The handful of fields the company OG-image card renders. */
@@ -750,6 +786,48 @@ export async function getCompanyBySlug(
     investors,
     news,
   };
+}
+
+// ─── Tag / location SEO queries ───────────────────────────────────────────────
+
+/**
+ * All distinct, non-null tag values across the companies table, sorted.
+ * PostgREST has no native `unnest` (nor DISTINCT) and caps every response at
+ * 1000 rows, so a flat select would silently sample ~1/4 of the ~4,200-row
+ * catalog. Instead we keyset-scan the whole table via {@link scanCompanies},
+ * then flatten + deduplicate the `tags` arrays in-process.
+ */
+export async function listAllTags(): Promise<string[]> {
+  const rows = await scanCompanies("listAllTags", "slug, tags", "tags");
+  if (rows === null) return [];
+
+  const seen = new Set<string>();
+  for (const row of rows) {
+    const tags = row.tags as string[] | null;
+    if (Array.isArray(tags)) {
+      for (const t of tags) {
+        if (t) seen.add(t);
+      }
+    }
+  }
+  return [...seen].sort((a, b) => a.localeCompare(b));
+}
+
+/**
+ * All distinct, non-null `hq_state` values, sorted. Same full keyset scan +
+ * in-process dedup idiom as {@link listAllTags} — PostgREST's 1000-row
+ * response cap means anything short of paging the whole table drops rows.
+ */
+export async function listAllStates(): Promise<string[]> {
+  const rows = await scanCompanies("listAllStates", "slug, hq_state", "hq_state");
+  if (rows === null) return [];
+
+  const seen = new Set<string>();
+  for (const row of rows) {
+    const value = row.hq_state as string | null;
+    if (value) seen.add(value);
+  }
+  return [...seen].sort((a, b) => a.localeCompare(b));
 }
 
 // ─── "New this week" queries ──────────────────────────────────────────────────

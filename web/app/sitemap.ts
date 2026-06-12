@@ -6,7 +6,11 @@
 export const revalidate = 21600;
 
 import type { MetadataRoute } from "next";
-import { listAllCompanySlugs } from "@/lib/queries";
+import {
+  listAllCompanySlugs,
+  listAllTags,
+  listAllStates,
+} from "@/lib/queries";
 import { siteOrigin } from "@/lib/site";
 
 export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
@@ -19,11 +23,24 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
     { url: `${origin}/about` },
   ];
 
-  const companies = await listAllCompanySlugs();
+  const [companies, tags, states] = await Promise.all([
+    listAllCompanySlugs(),
+    listAllTags(),
+    listAllStates(),
+  ]);
+
   const companyEntries: MetadataRoute.Sitemap = companies.map((c) => ({
     url: `${origin}/c/${c.slug}`,
     lastModified: c.updated_at ?? undefined,
   }));
 
-  return [...staticEntries, ...companyEntries];
+  const tagEntries: MetadataRoute.Sitemap = tags.map((tag) => ({
+    url: `${origin}/tag/${encodeURIComponent(tag)}`,
+  }));
+
+  const locationEntries: MetadataRoute.Sitemap = states.map((state) => ({
+    url: `${origin}/location/${encodeURIComponent(state)}`,
+  }));
+
+  return [...staticEntries, ...companyEntries, ...tagEntries, ...locationEntries];
 }
