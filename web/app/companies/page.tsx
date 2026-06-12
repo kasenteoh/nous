@@ -11,9 +11,13 @@ import {
 import { formatLocation } from "@/lib/format";
 
 export const metadata: Metadata = {
-  title: "Browse — nous",
+  // The layout's title template appends " — nous".
+  title: "Browse",
   description:
     "Browse, search, and filter every US software startup indexed by nous.",
+  // Paramless self-canonical: filter/search/page URLs (?q=…, ?page=…) all
+  // collapse to /companies so crawlers don't index the filter combinatorics.
+  alternates: { canonical: "/companies" },
 };
 
 const PAGE_SIZE = 30;

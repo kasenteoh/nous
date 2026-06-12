@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import Link from "next/link";
 import { ThemeToggle } from "@/components/ThemeToggle";
+import { SITE_NAME, siteOrigin } from "@/lib/site";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -15,8 +16,23 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "nous",
+  // Resolves relative canonical/OG URLs site-wide. Falls back to localhost
+  // when neither NEXT_PUBLIC_SITE_URL nor Vercel's production URL is set.
+  metadataBase: new URL(siteOrigin()),
+  title: {
+    default: "nous — US software startup discovery",
+    // Page-level titles are bare ("About", company name, …); the suffix is
+    // applied here exactly once.
+    template: "%s — nous",
+  },
   description: "US software startup discovery, from VC portfolios and funding news.",
+  openGraph: {
+    siteName: SITE_NAME,
+    type: "website",
+  },
+  twitter: {
+    card: "summary_large_image",
+  },
 };
 
 // Dark (Tokyo Night) is the default for every visitor: `.dark` is server-

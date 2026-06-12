@@ -4,7 +4,14 @@ export const revalidate = 21600;
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { getCompanyBySlug } from "@/lib/queries";
-import { formatEmployeeRange, formatLocation, formatUsd } from "@/lib/format";
+import type { CompanyRow } from "@/lib/types";
+import {
+  formatDate,
+  formatEmployeeRange,
+  formatLocation,
+  formatUsd,
+} from "@/lib/format";
+import { JsonLd } from "@/components/JsonLd";
 import { Markdown } from "@/components/Markdown";
 import { Team } from "@/components/Team";
 import { FundingHistory } from "@/components/FundingHistory";
@@ -25,7 +32,8 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const detail = await getCompanyBySlug(slug);
 
   if (!detail) {
-    return { title: "Company not found — nous" };
+    // The layout's title template appends " — nous".
+    return { title: "Company not found" };
   }
 
   const { company } = detail;
@@ -47,9 +55,56 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
   }
 
   return {
-    title: `${company.name} — nous`,
+    // Bare company name — the layout's title template appends " — nous".
+    title: company.name,
     description,
+    alternates: { canonical: `/c/${slug}` },
   };
+}
+
+/**
+ * schema.org Organization markup for the company. Only fields we actually
+ * hold are emitted — the project's no-fabrication rule applies to structured
+ * data too, so an unknown value means the property is absent, never guessed.
+ */
+function companyJsonLd(company: CompanyRow): Record<string, unknown> {
+  const org: Record<string, unknown> = {
+    "@context": "https://schema.org",
+    "@type": "Organization",
+    name: company.name,
+  };
+
+  if (company.website) org.url = company.website;
+  if (company.description_short) org.description = company.description_short;
+
+  if (company.hq_city || company.hq_state) {
+    const address: Record<string, unknown> = { "@type": "PostalAddress" };
+    if (company.hq_city) address.addressLocality = company.hq_city;
+    if (company.hq_state) address.addressRegion = company.hq_state;
+    org.address = address;
+  }
+
+  if (company.year_incorporated != null) {
+    org.foundingDate = String(company.year_incorporated); // "YYYY"
+  }
+
+  if (
+    company.employee_count_min != null ||
+    company.employee_count_max != null
+  ) {
+    const employees: Record<string, unknown> = {
+      "@type": "QuantitativeValue",
+    };
+    if (company.employee_count_min != null) {
+      employees.minValue = company.employee_count_min;
+    }
+    if (company.employee_count_max != null) {
+      employees.maxValue = company.employee_count_max;
+    }
+    org.numberOfEmployees = employees;
+  }
+
+  return org;
 }
 
 /** Render-friendly hostname for a website URL — strips protocol, "www.", and
@@ -93,6 +148,7 @@ export default async function CompanyPage({ params }: Props) {
 
   return (
     <main className="flex-1 px-6 py-12 max-w-4xl mx-auto w-full">
+      <JsonLd data={companyJsonLd(company)} />
       {/* ── Company header ─────────────────────────────────────────────── */}
       <header className="mb-10">
         <div className="flex flex-wrap items-center gap-3">
@@ -163,6 +219,14 @@ export default async function CompanyPage({ params }: Props) {
                 )}{" "}
                 employees
               </dd>
+            </div>
+          )}
+          {/* Freshness rider — when the enrichment pipeline last touched this
+              profile. Hidden until last_enriched_at is populated. */}
+          {company.last_enriched_at && (
+            <div>
+              <dt className="sr-only">Profile last updated</dt>
+              <dd>Profile updated {formatDate(company.last_enriched_at)}</dd>
             </div>
           )}
         </dl>

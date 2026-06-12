@@ -123,6 +123,9 @@ freshness, and it's one line in the header meta strip.
 
 ### "Report incorrect data" link [S]
 Prefilled GitHub-issue URL on every company page. Crowdsourced QA, zero backend.
+Built in PR (feat/seo-pack) but rendering deferred — repo is private so the
+issues URL 404s for visitors. Re-enable the rider in web/app/c/[slug]/page.tsx
+when the repo goes public (or swap target to a public form/mailto).
 
 ### Name-quality pass [S]
 Prefer the company's own `og:site_name` / `<title>` casing (already in

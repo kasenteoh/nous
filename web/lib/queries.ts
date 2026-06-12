@@ -421,6 +421,149 @@ export async function getRandomCompanySlug(): Promise<string | null> {
   return (data?.[0]?.slug as string | undefined) ?? null;
 }
 
+// ─── SEO queries ──────────────────────────────────────────────────────────────
+
+/** Minimal per-company row for the sitemap. */
+export interface CompanySlugRow {
+  slug: string;
+  updated_at: string | null;
+}
+
+/**
+ * Every company slug + updated_at, for app/sitemap.ts. PostgREST caps any
+ * response at 1000 rows, and the index holds ~4,200 companies, so this pages
+ * by keyset (`slug > lastSlug`, ordered by slug) until a short page. Keyset
+ * beats offset `.range()` here: each page strictly advances the slug cursor,
+ * so termination is provable and rows inserted mid-iteration can't shift
+ * offsets and cause skips or duplicates. A hard `maxPages` bound caps the walk
+ * at 50k slugs — also Google's per-sitemap URL cap — so a pathological loop
+ * can never hang the build.
+ * Returns [] on error or missing env — CI builds without Supabase secrets and
+ * the sitemap must still build with just its static entries.
+ */
+export async function listAllCompanySlugs(): Promise<CompanySlugRow[]> {
+  let supabase: ReturnType<typeof createSupabaseServerClient>;
+  try {
+    supabase = createSupabaseServerClient();
+  } catch (err) {
+    console.warn(
+      "[listAllCompanySlugs] Supabase not configured:",
+      (err as Error).message,
+    );
+    return [];
+  }
+
+  const pageSize = 1000;
+  const maxPages = 50; // 50k slugs — Google's per-sitemap URL cap.
+  const all: CompanySlugRow[] = [];
+  let lastSlug: string | null = null;
+
+  for (let page = 0; page < maxPages; page++) {
+    let query = supabase
+      .from("companies")
+      .select("slug, updated_at")
+      .order("slug", { ascending: true })
+      .limit(pageSize);
+    if (lastSlug !== null) {
+      query = query.gt("slug", lastSlug);
+    }
+
+    const { data, error } = await query;
+
+    if (error) {
+      console.error("[listAllCompanySlugs] page query failed:", error.message);
+      return [];
+    }
+
+    const rows = (data ?? []).map((r) => ({
+      slug: r.slug as string,
+      updated_at: (r.updated_at as string | null) ?? null,
+    }));
+    all.push(...rows);
+
+    // A short (or empty) page means we've drained the table.
+    if (rows.length < pageSize) return all;
+
+    lastSlug = rows[rows.length - 1].slug;
+  }
+
+  console.warn(
+    `[listAllCompanySlugs] hit maxPages=${maxPages} (${all.length} slugs); ` +
+      "sitemap may be truncated — split into multiple sitemaps before raising the cap.",
+  );
+  return all;
+}
+
+/** The handful of fields the company OG-image card renders. */
+export interface CompanyOgData {
+  name: string;
+  industry_group: string | null;
+  /** Sum of known round amounts in USD; 0 when nothing is known. */
+  totalRaised: number;
+}
+
+/**
+ * Lean fetch for app/c/[slug]/opengraph-image.tsx — deliberately not
+ * getCompanyBySlug, which fans out into five queries the card doesn't need.
+ * One query: the company row with its rounds' amounts embedded
+ * (`funding_rounds(amount_raised)`), summed in-process.
+ * Returns null when the slug is unknown (caller falls back to the site card).
+ * Missing/empty rounds degrade to totalRaised = 0 — the card still renders,
+ * just without the raised line.
+ */
+export async function getCompanyOgData(
+  slug: string,
+): Promise<CompanyOgData | null> {
+  let supabase: ReturnType<typeof createSupabaseServerClient>;
+  try {
+    supabase = createSupabaseServerClient();
+  } catch (err) {
+    console.warn(
+      "[getCompanyOgData] Supabase not configured:",
+      (err as Error).message,
+    );
+    return null;
+  }
+
+  const { data: company, error: companyError } = await supabase
+    .from("companies")
+    .select("name, industry_group, funding_rounds(amount_raised)")
+    .eq("slug", slug)
+    .single();
+
+  if (companyError || !company) {
+    if (companyError?.code !== "PGRST116") {
+      console.error(
+        "[getCompanyOgData] company query failed:",
+        companyError?.message,
+      );
+    }
+    return null;
+  }
+
+  // One-to-many embed: PostgREST returns an array, but guard null/object
+  // shapes so a missing join degrades to 0 instead of breaking the card.
+  const roundsRaw = company.funding_rounds as
+    | { amount_raised: number | null }[]
+    | { amount_raised: number | null }
+    | null;
+  const rounds = Array.isArray(roundsRaw)
+    ? roundsRaw
+    : roundsRaw != null
+      ? [roundsRaw]
+      : [];
+
+  const totalRaised = rounds.reduce<number>((acc, r) => {
+    return r.amount_raised != null ? acc + Number(r.amount_raised) : acc;
+  }, 0);
+
+  return {
+    name: company.name as string,
+    industry_group: (company.industry_group as string | null) ?? null,
+    totalRaised,
+  };
+}
+
 /**
  * Return the full detail for a single company identified by slug.
  * Returns null when the slug does not exist.
