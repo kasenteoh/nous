@@ -128,6 +128,14 @@ jobs:
           if [ -z "$WF_LIMIT" ]; then WF_LIMIT=150; fi
           uv run nous extract-funding-website --limit "$WF_LIMIT"
 
+      - name: Database stats
+        # No step id — contains(steps.*.outcome, ...) on the Trigger step only
+        # sees id'd steps; leaving this id-free means it cannot accidentally
+        # affect deploy gating.
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        run: uv run nous db-stats
+
       - name: Trigger Vercel deploy
         # contains(steps.*.outcome, ...) covers every id'd step; only pipeline
         # stages carry ids in this file — keep it that way or scope this back

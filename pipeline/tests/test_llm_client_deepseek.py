@@ -1,14 +1,15 @@
 """Tests for the DeepSeek backend of nous.llm.client.complete_json.
 
 All HTTP calls are mocked via httpx.MockTransport. Network is never touched.
+
+Shared helpers (build_chat_response, ResponsePlan, patch_async_client) and the
+autouse ledger-reset fixture live in conftest.py.
 """
 
 from __future__ import annotations
 
-import json
 from typing import Any
 
-import httpx
 import pytest
 
 from nous.llm.client import (
@@ -16,8 +17,10 @@ from nous.llm.client import (
     LLMParseError,
     LLMRateLimitError,
     complete_json,
+    get_ledger,
 )
 from nous.llm.prompts.company_description import CompanyDescription
+from tests.conftest import ResponsePlan, build_chat_response, patch_async_client
 
 VALID_PAYLOAD: dict[str, Any] = {
     "description_short": "A short description.",
@@ -29,69 +32,15 @@ VALID_PAYLOAD: dict[str, Any] = {
 INVALID_PAYLOAD: dict[str, Any] = {"description_long": "missing required fields"}
 
 
-def _build_chat_response(payload: dict[str, Any]) -> dict[str, Any]:
-    """Shape mirrors DeepSeek's OpenAI-compatible /chat/completions response."""
-    return {
-        "id": "chatcmpl-test",
-        "object": "chat.completion",
-        "model": "deepseek-chat",
-        "choices": [
-            {
-                "index": 0,
-                "message": {"role": "assistant", "content": json.dumps(payload)},
-                "finish_reason": "stop",
-            }
-        ],
-    }
-
-
-class _ResponsePlan:
-    """Routes successive POSTs through a queue of (status, body) tuples."""
-
-    def __init__(self, responses: list[tuple[int, Any]]) -> None:
-        self._responses = list(responses)
-        self.call_count = 0
-
-    def handler(self, request: httpx.Request) -> httpx.Response:
-        self.call_count += 1
-        if not self._responses:
-            raise AssertionError(
-                f"unexpected extra call #{self.call_count} to {request.url}"
-            )
-        status, body = self._responses.pop(0)
-        content = body if isinstance(body, (bytes, str)) else json.dumps(body)
-        return httpx.Response(
-            status,
-            content=content,
-            headers={"content-type": "application/json"},
-            request=request,
-        )
-
-
 @pytest.fixture(autouse=True)
 def _set_deepseek_key(monkeypatch: pytest.MonkeyPatch) -> None:
     """Provide a dummy key so the client doesn't bail before the mocked call."""
     monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test-key-do-not-use-in-prod")
 
 
-def _patch_async_client(
-    monkeypatch: pytest.MonkeyPatch, plan: _ResponsePlan
-) -> None:
-    """Replace httpx.AsyncClient inside llm/client with one bound to a MockTransport."""
-    transport = httpx.MockTransport(plan.handler)
-    original_async_client = httpx.AsyncClient
-
-    def factory(*args: object, **kwargs: object) -> httpx.AsyncClient:
-        # Drop the caller's transport if any; force ours.
-        kwargs.pop("transport", None)
-        return original_async_client(*args, transport=transport, **kwargs)
-
-    monkeypatch.setattr("nous.llm.client.httpx.AsyncClient", factory)
-
-
 async def test_deepseek_happy_path(monkeypatch: pytest.MonkeyPatch) -> None:
-    plan = _ResponsePlan([(200, _build_chat_response(VALID_PAYLOAD))])
-    _patch_async_client(monkeypatch, plan)
+    plan = ResponsePlan([(200, build_chat_response(VALID_PAYLOAD))])
+    patch_async_client(monkeypatch, plan)
 
     result = await complete_json("some prompt", CompanyDescription)
 
@@ -101,13 +50,13 @@ async def test_deepseek_happy_path(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 async def test_deepseek_retries_on_invalid_json(monkeypatch: pytest.MonkeyPatch) -> None:
-    plan = _ResponsePlan(
+    plan = ResponsePlan(
         [
-            (200, _build_chat_response(INVALID_PAYLOAD)),
-            (200, _build_chat_response(VALID_PAYLOAD)),
+            (200, build_chat_response(INVALID_PAYLOAD)),
+            (200, build_chat_response(VALID_PAYLOAD)),
         ]
     )
-    _patch_async_client(monkeypatch, plan)
+    patch_async_client(monkeypatch, plan)
 
     result = await complete_json("some prompt", CompanyDescription)
     assert isinstance(result, CompanyDescription)
@@ -117,13 +66,13 @@ async def test_deepseek_retries_on_invalid_json(monkeypatch: pytest.MonkeyPatch)
 async def test_deepseek_raises_parse_error_after_two_bad(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    plan = _ResponsePlan(
+    plan = ResponsePlan(
         [
-            (200, _build_chat_response(INVALID_PAYLOAD)),
-            (200, _build_chat_response(INVALID_PAYLOAD)),
+            (200, build_chat_response(INVALID_PAYLOAD)),
+            (200, build_chat_response(INVALID_PAYLOAD)),
         ]
     )
-    _patch_async_client(monkeypatch, plan)
+    patch_async_client(monkeypatch, plan)
 
     with pytest.raises(LLMParseError):
         await complete_json("some prompt", CompanyDescription)
@@ -131,8 +80,8 @@ async def test_deepseek_raises_parse_error_after_two_bad(
 
 
 async def test_deepseek_rate_limit_surfaces(monkeypatch: pytest.MonkeyPatch) -> None:
-    plan = _ResponsePlan([(429, {"error": "rate limited"})])
-    _patch_async_client(monkeypatch, plan)
+    plan = ResponsePlan([(429, {"error": "rate limited"})])
+    patch_async_client(monkeypatch, plan)
 
     with pytest.raises(LLMRateLimitError):
         await complete_json("some prompt", CompanyDescription)
@@ -141,14 +90,14 @@ async def test_deepseek_rate_limit_surfaces(monkeypatch: pytest.MonkeyPatch) -> 
 async def test_deepseek_5xx_retries_then_succeeds(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    plan = _ResponsePlan(
+    plan = ResponsePlan(
         [
             (503, {"error": "overloaded"}),
             (503, {"error": "overloaded"}),
-            (200, _build_chat_response(VALID_PAYLOAD)),
+            (200, build_chat_response(VALID_PAYLOAD)),
         ]
     )
-    _patch_async_client(monkeypatch, plan)
+    patch_async_client(monkeypatch, plan)
 
     result = await complete_json("some prompt", CompanyDescription)
     assert isinstance(result, CompanyDescription)
@@ -158,8 +107,8 @@ async def test_deepseek_5xx_retries_then_succeeds(
 async def test_deepseek_4xx_non_429_raises_llm_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    plan = _ResponsePlan([(401, {"error": "unauthorized"})])
-    _patch_async_client(monkeypatch, plan)
+    plan = ResponsePlan([(401, {"error": "unauthorized"})])
+    patch_async_client(monkeypatch, plan)
 
     with pytest.raises(LLMError) as excinfo:
         await complete_json("some prompt", CompanyDescription)
@@ -181,8 +130,48 @@ async def test_deepseek_malformed_response_raises_llm_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A 200 with a body that doesn't have choices[0].message.content is surfaced clearly."""
-    plan = _ResponsePlan([(200, {"unexpected": "shape"})])
-    _patch_async_client(monkeypatch, plan)
+    plan = ResponsePlan([(200, {"unexpected": "shape"})])
+    patch_async_client(monkeypatch, plan)
 
     with pytest.raises(LLMError, match="missing choices"):
         await complete_json("some prompt", CompanyDescription)
+
+
+# ---------------------------------------------------------------------------
+# Ledger integration tests
+# ---------------------------------------------------------------------------
+
+
+async def test_ledger_increments_on_happy_path_with_usage(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A successful call with a usage block increments calls and tokens."""
+    plan = ResponsePlan(
+        [(200, build_chat_response(
+            VALID_PAYLOAD, include_usage=True, prompt_tokens=20, completion_tokens=8,
+        ))]
+    )
+    patch_async_client(monkeypatch, plan)
+
+    await complete_json("some prompt", CompanyDescription)
+
+    ledger = get_ledger()
+    assert ledger.calls == 1
+    assert ledger.prompt_tokens == 20
+    assert ledger.completion_tokens == 8
+    assert ledger.parse_retries == 0
+
+
+async def test_ledger_call_counted_even_without_usage(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Responses without a usage key still count the call; tokens stay 0."""
+    plan = ResponsePlan([(200, build_chat_response(VALID_PAYLOAD))])
+    patch_async_client(monkeypatch, plan)
+
+    await complete_json("some prompt", CompanyDescription)
+
+    ledger = get_ledger()
+    assert ledger.calls == 1
+    assert ledger.prompt_tokens == 0
+    assert ledger.completion_tokens == 0

@@ -48,3 +48,13 @@ class Settings(BaseSettings):
     # (rows whose employee_count_checked_at is more recent are skipped). The CLI
     # --refetch-after-days flag overrides this per run.
     EMPLOYEE_REFETCH_DAYS: int = 90
+
+    # ---------------------------------------------------------------------------
+    # DB size watchdog
+    # ---------------------------------------------------------------------------
+
+    # Supabase free tier database limit.
+    DB_SIZE_CAP_MB: int = 500
+
+    # Warn when DB usage reaches this percentage of the cap (0–100).
+    DB_SIZE_WARN_PCT: int = 80

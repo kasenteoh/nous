@@ -132,6 +132,14 @@ jobs:
           if [ -z "$LIMIT" ]; then LIMIT=200; fi
           uv run nous estimate-employees --limit "$LIMIT" --max-runtime-minutes 30
 
+      - name: Database stats
+        # No step id — contains(steps.*.outcome, ...) on the Trigger step only
+        # sees id'd steps; leaving this id-free means it cannot accidentally
+        # affect deploy gating.
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        run: uv run nous db-stats
+
       - name: Trigger Vercel deploy
         # contains(steps.*.outcome, ...) covers every id'd step; only pipeline
         # stages carry ids in this file — keep it that way or scope this back
