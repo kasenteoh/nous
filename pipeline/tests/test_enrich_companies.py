@@ -386,17 +386,22 @@ async def test_max_companies_caps_enrichment(
     assert summary.companies_enriched == 1
 
 
-async def test_thin_text_is_skipped(
+async def test_thin_text_company_is_not_selected(
     db: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Companies whose pages yield < 200 chars of text are skipped."""
+    """Companies whose stored pages are all < 200 chars are excluded in SQL.
+
+    Without the SQL-level exclusion they re-enter the selection every run
+    (description_short stays NULL forever) and, sitting at the front of the
+    LIMIT N scan, eventually consume the whole per-run budget.
+    """
     company = _make_company(slug="enrich-thin")
     db.add(company)
     await db.flush()
     thin_page = RawPage(
         company_id=company.id,
         url="https://thin.com/",
-        content="<html><body><p>Hi.</p></body></html>",  # very little text
+        content="Hi.",  # scrape now stores extracted text; 3 chars
     )
     db.add(thin_page)
     await db.flush()
@@ -411,4 +416,37 @@ async def test_thin_text_is_skipped(
     summary = await run_enrich_companies(db)
 
     mock_complete_json.assert_not_called()
+    assert summary.companies_seen == 0
+    assert summary.skipped_no_text == 0
+
+
+async def test_markup_heavy_page_skipped_in_loop(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A page that is long on bytes but thin on visible text still gets the
+    in-loop skip (defends rows that pre-date the extracted-text storage)."""
+    company = _make_company(slug="enrich-markup-thin")
+    db.add(company)
+    await db.flush()
+    page = RawPage(
+        company_id=company.id,
+        url="https://markup.com/",
+        # > 200 chars of content, < 200 chars of visible text
+        content="<html><head>" + "<meta charset='utf-8'>" * 20 + "</head>"
+        "<body><p>Hi.</p></body></html>",
+    )
+    db.add(page)
+    await db.flush()
+    await db.commit()
+
+    mock_complete_json = AsyncMock(return_value=_CANNED_DESCRIPTION)
+    monkeypatch.setattr(
+        "nous.pipeline.enrich_companies.complete_json",
+        mock_complete_json,
+    )
+
+    summary = await run_enrich_companies(db)
+
+    mock_complete_json.assert_not_called()
+    assert summary.companies_seen == 1
     assert summary.skipped_no_text >= 1

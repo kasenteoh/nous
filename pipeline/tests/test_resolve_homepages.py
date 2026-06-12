@@ -129,12 +129,12 @@ async def test_recent_website_resolved_at_is_skipped(db: AsyncSession) -> None:
 
 
 async def test_stale_website_resolved_at_is_reprocessed(db: AsyncSession) -> None:
-    """A company with a stale website_resolved_at IS re-processed."""
+    """A website-less company with a stale website_resolved_at IS re-attempted."""
     old = datetime.now(tz=UTC) - timedelta(days=200)
     company = _make_company(
         name="Stale Inc.",
         slug="stale-reprocess",
-        website="https://stale.com/",
+        website=None,
         website_resolved_at=old,
     )
     db.add(company)
@@ -145,6 +145,79 @@ async def test_stale_website_resolved_at_is_reprocessed(db: AsyncSession) -> Non
     summary = await run_resolve_homepages(db, client, refetch_after_days=90)
 
     assert summary.companies_seen >= 1
+
+
+async def test_company_with_website_is_never_eligible(db: AsyncSession) -> None:
+    """A company that already has a website is not re-resolved, even when
+    website_resolved_at is NULL (discovery-provided sites) or stale.
+
+    Re-resolving would waste hours of runner time on the backlog and risks
+    overwriting a correct discovery-provided URL with a wrong TLD guess.
+    """
+    company_unstamped = _make_company(
+        name="Portfolio Inc.",
+        slug="portfolio-has-site",
+        website="https://portfolio-has-site.dev/",
+        website_resolved_at=None,
+    )
+    company_stale = _make_company(
+        name="Stale Site Inc.",
+        slug="stale-has-site",
+        website="https://stale-has-site.dev/",
+        website_resolved_at=datetime.now(tz=UTC) - timedelta(days=400),
+    )
+    db.add_all([company_unstamped, company_stale])
+    await db.flush()
+    await db.commit()
+
+    client = MockHomepageClient({})
+    summary = await run_resolve_homepages(db, client, refetch_after_days=90)
+
+    assert summary.companies_seen == 0
+    await db.refresh(company_unstamped)
+    assert company_unstamped.website == "https://portfolio-has-site.dev/"
+
+
+async def test_max_runtime_zero_stops_before_first_company(db: AsyncSession) -> None:
+    """max_runtime_minutes=0 exits cleanly before processing anything."""
+    for i in range(3):
+        db.add(
+            _make_company(
+                name=f"BudgetCo {i} Inc.",
+                slug=f"budgetco-resolve-{i}",
+                website=None,
+                website_resolved_at=None,
+            )
+        )
+    await db.flush()
+    await db.commit()
+
+    client = MockHomepageClient({})
+    summary = await run_resolve_homepages(db, client, max_runtime_minutes=0)
+
+    assert summary.companies_seen == 0
+    assert summary.stopped_early is True
+
+
+async def test_max_runtime_unset_processes_everything(db: AsyncSession) -> None:
+    """Without a budget the stage drains its whole selection."""
+    for i in range(3):
+        db.add(
+            _make_company(
+                name=f"NoBudgetCo {i} Inc.",
+                slug=f"nobudgetco-resolve-{i}",
+                website=None,
+                website_resolved_at=None,
+            )
+        )
+    await db.flush()
+    await db.commit()
+
+    client = MockHomepageClient({})
+    summary = await run_resolve_homepages(db, client)
+
+    assert summary.companies_seen >= 3
+    assert summary.stopped_early is False
 
 
 async def test_no_matching_tld_sets_resolved_at_but_not_website(db: AsyncSession) -> None:

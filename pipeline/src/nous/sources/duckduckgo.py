@@ -64,8 +64,23 @@ class DuckDuckGoCaptchaError(Exception):
     """DDG served an anti-bot interstitial. Caller should give up gracefully."""
 
 
+# Statuses DDG's anti-bot layer serves instead of results. 202 is the soft
+# rate limit observed in production (it flooded the 2026-06-11 pipeline runs
+# for hours); 403/429 are the hard variants. A 5xx is a server error, not a
+# block, and must not trip the breaker.
+_BLOCKED_STATUSES: frozenset[int] = frozenset({202, 403, 429})
+
+
 class DuckDuckGoSearch:
-    """Async DDG HTML search client with a global request throttle."""
+    """Async DDG HTML search client with a global request throttle.
+
+    Circuit breaker: after ``blocked_threshold`` consecutive blocked
+    responses (202/403/429 or a captcha interstitial), the client stops
+    issuing requests for the rest of the process and every search returns [].
+    Once DDG rate-limits an IP it keeps doing so for hours — continuing to
+    poll it wastes ~2s+ per company and is exactly the hammering that got the
+    IP flagged in the first place.
+    """
 
     def __init__(
         self,
@@ -73,19 +88,47 @@ class DuckDuckGoSearch:
         user_agent: str,
         *,
         seconds_between_requests: float = 2.0,
+        blocked_threshold: int = 5,
     ) -> None:
         self._client = client
         self._user_agent = user_agent
         self._min_interval = seconds_between_requests
         self._last_request_at: float = 0.0
         self._lock = asyncio.Lock()
+        self._blocked_threshold = blocked_threshold
+        self._consecutive_blocked = 0
+        self._breaker_open = False
+
+    @property
+    def is_blocked(self) -> bool:
+        """True once the circuit breaker has opened for this process."""
+        return self._breaker_open
+
+    def _note_blocked(self, query: str, reason: str) -> None:
+        self._consecutive_blocked += 1
+        if (
+            not self._breaker_open
+            and self._consecutive_blocked >= self._blocked_threshold
+        ):
+            self._breaker_open = True
+            logger.warning(
+                "DDG circuit breaker OPEN after %d consecutive blocked responses "
+                "(last: %s for %r) — skipping all DDG searches for the rest of "
+                "this run",
+                self._consecutive_blocked,
+                reason,
+                query,
+            )
 
     async def search(self, query: str, *, limit: int = 10) -> list[str]:
         """Run a DDG HTML search, return up to ``limit`` result URLs in order.
 
-        Returns [] on captcha, network error, or unexpected response shape —
-        callers should not depend on the search succeeding.
+        Returns [] on captcha, network error, unexpected response shape, or
+        when the circuit breaker is open — callers should not depend on the
+        search succeeding.
         """
+        if self._breaker_open:
+            return []
         async with self._lock:
             now = time.monotonic()
             wait = self._min_interval - (now - self._last_request_at)
@@ -107,6 +150,8 @@ class DuckDuckGoSearch:
 
         if resp.status_code != 200:
             logger.warning("DDG returned status %d for %r", resp.status_code, query)
+            if resp.status_code in _BLOCKED_STATUSES:
+                self._note_blocked(query, f"HTTP {resp.status_code}")
             return []
 
         body = resp.text
@@ -114,8 +159,10 @@ class DuckDuckGoSearch:
         # the string "anomaly" or "/static-assets/blocked" in these cases.
         if "anomaly" in body.lower() or "blocked" in body.lower()[:2000]:
             logger.warning("DDG captcha/block detected for %r", query)
+            self._note_blocked(query, "captcha interstitial")
             return []
 
+        self._consecutive_blocked = 0
         return list(_extract_result_urls(body, limit=limit))
 
 

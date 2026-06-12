@@ -286,6 +286,16 @@ class HomepageClient:
             raise RuntimeError("HomepageClient must be used as an async context manager.")
         return await self._search_client.search(query, limit=limit)
 
+    @property
+    def ddg_blocked(self) -> bool:
+        """True once DDG has rate-limited this process (circuit breaker open).
+
+        Lets callers annotate results that were computed without the DDG
+        fallback — a "no match" under an open breaker is weaker evidence than
+        one where the search actually ran.
+        """
+        return self._search_client is not None and self._search_client.is_blocked
+
 
 async def resolve_homepage(
     client: HomepageClient,

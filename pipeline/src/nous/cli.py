@@ -20,7 +20,18 @@ def cli() -> None:
     show_default=True,
     help="Re-attempt resolution for companies last checked more than N days ago.",
 )
-def resolve_homepages(limit: int | None, refetch_after_days: int) -> None:
+@click.option(
+    "--max-runtime-minutes",
+    type=float,
+    default=None,
+    help=(
+        "Wall-clock budget: stop cleanly at the next company boundary once "
+        "exceeded. Remaining companies are picked up by the next run."
+    ),
+)
+def resolve_homepages(
+    limit: int | None, refetch_after_days: int, max_runtime_minutes: float | None
+) -> None:
     """Attempt to resolve a homepage URL for companies that lack one."""
     import asyncio
 
@@ -44,6 +55,7 @@ def resolve_homepages(limit: int | None, refetch_after_days: int) -> None:
                 homepage_client,
                 refetch_after_days=refetch_after_days,
                 limit=limit,
+                max_runtime_minutes=max_runtime_minutes,
             )
             click.echo(summary.model_dump_json(indent=2))
 
@@ -70,10 +82,20 @@ def resolve_homepages(limit: int | None, refetch_after_days: int) -> None:
     default=False,
     help="Disable the headless-Chromium fallback for JS-shell pages.",
 )
+@click.option(
+    "--max-runtime-minutes",
+    type=float,
+    default=None,
+    help=(
+        "Wall-clock budget: stop cleanly at the next company boundary once "
+        "exceeded. Remaining companies are picked up by the next run."
+    ),
+)
 def scrape_homepages(
     limit: int | None,
     refetch_after_days: int,
     no_browser_fallback: bool,
+    max_runtime_minutes: float | None,
 ) -> None:
     """Fetch each company's homepage and store raw HTML in raw_pages."""
     import asyncio
@@ -105,6 +127,7 @@ def scrape_homepages(
                     refetch_after_days=refetch_after_days,
                     limit=limit,
                     browser_client=browser_client,
+                    max_runtime_minutes=max_runtime_minutes,
                 )
                 click.echo(summary.model_dump_json(indent=2))
             finally:
@@ -312,7 +335,20 @@ def extract_funding(limit: int, include_low_confidence: bool) -> None:
     default=False,
     help="Persist rounds the LLM tagged as low-confidence (default: skip).",
 )
-def extract_funding_website(limit: int | None, include_low_confidence: bool) -> None:
+@click.option(
+    "--recheck-after-days",
+    type=int,
+    default=180,
+    show_default=True,
+    help=(
+        "Re-attempt companies whose website-funding pass ran more than N days "
+        "ago. Attempts are stamped even when no funding is found, so bounded "
+        "runs rotate through the backlog instead of re-processing the head."
+    ),
+)
+def extract_funding_website(
+    limit: int | None, include_low_confidence: bool, recheck_after_days: int
+) -> None:
     """Gap-fill funding from a company's own website (fallback to TechCrunch).
 
     Runs only for companies that have scraped pages but no funding rounds yet,
@@ -329,6 +365,7 @@ def extract_funding_website(limit: int | None, include_low_confidence: bool) -> 
                 session,
                 limit=limit,
                 skip_low_confidence=not include_low_confidence,
+                recheck_after_days=recheck_after_days,
             )
             click.echo(summary.model_dump_json(indent=2))
 
@@ -447,7 +484,20 @@ def cleanup_form_d(dry_run: bool) -> None:
         "Default: the EMPLOYEE_REFETCH_DAYS setting (90)."
     ),
 )
-def estimate_employees(limit: int | None, refetch_after_days: int | None) -> None:
+@click.option(
+    "--max-runtime-minutes",
+    type=float,
+    default=None,
+    help=(
+        "Wall-clock budget: stop cleanly at the next company boundary once "
+        "exceeded. Remaining companies are picked up by the next run."
+    ),
+)
+def estimate_employees(
+    limit: int | None,
+    refetch_after_days: int | None,
+    max_runtime_minutes: float | None,
+) -> None:
     """Estimate employee headcount from public sources.
 
     Sources are tried in priority order (Wellfound, The Org, GrowJo, careers-page
@@ -482,6 +532,7 @@ def estimate_employees(limit: int | None, refetch_after_days: int | None) -> Non
                 settings.GITHUB_TOKEN,
                 refetch_after_days=effective_refetch,
                 limit=limit,
+                max_runtime_minutes=max_runtime_minutes,
             )
             click.echo(summary.model_dump_json(indent=2))
 

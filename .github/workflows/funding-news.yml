@@ -9,9 +9,12 @@ name: funding-news
 # raw_pages, so the Playwright install (present in descriptions.yml) is omitted.
 on:
   schedule:
-    # Daily 14:00 UTC, offset from the Monday-morning discovery/descriptions
-    # slots. On Mondays this run queues behind those weekly jobs via the shared
-    # `concurrency` group below — that's the intended serialization.
+    # Daily 14:00 UTC, offset from the morning discovery/descriptions slots.
+    # On Mondays this run queues behind those jobs via the shared
+    # `concurrency` group below — that's the intended serialization, and their
+    # bounded budgets (≤~1.5h each) mean the queue clears hours before 14:00.
+    # Note: this file landed on main 2026-06-11 16:43 UTC, after that day's
+    # 14:00 slot — the first scheduled run is 2026-06-12.
     - cron: "0 14 * * *"
   workflow_dispatch:
     inputs:
@@ -29,6 +32,14 @@ on:
         description: "Ingest news: lookback window in days. Default: 7."
         required: false
         type: string
+      news_limit:
+        description: "Ingest news: max companies for the per-company RSS rotation. Default: 400."
+        required: false
+        type: string
+      website_funding_limit:
+        description: "Website funding gap-fill: max companies per run. Default: 150."
+        required: false
+        type: string
 
 # Serialize against every other workflow that mutates the companies table (see
 # discovery.yml). ingest-news auto-creates companies from the TechCrunch sweep
@@ -41,6 +52,9 @@ concurrency:
 jobs:
   funding-news:
     runs-on: ubuntu-latest
+    # Hard backstop far below GitHub's 360-min kill. ingest-news is bounded by
+    # company count × RSS fetch, extract-funding by --limit 1000 LLM calls.
+    timeout-minutes: 150
     defaults:
       run:
         working-directory: pipeline
@@ -68,25 +82,45 @@ jobs:
       - name: Ingest news
         if: ${{ inputs.skip_news != true }}
         # Per-company Google News RSS + TechCrunch venture-tag broad sweep.
-        # continue-on-error: a transient Google News block shouldn't fail the run.
+        # --limit rotates the per-company sweep (least-recently-checked first,
+        # via companies.news_checked_at): 400/day over ~2.6k companies covers
+        # the whole table within the 7-day lookback window while keeping the
+        # daily Google News request count polite and the runner time ~10 min
+        # (2.6k unrotated queries would take 45+ min/day — a third of the
+        # private-repo Actions quota). continue-on-error: a transient Google
+        # News block shouldn't fail the run.
+        timeout-minutes: 30
+        continue-on-error: true
         run: |
-          ARGS=()
+          NEWS_LIMIT="${{ inputs.news_limit }}"
+          if [ -z "$NEWS_LIMIT" ]; then NEWS_LIMIT=400; fi
+          ARGS=(--limit "$NEWS_LIMIT")
           if [ -n "${{ inputs.news_lookback_days }}" ]; then
             ARGS+=(--lookback-days "${{ inputs.news_lookback_days }}")
           fi
           uv run nous ingest-news "${ARGS[@]}"
-        continue-on-error: true
 
       - name: Extract funding
         if: ${{ inputs.skip_funding != true }}
         # --limit 1000 caps per-run LLM spend on DeepSeek (now a daily ceiling).
-        # continue-on-error per the same rate-limit logic as enrich-companies.
-        run: uv run nous extract-funding --limit 1000
+        # Bounded by unprocessed articles, so steady-state cost tracks actual
+        # news volume. continue-on-error per the same rate-limit logic as
+        # enrich-companies.
+        timeout-minutes: 60
         continue-on-error: true
+        run: uv run nous extract-funding --limit 1000
 
       - name: Extract funding (website fallback)
         if: ${{ inputs.skip_funding != true }}
         # Gap-fill only: runs for companies that still have no funding rounds
         # after the TechCrunch/news pass above, so TechCrunch stays primary.
-        run: uv run nous extract-funding-website
+        # --limit + the website_funding_checked_at rotation (180-day back-off,
+        # stamped even on "no funding found") bound the daily LLM spend —
+        # without them every scraped-but-roundless company (most of the
+        # table) would be re-LLM'd every single day.
+        timeout-minutes: 30
         continue-on-error: true
+        run: |
+          WF_LIMIT="${{ inputs.website_funding_limit }}"
+          if [ -z "$WF_LIMIT" ]; then WF_LIMIT=150; fi
+          uv run nous extract-funding-website --limit "$WF_LIMIT"

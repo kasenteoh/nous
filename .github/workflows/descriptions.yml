@@ -1,20 +1,51 @@
 name: descriptions
 
-# Weekly description pipeline: resolve + scrape company homepages, then run the
-# enrichment LLM to write descriptions / people / categories. enrich-companies
-# is write-once (it only touches companies missing a description, or past the
-# refetch window), so this is cheap to run weekly — steady state it only
-# processes newly discovered companies.
+# Daily description pipeline: resolve missing homepages, scrape company sites,
+# then run the enrichment LLM to write descriptions / people / categories.
+#
+# Why daily + bounded instead of weekly + unbounded: GitHub-hosted runners
+# kill jobs at 360 minutes. The 2026-06-11 weekly runs spent all 6 hours
+# inside resolve-homepages and were cancelled before scrape/enrich ever ran
+# (runs 27360677547 and 27362752046), which is why production had zero
+# descriptions. Every stage below now gets an explicit --limit and/or
+# --max-runtime-minutes budget and exits cleanly when it's spent; per-company
+# commits + write-once timestamps make each stage resume exactly where the
+# previous run stopped. The scrape backlog (~2.3k companies) drains over
+# ~2 weeks of daily runs, after which the steady-state run only touches newly
+# discovered companies and finishes in minutes.
+#
+# Budget math (repo is private: 2,000 free Actions min/month — keep the
+# worst-case day well under ~80 min):
+#   setup            ~2 min
+#   resolve          ≤10 min (--max-runtime-minutes 10, backlog ~240 then ~0)
+#   scrape           ≤30 min (--max-runtime-minutes 30, ~150-250 companies/run)
+#   enrich           ≤45 min (--limit 250, DeepSeek-bound ~5-15s/company;
+#                             in practice bounded by yesterday's scrape yield)
+#   job timeout      150 min (hard backstop, should never be hit)
 on:
   schedule:
-    # Mon 06:00 UTC, after discovery.yml (Mon 02:00) so companies created that
-    # morning get scraped + enriched the same day. Serialized against the other
-    # DB-mutating workflows via the shared `concurrency` group below.
-    - cron: "0 6 * * 1"
+    # Daily 06:00 UTC. On Mondays this lands after discovery.yml (02:00) so
+    # companies created that morning get scraped + enriched the same day.
+    # Serialized against the other DB-mutating workflows via the shared
+    # `concurrency` group below; bounded budgets keep this job ≤~1.5h so the
+    # 14:00 funding-news cron is never starved.
+    - cron: "0 6 * * *"
   workflow_dispatch:
     inputs:
+      resolve_limit:
+        description: "Resolve: max companies to attempt. Default: 200."
+        required: false
+        type: string
+      scrape_limit:
+        description: "Scrape: max companies to scrape. Default: 250."
+        required: false
+        type: string
+      enrich_limit:
+        description: "Enrich: max companies to enrich (caps LLM spend). Default: 250."
+        required: false
+        type: string
       resolve_refetch_after_days:
-        description: "Resolve: re-resolve companies whose website_resolved_at is older than N days. 0 = re-resolve everything. Default: 90."
+        description: "Resolve: re-attempt website-less companies whose website_resolved_at is older than N days. 0 = re-attempt all website-less companies. Default: 90."
         required: false
         type: string
       scrape_refetch_after_days:
@@ -36,11 +67,6 @@ on:
         required: false
         type: boolean
         default: false
-      skip_estimate:
-        description: "Skip the Estimate employees stage."
-        required: false
-        type: boolean
-        default: false
 
 # Serialize against every other workflow that mutates the companies table (see
 # discovery.yml). resolve + enrich UPDATE company rows, which would race the
@@ -53,6 +79,10 @@ concurrency:
 jobs:
   descriptions:
     runs-on: ubuntu-latest
+    # Hard backstop far below GitHub's 360-min kill. The per-stage budgets
+    # below mean a healthy run finishes in well under an hour; hitting this
+    # timeout indicates a hung stage, and the next daily run resumes cleanly.
+    timeout-minutes: 150
     defaults:
       run:
         working-directory: pipeline
@@ -61,9 +91,6 @@ jobs:
       SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}
       # All LLM calls run on DeepSeek (see pipeline Settings).
       DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
-      # GitHub REST API token for the estimate-employees github-org signal.
-      # The built-in Actions token — no secret to provision.
-      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - uses: actions/checkout@v4
 
@@ -96,10 +123,19 @@ jobs:
       - name: Apply migrations
         run: uv run alembic upgrade head
 
+      # Every stage below is continue-on-error + step-timeout'd so one stage
+      # failing or hanging never blocks the later ones — the original failure
+      # mode was enrich never being reached because resolve ate the whole job.
+      # Idempotent stages make "skip today, catch up tomorrow" safe.
+
       - name: Resolve homepages
         if: ${{ inputs.skip_resolve != true }}
+        timeout-minutes: 20
+        continue-on-error: true
         run: |
-          ARGS=()
+          LIMIT="${{ inputs.resolve_limit }}"
+          if [ -z "$LIMIT" ]; then LIMIT=200; fi
+          ARGS=(--limit "$LIMIT" --max-runtime-minutes 10)
           if [ -n "${{ inputs.resolve_refetch_after_days }}" ]; then
             ARGS+=(--refetch-after-days "${{ inputs.resolve_refetch_after_days }}")
           fi
@@ -107,8 +143,12 @@ jobs:
 
       - name: Scrape homepages
         if: ${{ inputs.skip_scrape != true }}
+        timeout-minutes: 45
+        continue-on-error: true
         run: |
-          ARGS=()
+          LIMIT="${{ inputs.scrape_limit }}"
+          if [ -z "$LIMIT" ]; then LIMIT=250; fi
+          ARGS=(--limit "$LIMIT" --max-runtime-minutes 30)
           if [ -n "${{ inputs.scrape_refetch_after_days }}" ]; then
             ARGS+=(--refetch-after-days "${{ inputs.scrape_refetch_after_days }}")
           fi
@@ -116,17 +156,12 @@ jobs:
 
       - name: Enrich companies
         if: ${{ inputs.skip_enrich != true }}
-        # --limit 800 caps per-run LLM spend (DeepSeek is paid). continue-on-error
+        # --limit caps per-run LLM spend (DeepSeek is paid). continue-on-error
         # so a provider rate-limit / 5xx doesn't fail the whole run — the next
-        # weekly run picks up the unfinished companies.
-        run: uv run nous enrich-companies --limit 800
+        # daily run picks up the unfinished companies.
+        timeout-minutes: 60
         continue-on-error: true
-
-      - name: Estimate employees
-        if: ${{ inputs.skip_estimate != true }}
-        # Best-effort headcount probing across public sources (Wellfound, The Org,
-        # GrowJo, careers-page job count, GitHub org). continue-on-error so a
-        # blocked source / rate-limit doesn't fail the run; the 90-day back-off
-        # (employee_count_checked_at) keeps steady-state cost low.
-        run: uv run nous estimate-employees
-        continue-on-error: true
+        run: |
+          LIMIT="${{ inputs.enrich_limit }}"
+          if [ -z "$LIMIT" ]; then LIMIT=250; fi
+          uv run nous enrich-companies --limit "$LIMIT"

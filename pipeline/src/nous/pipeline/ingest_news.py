@@ -17,6 +17,7 @@ because we don't want to fetch the article body if we already have it).
 from __future__ import annotations
 
 import logging
+from datetime import UTC, datetime
 from uuid import UUID
 
 from pydantic import BaseModel
@@ -105,10 +106,14 @@ async def run_ingest_news(
 ) -> IngestNewsSummary:
     """Fetch per-company Google News results + optional TechCrunch broad sweep.
 
-    Per-company path: for each Company in the DB (optionally limited),
-    query Google News RSS for ``"<name>" funding``, filter to funding-keyword
-    matches (done inside ``NewsClient.google_news_rss``), and persist the
-    body for each new URL.
+    Per-company path: query Google News RSS for ``"<name>" funding``, filter
+    to funding-keyword matches (done inside ``NewsClient.google_news_rss``),
+    and persist the body for each new URL. Companies are taken least-recently
+    -checked first (news_checked_at NULLS FIRST) and stamped on every attempt,
+    so a ``max_companies``-bounded daily run rotates through the whole table
+    every ~table/limit days — at the default workflow limit that matches the
+    7-day lookback window, so no announcement is missed while the per-day
+    request count to Google News stays small and polite.
 
     TC broad-tag path: fetch the TC venture feed; for each article whose
     title parses to a candidate company name, find-or-auto-create the
@@ -116,7 +121,9 @@ async def run_ingest_news(
     """
     summary = IngestNewsSummary()
 
-    company_stmt = select(Company)
+    company_stmt = select(Company).order_by(
+        Company.news_checked_at.asc().nulls_first()
+    )
     if max_companies is not None:
         company_stmt = company_stmt.limit(max_companies)
     company_result = await session.execute(company_stmt)
@@ -129,11 +136,18 @@ async def run_ingest_news(
             results = await client.google_news_rss(query, lookback_days=lookback_days)
         except Exception:
             logger.exception("google_news_rss failed for %s", company.name)
-            continue
+            results = []
         for result in results:
             summary.articles_seen += 1
             summary.articles_kept += 1  # already keyword-filtered upstream
             await _ingest_one_article(session, client, company.id, result, summary)
+        # Stamp the attempt (success or failure) so the rotation advances —
+        # a head-of-line company whose query keeps failing must not pin the
+        # whole rotation in place. Commit per company, matching the
+        # per-article commits above.
+        company.news_checked_at = datetime.now(tz=UTC)
+        session.add(company)
+        await session.commit()
 
     if include_techcrunch_broad:
         try:

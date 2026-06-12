@@ -158,7 +158,11 @@ Implementation should make this filter list configurable.
 - Fetch homepage + likely subpages: `/`, `/about`, `/about-us`, `/product`, `/products`, `/company`, `/team`.
 - Respect `robots.txt`.
 - Cache aggressively (refetch quarterly, not weekly).
-- Store raw HTML so we can re-extract without re-scraping.
+- Store *extracted visible text* (not raw HTML). Raw HTML at backlog scale
+  (~9k pages × ~200KB) would exceed Supabase's 500MB free tier; every
+  consumer only reads visible text, and the quarterly refetch re-fetches from
+  the live site, so losing "re-extract without re-scraping" is the cheaper
+  trade. (Amended 2026-06 — originally stored raw HTML.)
 
 ### 3.3 News articles
 
@@ -333,7 +337,7 @@ Unique on `(company_id, investor_id)`; idempotent on re-run.
 | id | uuid | PK |
 | company_id | uuid | FK companies |
 | url | text | |
-| content | text | Raw HTML |
+| content | text | Extracted visible text, ≤50k chars (was raw HTML pre-2026-06; see §3.2) |
 | fetched_at | timestamptz | |
 
 ### 4.9 Indexes
@@ -364,15 +368,22 @@ The pipeline is a sequence of idempotent stages. Each stage is a CLI command inv
 
 - For companies without a `website` value:
   - Try common URL patterns.
-  - Fall back to DuckDuckGo HTML search.
+  - Fall back to DuckDuckGo HTML search (circuit breaker: after 5 consecutive
+    blocked responses — DDG soft-rate-limits with HTTP 202 — skip DDG for the
+    rest of the run).
   - Validate the resolved domain looks plausible (does the page mention the company name?).
-- For companies with a `website` older than 90 days, re-fetch.
+- Companies that already have a `website` (e.g. from a VC portfolio adapter)
+  are never re-resolved: at 2.6k companies × ~13s each that alone exceeds a
+  6-hour CI job, and a TLD guess can overwrite a correct discovery-provided
+  URL. Failed attempts retry after the 90-day refetch window
+  (`website_resolved_at`). (Amended 2026-06 — originally re-resolved
+  everything whose `website_resolved_at` was NULL or stale.)
 
 ### 5.3 Stage 3: Scrape Homepages (`scrape-homepages`)
 
 - For each company needing scraping:
-  - Fetch `/`, `/about`, `/product`, `/team`, `/company`.
-  - Store raw HTML in `raw_pages`.
+  - Fetch `/`, then up to 3 relevant internal links discovered from it.
+  - Store extracted visible text in `raw_pages` (see §3.2 / §4.8).
 - Respect robots.txt and a 1 req/sec per-domain throttle.
 
 ### 5.4 Stage 4: LLM Enrichment (`enrich-companies`)

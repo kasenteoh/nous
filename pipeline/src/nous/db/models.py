@@ -76,6 +76,28 @@ class Company(Base):
         index=True,
     )
 
+    # When ingest-news last ran this company's Google News RSS query. Drives
+    # the daily rotation: ORDER BY news_checked_at NULLS FIRST + LIMIT lets a
+    # bounded run cover the whole table every ~table/limit days instead of
+    # re-querying everything daily (2.6k RSS hits/day would eat half the
+    # private-repo Actions quota). Indexed for the ORDER BY.
+    news_checked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        index=True,
+    )
+
+    # When extract-funding-website last attempted this company (stamped on
+    # every attempt, including "no funding found on site"). Without it,
+    # companies whose sites never state funding stay eligible forever and the
+    # same alphabetical head gets re-LLM'd every run. Indexed for the
+    # WHERE/ORDER BY in the gap-fill query.
+    website_funding_checked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        index=True,
+    )
+
     # M3 — how this company first entered the DB.
     # 'vc_portfolio' | 'news' | 'techcrunch'. Discovery paths always set this
     # explicitly; the 'unknown' default is a safe fallback for any other insert
@@ -86,10 +108,15 @@ class Company(Base):
 
 
 class RawPage(Base):
-    """Raw HTML cache for homepage / about / product pages.
+    """Scraped-page cache for homepage / about / product pages.
 
     Per spec §4.8 + §5.3. Unique on (company_id, url) so the scraper
     can idempotently overwrite content+fetched_at with ON CONFLICT.
+
+    ``content`` holds the *extracted visible text* of the page (capped at
+    ~50k chars by scrape-homepages), not raw HTML — raw HTML at backlog
+    scale would exceed Supabase's 500MB free tier. All consumers run
+    extract_visible_text over it anyway, which is a no-op on plain text.
     """
 
     __tablename__ = "raw_pages"

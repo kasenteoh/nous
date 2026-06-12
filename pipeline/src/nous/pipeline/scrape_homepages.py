@@ -25,13 +25,27 @@ page is a React/Next.js shell waiting for hydration), the optional
 stored content with the JS-rendered DOM. This recovers sites like
 anspect-technologies.com that have no static body content at all.
 
-Commit cadence: one commit per company so a mid-run crash leaves a clean state.
+Storage semantics: ``raw_pages.content`` holds the *extracted visible text*
+of the page (capped at ``_MAX_STORED_CHARS``), not the raw HTML. Every
+downstream consumer (enrich-companies, extract-funding-website) runs
+``extract_visible_text`` over the content anyway — which is a no-op on
+already-extracted text — and link discovery happens in memory here before
+persisting. Raw HTML at backlog scale (~9k pages × ~200KB) would exceed
+Supabase's 500MB free tier ~4×; extracted text fits in tens of MB. The
+trade-off is that re-extraction without re-scraping is no longer possible;
+the 90-day refetch window re-fetches from the live site instead.
+
+Commit cadence: one commit per company so a mid-run crash leaves a clean
+state, and so a ``max_runtime_minutes`` budget can stop the loop at any
+company boundary — the next run's selection resumes via last_scrape_attempt_at
+/ raw_pages timestamps.
 """
 
 from __future__ import annotations
 
 import logging
 import re
+import time
 from datetime import UTC, datetime, timedelta
 from urllib.parse import urljoin, urlparse
 
@@ -51,6 +65,11 @@ from nous.util.text import extract_visible_text
 # certainly a JS-only SPA shell — trigger the headless-browser fallback if
 # one is configured.
 _BROWSER_FALLBACK_TEXT_THRESHOLD: int = 200
+
+# Per-page cap on stored extracted text. Enrichment truncates the multi-page
+# concatenation to 32k chars anyway; 50k per page is generous headroom while
+# bounding pathological pages (infinite-scroll blogs, generated content).
+_MAX_STORED_CHARS: int = 50_000
 
 logger = logging.getLogger(__name__)
 
@@ -144,6 +163,9 @@ class ScrapeSummary(BaseModel):
     # the headless-browser fallback produced richer content that we stored
     # instead. Useful signal for "how much JS-shell content are we rescuing?"
     pages_via_browser_fallback: int = 0
+    # True when the max_runtime_minutes budget stopped the loop before the
+    # selection was drained. The remaining companies stay eligible next run.
+    stopped_early: bool = False
 
 
 async def _fetch_one(
@@ -185,10 +207,14 @@ async def _persist_fetched_page(
     url: str,
     content: str,
 ) -> None:
-    """Sanitize + upsert the page. Postgres TEXT rejects NUL bytes; some sites
-    serve binary disguised as text/html, so strip them defensively.
+    """Extract visible text from the fetched HTML, sanitize, and upsert.
+
+    Stores extracted text (see module docstring) capped at _MAX_STORED_CHARS.
+    Postgres TEXT rejects NUL bytes; some sites serve binary disguised as
+    text/html, so strip them defensively.
     """
-    sanitized_content = content.replace("\x00", "")
+    text = extract_visible_text(content)[:_MAX_STORED_CHARS]
+    sanitized_content = text.replace("\x00", "")
     await upsert_raw_page(
         session,
         company_id=company_id,  # type: ignore[arg-type]
@@ -251,6 +277,7 @@ async def run_scrape_homepages(
     limit: int | None = None,
     max_extra_pages: int = 3,
     browser_client: HeadlessBrowserClient | None = None,
+    max_runtime_minutes: float | None = None,
 ) -> ScrapeSummary:
     """For each company with website set AND no recent raw_pages:
     1. Fetch the homepage via the static httpx client.
@@ -268,8 +295,13 @@ async def run_scrape_homepages(
       than ``failure_backoff_days``, AND
     - it has no raw_pages OR all of its raw_pages.fetched_at <
       (now - ``refetch_after_days``).
+
+    ``max_runtime_minutes`` is a clean-exit wall-clock budget: the loop stops
+    at the next company boundary once exceeded. Combined with per-company
+    commits this makes the stage resumable across bounded CI runs.
     """
     summary = ScrapeSummary()
+    started = time.monotonic()
 
     cutoff = datetime.now(tz=UTC) - timedelta(days=refetch_after_days)
     failure_cutoff = datetime.now(tz=UTC) - timedelta(days=failure_backoff_days)
@@ -312,6 +344,20 @@ async def run_scrape_homepages(
     companies = result.scalars().all()
 
     for company in companies:
+        if (
+            max_runtime_minutes is not None
+            and time.monotonic() - started >= max_runtime_minutes * 60
+        ):
+            summary.stopped_early = True
+            logger.info(
+                "scrape: %.0f-minute budget reached after %d companies — "
+                "stopping cleanly (%d left for the next run)",
+                max_runtime_minutes,
+                summary.companies_seen,
+                len(companies) - summary.companies_seen,
+            )
+            break
+
         summary.companies_seen += 1
 
         website: str = company.website  # type: ignore[assignment]  # already checked IS NOT NULL

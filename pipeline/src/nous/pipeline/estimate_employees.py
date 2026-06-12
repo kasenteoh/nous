@@ -15,6 +15,7 @@ a concurrent dedup-companies merge deletes the row mid-run.
 from __future__ import annotations
 
 import logging
+import time
 from datetime import UTC, datetime, timedelta
 
 from pydantic import BaseModel
@@ -35,6 +36,9 @@ class EstimateEmployeesSummary(BaseModel):
     unchanged: int = 0
     no_data: int = 0
     errors: int = 0
+    # True when the max_runtime_minutes budget stopped the loop before the
+    # selection was drained. The remaining companies stay eligible next run.
+    stopped_early: bool = False
 
 
 async def run_estimate_employees(
@@ -44,21 +48,27 @@ async def run_estimate_employees(
     *,
     refetch_after_days: int = 90,
     limit: int | None = None,
+    max_runtime_minutes: float | None = None,
 ) -> EstimateEmployeesSummary:
     """Fill employee_count_{min,max,source} for eligible companies.
 
-    Eligible = employee_count_min IS NULL, never checked, or last checked before
-    the cutoff. On a hit, update the range + source; on no data, leave the count
-    as-is. Either way stamp employee_count_checked_at so we don't re-probe every
-    run.
+    Eligible = never checked, or last checked before the cutoff. The back-off
+    deliberately applies to no-data companies too — most small startups are on
+    none of the five sources, and re-probing them every run would let the same
+    no-data block occupy the whole per-run limit forever. On a hit, update the
+    range + source; on no data, leave the count as-is. Either way stamp
+    employee_count_checked_at so we don't re-probe every run.
+
+    ``max_runtime_minutes`` is a clean-exit wall-clock budget: the loop stops
+    at the next company boundary once exceeded.
     """
     summary = EstimateEmployeesSummary()
+    started = time.monotonic()
 
     cutoff = datetime.now(tz=UTC) - timedelta(days=refetch_after_days)
 
     stmt = select(Company).where(
         or_(
-            Company.employee_count_min.is_(None),
             Company.employee_count_checked_at.is_(None),
             Company.employee_count_checked_at < cutoff,
         )
@@ -70,6 +80,20 @@ async def run_estimate_employees(
     companies = result.scalars().all()
 
     for company in companies:
+        if (
+            max_runtime_minutes is not None
+            and time.monotonic() - started >= max_runtime_minutes * 60
+        ):
+            summary.stopped_early = True
+            logger.info(
+                "estimate-employees: %.0f-minute budget reached after %d "
+                "companies — stopping cleanly (%d left for the next run)",
+                max_runtime_minutes,
+                summary.companies_seen,
+                len(companies) - summary.companies_seen,
+            )
+            break
+
         summary.companies_seen += 1
         now = datetime.now(tz=UTC)
 
