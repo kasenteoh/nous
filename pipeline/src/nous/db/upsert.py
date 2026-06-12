@@ -320,6 +320,27 @@ def _is_more_confident(new: str | None, existing: str | None) -> bool:
     return _CONFIDENCE_RANK.get(new, -1) > _CONFIDENCE_RANK.get(existing, -1)
 
 
+async def refresh_funding_round_count(
+    session: AsyncSession, company_id: UUID
+) -> None:
+    """Recompute companies.funding_round_count from funding_rounds.
+
+    Set-based and idempotent — safe to call after any round insert or merge.
+    The denormalized count exists for the web catalog bar (see migration 0022).
+    """
+    cnt = (
+        select(func.count())
+        .select_from(FundingRound)
+        .where(FundingRound.company_id == company_id)
+        .scalar_subquery()
+    )
+    await session.execute(
+        update(Company)
+        .where(Company.id == company_id)
+        .values(funding_round_count=cnt)
+    )
+
+
 async def reconcile_funding_round(
     session: AsyncSession,
     *,
@@ -406,6 +427,7 @@ async def reconcile_funding_round(
     )
     session.add(new_round)
     await session.flush()
+    await refresh_funding_round_count(session, company_id)
     return new_round, True
 
 
@@ -625,7 +647,8 @@ async def merge_companies(
       survivor lacks; delete the rest (survivor already has that url).
     - **news_articles** — url is globally unique (no per-company constraint):
       blanket repoint company_id.
-    - **funding_rounds** — no unique beyond the pk: blanket repoint. Their
+    - **funding_rounds** — no unique beyond the pk: blanket repoint, then the
+      survivor's ``funding_round_count`` is recomputed. Their
       ``funding_round_investors`` hang off funding_round_id and follow along.
     - **company_investors** — unique (company_id, investor_id): move links the
       survivor lacks; delete loser links the survivor already has (OR-promoting
@@ -678,6 +701,8 @@ async def merge_companies(
         .where(FundingRound.company_id == loser_id)
         .values(company_id=survivor_id)
     )
+    # Keep the denormalized catalog-bar count truthful for the survivor.
+    await refresh_funding_round_count(session, survivor_id)
 
     # --- company_investors: unique (company_id, investor_id) ---------------
     survivor_investors_subq = select(CompanyInvestor.investor_id).where(
