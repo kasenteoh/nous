@@ -279,3 +279,72 @@ def test_is_aggregator_crunchbase() -> None:
 
 def test_is_aggregator_non_aggregator_deep_path() -> None:
     assert is_aggregator("https://mycompany.io/about/team") is False
+
+
+# ---------------------------------------------------------------------------
+# Circuit breaker
+# ---------------------------------------------------------------------------
+
+
+class SequencedTransport(httpx.AsyncBaseTransport):
+    """Returns scripted (status, body) responses in order, repeating the last."""
+
+    def __init__(self, script: list[tuple[int, str]]) -> None:
+        self._script = script
+        self.call_count = 0
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        idx = min(self.call_count, len(self._script) - 1)
+        self.call_count += 1
+        status, body = self._script[idx]
+        return httpx.Response(
+            status,
+            content=body.encode(),
+            headers={"content-type": "text/html"},
+        )
+
+
+@pytest.mark.asyncio
+async def test_breaker_opens_after_consecutive_blocked_responses() -> None:
+    """After 5 consecutive blocked responses (DDG 202 rate limit), the breaker
+    opens: no further HTTP requests are made and search returns []."""
+    transport = SequencedTransport([(202, "")])
+    http_client, search = _make_client(transport)  # type: ignore[arg-type]
+
+    for _ in range(5):
+        assert await search.search("query") == []
+    assert transport.call_count == 5
+    assert search.is_blocked is True
+
+    # Breaker open: the next search short-circuits without a request.
+    assert await search.search("query") == []
+    assert transport.call_count == 5
+    await http_client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_clean_response_resets_breaker_counter() -> None:
+    """A successful 200 response resets the consecutive-blocked counter."""
+    script = [(202, "")] * 4 + [(200, DDG_RESULTS_HTML)] + [(202, "")] * 4
+    transport = SequencedTransport(script)
+    http_client, search = _make_client(transport)  # type: ignore[arg-type]
+
+    for _ in range(9):
+        await search.search("query")
+
+    # 4 blocked + reset + 4 blocked — never 5 consecutive, breaker closed.
+    assert search.is_blocked is False
+    assert transport.call_count == 9
+    await http_client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_captcha_body_counts_toward_breaker() -> None:
+    """A 200 response carrying the anti-bot interstitial counts as blocked."""
+    transport = SequencedTransport([(200, DDG_CAPTCHA_HTML)])
+    http_client, search = _make_client(transport)  # type: ignore[arg-type]
+
+    for _ in range(5):
+        assert await search.search("query") == []
+    assert search.is_blocked is True
+    await http_client.aclose()

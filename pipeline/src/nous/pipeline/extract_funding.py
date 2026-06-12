@@ -23,10 +23,11 @@ Quota discipline (spec §11):
 from __future__ import annotations
 
 import logging
+from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 from pydantic import BaseModel
-from sqlalchemy import exists, select
+from sqlalchemy import exists, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from nous.db.models import Company, FundingRound, NewsArticle, RawPage
@@ -222,6 +223,7 @@ async def run_extract_funding_website(
     limit: int | None = None,
     skip_low_confidence: bool = True,
     proximity_days: int = 60,
+    recheck_after_days: int = 180,
 ) -> ExtractFundingWebsiteSummary:
     """Gap-fill funding from a company's own scraped website.
 
@@ -229,14 +231,33 @@ async def run_extract_funding_website(
     raw_pages but no funding_rounds yet, so TechCrunch always remains the
     primary source. Idempotent — reconcile_funding_round dedups/fills-nulls, so
     re-running (e.g. after a company gains a TechCrunch round) won't clobber it.
+
+    Every attempt stamps ``website_funding_checked_at`` (including "site says
+    nothing about funding", which is the common case) and the selection takes
+    least-recently-checked first with a ``recheck_after_days`` back-off.
+    Without that, no-funding companies stay eligible forever and a bounded
+    daily run re-LLM's the same head of the list every day. The long default
+    back-off is deliberate: marketing sites rarely gain funding pages, and the
+    news path remains the primary detector for new rounds.
     """
     summary = ExtractFundingWebsiteSummary()
+
+    recheck_cutoff = datetime.now(tz=UTC) - timedelta(days=recheck_after_days)
 
     stmt = (
         select(Company)
         .where(exists().where(RawPage.company_id == Company.id))
         .where(~exists().where(FundingRound.company_id == Company.id))
-        .order_by(Company.name.asc())
+        .where(
+            or_(
+                Company.website_funding_checked_at.is_(None),
+                Company.website_funding_checked_at < recheck_cutoff,
+            )
+        )
+        .order_by(
+            Company.website_funding_checked_at.asc().nulls_first(),
+            Company.name.asc(),
+        )
     )
     if limit is not None:
         stmt = stmt.limit(limit)
@@ -258,47 +279,57 @@ async def run_extract_funding_website(
         combined = "\n\n".join(p for p in parts if p)
         cleaned = truncate_to_chars(combined, 32_000)
 
-        if len(cleaned) < _MIN_TEXT_CHARS:
+        if len(cleaned) >= _MIN_TEXT_CHARS:
+            prompt = build_website_prompt(company_name=company.name, page_text=cleaned)
+
+            try:
+                extraction: FundingExtraction = await complete_json(
+                    prompt, FundingExtraction
+                )
+            except LLMRateLimitError:
+                logger.warning(
+                    "LLM rate limit hit while extracting website funding for %s —"
+                    " stopping loop to avoid further quota exhaustion.",
+                    company.name,
+                )
+                summary.skipped_rate_limited += 1
+                # Deliberately NOT stamped: the attempt never completed, and a
+                # transient provider limit shouldn't cost the company its slot
+                # for the whole recheck window.
+                break
+            except (LLMParseError, LLMError) as exc:
+                logger.warning(
+                    "LLM error extracting website funding for %s: %s",
+                    company.name,
+                    exc,
+                )
+                summary.llm_failures += 1
+            else:
+                if not extraction.is_funding_announcement:
+                    summary.skipped_not_funding += 1
+                elif skip_low_confidence and extraction.confidence == "low":
+                    summary.skipped_low_confidence += 1
+                else:
+                    # Attribute the round to the company's website (the source
+                    # of the text).
+                    await _persist_round_and_investors(
+                        session,
+                        summary,
+                        company_id=company.id,
+                        extraction=extraction,
+                        primary_news_url=company.website
+                        or (pages[0].url if pages else ""),
+                        proximity_days=proximity_days,
+                    )
+                    summary.companies_with_funding += 1
+        else:
             summary.skipped_no_text += 1
-            continue
 
-        prompt = build_website_prompt(company_name=company.name, page_text=cleaned)
-
-        try:
-            extraction: FundingExtraction = await complete_json(prompt, FundingExtraction)
-        except LLMRateLimitError:
-            logger.warning(
-                "LLM rate limit hit while extracting website funding for %s —"
-                " stopping loop to avoid further quota exhaustion.",
-                company.name,
-            )
-            summary.skipped_rate_limited += 1
-            break
-        except (LLMParseError, LLMError) as exc:
-            logger.warning(
-                "LLM error extracting website funding for %s: %s", company.name, exc
-            )
-            summary.llm_failures += 1
-            continue
-
-        if not extraction.is_funding_announcement:
-            summary.skipped_not_funding += 1
-            continue
-
-        if skip_low_confidence and extraction.confidence == "low":
-            summary.skipped_low_confidence += 1
-            continue
-
-        # Attribute the round to the company's website (the source of the text).
-        await _persist_round_and_investors(
-            session,
-            summary,
-            company_id=company.id,
-            extraction=extraction,
-            primary_news_url=company.website or (pages[0].url if pages else ""),
-            proximity_days=proximity_days,
-        )
-        summary.companies_with_funding += 1
+        # Stamp the attempt on every completed path (funding found, nothing
+        # found, thin text, or LLM failure) so the rotation advances. One
+        # commit per company; this also commits the round persisted above.
+        company.website_funding_checked_at = datetime.now(tz=UTC)
+        session.add(company)
         await session.commit()
 
     return summary

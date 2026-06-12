@@ -42,6 +42,8 @@ concurrency:
 jobs:
   backfill-discovery:
     runs-on: ubuntu-latest
+    # Hard backstop far below GitHub's 360-min kill.
+    timeout-minutes: 150
     defaults:
       run:
         working-directory: pipeline

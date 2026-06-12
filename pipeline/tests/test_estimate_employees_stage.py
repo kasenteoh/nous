@@ -195,3 +195,45 @@ async def test_unchanged_when_same_values_returned(
     assert summary.companies_seen == 1
     assert summary.unchanged == 1
     assert summary.updated == 0
+
+
+async def test_no_data_company_respects_backoff(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A company checked recently with NO data found is also skipped.
+
+    Without this, every no-data company (most small startups aren't on
+    Wellfound/GrowJo/The Org) is re-probed across 5 sources every single run,
+    and under a daily --limit the same no-data block occupies the whole
+    budget forever.
+    """
+    _patch_sources(monkeypatch)  # all None
+    company = _make_company(
+        slug="no-data-recent",
+        website="https://acme.com",
+        employee_count_min=None,
+        employee_count_checked_at=datetime.now(tz=UTC) - timedelta(days=1),
+    )
+    db.add(company)
+    await db.commit()
+
+    summary = await run_estimate_employees(db, _client(), "", refetch_after_days=90)
+
+    assert summary.companies_seen == 0
+
+
+async def test_max_runtime_zero_stops_before_first_company(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """max_runtime_minutes=0 exits cleanly before processing anything."""
+    _patch_sources(monkeypatch, wellfound=(11, 50))
+    for i in range(3):
+        db.add(_make_company(slug=f"budget-estimate-{i}", website="https://a.com"))
+    await db.commit()
+
+    summary = await run_estimate_employees(
+        db, _client(), "", refetch_after_days=90, max_runtime_minutes=0
+    )
+
+    assert summary.companies_seen == 0
+    assert summary.stopped_early is True

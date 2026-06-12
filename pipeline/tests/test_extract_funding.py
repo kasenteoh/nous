@@ -13,7 +13,7 @@ DB-gated integration tests covering:
 from __future__ import annotations
 
 import os
-from datetime import date
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
@@ -542,3 +542,59 @@ async def test_extraction_confidence_check_rejects_invalid_values(
     with pytest.raises(IntegrityError):
         await db.flush()
     await db.rollback()
+
+
+async def test_website_fallback_recently_checked_is_skipped(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A company whose website-funding pass ran recently is excluded, so the
+    daily gap-fill rotates through the backlog instead of re-LLM'ing the same
+    alphabetical head (most sites never state funding, so without a marker a
+    company with no round stays eligible forever)."""
+    company = _make_company("RecentCheckCo")
+    company.website_funding_checked_at = datetime.now(tz=UTC) - timedelta(days=1)
+    db.add(company)
+    await db.flush()
+    db.add(_add_raw_page(company.id, "https://recentcheckco.com/"))
+    await db.flush()
+    await db.commit()
+
+    calls: list[Any] = []
+
+    async def _fake(prompt: str, schema: type) -> FundingExtraction:
+        calls.append(None)
+        return _make_extraction(is_funding=False, leads=[], others=[])
+
+    monkeypatch.setattr(
+        "nous.pipeline.extract_funding.complete_json", _fake
+    )
+
+    summary = await run_extract_funding_website(db, limit=10)
+
+    assert summary.companies_seen == 0
+    assert calls == []
+
+
+async def test_website_fallback_stamps_attempt_even_without_funding(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """website_funding_checked_at is stamped on every attempt — including
+    no-funding-found — so the rotation advances."""
+    company = _make_company("StampCo")
+    db.add(company)
+    await db.flush()
+    db.add(_add_raw_page(company.id, "https://stampco.com/"))
+    await db.flush()
+    await db.commit()
+
+    async def _fake(prompt: str, schema: type) -> FundingExtraction:
+        return _make_extraction(is_funding=False, leads=[], others=[])
+
+    monkeypatch.setattr(
+        "nous.pipeline.extract_funding.complete_json", _fake
+    )
+
+    await run_extract_funding_website(db, limit=10)
+
+    await db.refresh(company)
+    assert company.website_funding_checked_at is not None

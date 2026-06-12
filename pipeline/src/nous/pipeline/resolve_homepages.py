@@ -1,14 +1,22 @@
 """resolve-homepages pipeline stage.
 
-For each company that has no website (or whose website_resolved_at is stale),
-try CANDIDATE_TLDS to find a live homepage and record the result.
+For each company that has no website (and was never attempted, or whose
+attempt is older than the refetch window), try CANDIDATE_TLDS to find a live
+homepage and record the result. Companies that already have a website — e.g.
+provided by a VC portfolio adapter — are never re-resolved: doing so wastes
+~13s of wall clock per company across the whole table and risks overwriting
+a correct discovery-provided URL with a wrong TLD guess.
 
-Commit cadence: one commit per company so a mid-run crash leaves a clean state.
+Commit cadence: one commit per company so a mid-run crash leaves a clean
+state, and so a ``max_runtime_minutes`` budget can stop the loop at any
+company boundary — the next run's selection naturally resumes where this one
+stopped (website_resolved_at IS NULL ⇒ not yet attempted).
 """
 
 from __future__ import annotations
 
 import logging
+import time
 from datetime import UTC, datetime, timedelta
 
 from pydantic import BaseModel
@@ -28,7 +36,14 @@ class ResolveSummary(BaseModel):
     websites_resolved: int = 0
     websites_unchanged: int = 0
     no_match: int = 0
+    # Subset of no_match recorded while DDG's circuit breaker was open: only
+    # the TLD heuristic ran. These verdicts are weaker — re-attempt early via
+    # --refetch-after-days if this number is large.
+    no_match_ddg_blocked: int = 0
     errors: int = 0
+    # True when the max_runtime_minutes budget stopped the loop before the
+    # selection was drained. The remaining companies stay eligible next run.
+    stopped_early: bool = False
 
 
 async def run_resolve_homepages(
@@ -37,24 +52,30 @@ async def run_resolve_homepages(
     *,
     refetch_after_days: int = 90,
     limit: int | None = None,
+    max_runtime_minutes: float | None = None,
 ) -> ResolveSummary:
-    """For each company where website is NULL or website_resolved_at is stale,
-    attempt to resolve a homepage via common TLDs.
+    """For each company with no website whose last attempt is absent or stale,
+    attempt to resolve a homepage via common TLDs (+ DDG fallback).
 
     On a non-None result, update company.website + company.website_resolved_at.
     On None, still set website_resolved_at (so we don't retry every run);
     leave website as-is.
+
+    ``max_runtime_minutes`` is a clean-exit wall-clock budget: the loop stops
+    at the next company boundary once exceeded. Combined with per-company
+    commits this makes the stage resumable across bounded CI runs.
     """
     summary = ResolveSummary()
+    started = time.monotonic()
 
     cutoff = datetime.now(tz=UTC) - timedelta(days=refetch_after_days)
 
     stmt = select(Company).where(
+        Company.website.is_(None),
         or_(
-            Company.website.is_(None),
             Company.website_resolved_at.is_(None),
             Company.website_resolved_at < cutoff,
-        )
+        ),
     )
     if limit is not None:
         stmt = stmt.limit(limit)
@@ -63,6 +84,20 @@ async def run_resolve_homepages(
     companies = result.scalars().all()
 
     for company in companies:
+        if (
+            max_runtime_minutes is not None
+            and time.monotonic() - started >= max_runtime_minutes * 60
+        ):
+            summary.stopped_early = True
+            logger.info(
+                "resolve: %.0f-minute budget reached after %d companies — "
+                "stopping cleanly (%d left for the next run)",
+                max_runtime_minutes,
+                summary.companies_seen,
+                len(companies) - summary.companies_seen,
+            )
+            break
+
         summary.companies_seen += 1
 
         slug_base = slugify(company.name)
@@ -94,6 +129,8 @@ async def run_resolve_homepages(
                 summary.websites_unchanged += 1
         else:
             summary.no_match += 1
+            if client.ddg_blocked:
+                summary.no_match_ddg_blocked += 1
             # website stays as-is; we record the attempt timestamp either way.
 
         company.website_resolved_at = now

@@ -290,3 +290,118 @@ async def test_failed_scrape_backs_off_on_next_run(
     assert refetched_2 is not None
     # The row was never selected, so the timestamp is unchanged.
     assert refetched_2.last_scrape_attempt_at == first_attempt
+
+
+# ---------------------------------------------------------------------------
+# Runtime budget + stored-content semantics
+# ---------------------------------------------------------------------------
+
+
+async def test_max_runtime_zero_stops_before_first_company(db: AsyncSession) -> None:
+    """max_runtime_minutes=0 exits cleanly before processing anything."""
+    for i in range(3):
+        db.add(
+            _make_company(
+                name=f"BudgetCo {i} Inc.",
+                slug=f"budgetco-scrape-{i}",
+                website=f"https://budgetco-scrape-{i}.com",
+            )
+        )
+    await db.flush()
+    await db.commit()
+
+    client = MockHomepageClient()
+    summary = await run_scrape_homepages(db, client, max_runtime_minutes=0)
+
+    assert summary.companies_seen == 0
+    assert summary.stopped_early is True
+
+
+async def test_persisted_content_is_extracted_text_not_raw_html(
+    db: AsyncSession,
+) -> None:
+    """raw_pages.content stores extracted visible text, not the raw HTML.
+
+    Raw HTML for the full backlog (~9k pages × ~200KB) would blow Supabase's
+    500MB free tier; every downstream consumer only reads visible text.
+    """
+
+    class HtmlClient(MockHomepageClient):
+        async def fetch(self, url: str) -> FetchResult:
+            return FetchResult(
+                url=url,
+                status_code=200,
+                content=(
+                    "<html><head><script>var hidden = 'no';</script></head>"
+                    "<body><h1>Acme builds rockets</h1>"
+                    "<p>Fast delivery to orbit.</p></body></html>"
+                ),
+                content_type="text/html",
+            )
+
+    company = _make_company(
+        name="ExtractCo Inc.",
+        slug="extractco-scrape",
+        website="https://extractco-scrape.com",
+    )
+    db.add(company)
+    await db.flush()
+    await db.commit()
+
+    client = HtmlClient()
+    await run_scrape_homepages(db, client)
+
+    pages = (
+        (
+            await db.execute(
+                select(RawPage).where(RawPage.company_id == company.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert len(pages) >= 1
+    for page in pages:
+        assert "<" not in page.content  # no markup survives
+        assert "var hidden" not in page.content  # scripts stripped
+    assert any("Acme builds rockets" in page.content for page in pages)
+
+
+async def test_persisted_content_is_capped(db: AsyncSession) -> None:
+    """Pathologically large pages are truncated at the per-page cap."""
+    from nous.pipeline.scrape_homepages import _MAX_STORED_CHARS
+
+    big_paragraph = "word " * 60_000  # ~300k chars of visible text
+
+    class BigPageClient(MockHomepageClient):
+        async def fetch(self, url: str) -> FetchResult:
+            return FetchResult(
+                url=url,
+                status_code=200,
+                content=f"<html><body><p>{big_paragraph}</p></body></html>",
+                content_type="text/html",
+            )
+
+    company = _make_company(
+        name="BigPageCo Inc.",
+        slug="bigpageco-scrape",
+        website="https://bigpageco-scrape.com",
+    )
+    db.add(company)
+    await db.flush()
+    await db.commit()
+
+    client = BigPageClient()
+    await run_scrape_homepages(db, client)
+
+    pages = (
+        (
+            await db.execute(
+                select(RawPage).where(RawPage.company_id == company.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert len(pages) >= 1
+    assert all(len(page.content) <= _MAX_STORED_CHARS for page in pages)

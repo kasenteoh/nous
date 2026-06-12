@@ -16,7 +16,7 @@ import re
 from datetime import UTC, datetime, timedelta
 
 from pydantic import BaseModel
-from sqlalchemy import ColumnElement, exists, or_, select
+from sqlalchemy import ColumnElement, exists, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.exc import StaleDataError
@@ -76,9 +76,20 @@ async def run_enrich_companies(
         conditions.append(Company.last_enriched_at.is_(None))
         conditions.append(Company.last_enriched_at < cutoff)
 
+    # Require at least one page with enough stored text to plausibly clear
+    # the _MIN_TEXT_CHARS bar. raw_pages.content holds extracted visible text
+    # (see scrape-homepages), so length() is a faithful proxy. Without this,
+    # thin-text companies — which nothing ever stamps — re-enter the selection
+    # every run and eventually monopolize the LIMIT below. The in-loop check
+    # on the concatenated text remains as the authoritative guard.
     stmt = (
         select(Company)
-        .where(exists().where(RawPage.company_id == Company.id))
+        .where(
+            exists().where(
+                RawPage.company_id == Company.id,
+                func.length(RawPage.content) >= _MIN_TEXT_CHARS,
+            )
+        )
         .where(or_(*conditions))
     )
     if max_companies is not None:

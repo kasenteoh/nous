@@ -8,7 +8,7 @@ cover persistence, idempotency, and the TC broad-ingest auto-create path.
 from __future__ import annotations
 
 import os
-from datetime import date
+from datetime import UTC, date, datetime
 from typing import Any
 
 import pytest
@@ -356,3 +356,69 @@ async def test_tc_broad_failed_body_does_not_auto_create(
         await db.execute(select(Company).where(Company.name == "GhostCo"))
     ).scalars().all()
     assert len(rows) == 0
+
+
+# ---------------------------------------------------------------------------
+# Per-company rotation (news_checked_at)
+# ---------------------------------------------------------------------------
+
+
+class _QueryLoggingNewsClient(_MockNewsClient):
+    """Mock that records every google_news_rss query string."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.queries: list[str] = []
+
+    async def google_news_rss(
+        self, query: str, lookback_days: int = 7
+    ) -> list[NewsArticleResult]:
+        self.queries.append(query)
+        return []
+
+
+@pytestmark_db
+async def test_rotation_prefers_never_checked_companies(
+    db: AsyncSession,
+) -> None:
+    """With max_companies set, never-checked companies are queried before
+    recently checked ones, so a daily limited run rotates through the whole
+    table instead of re-querying the same head every day."""
+    checked = _make_company("Checked Recently Inc")
+    checked.news_checked_at = datetime.now(tz=UTC)
+    never = _make_company("Never Checked Inc")
+    db.add_all([checked, never])
+    await db.flush()
+    await db.commit()
+
+    client = _QueryLoggingNewsClient()
+    await run_ingest_news(
+        db,
+        client,  # type: ignore[arg-type]
+        include_techcrunch_broad=False,
+        max_companies=1,
+    )
+
+    assert client.queries == ['"Never Checked Inc" funding']
+
+
+@pytestmark_db
+async def test_queried_company_is_stamped_even_with_no_results(
+    db: AsyncSession,
+) -> None:
+    """news_checked_at is stamped on every attempt so the rotation advances."""
+    company = _make_company("Stamped Inc")
+    db.add(company)
+    await db.flush()
+    await db.commit()
+
+    client = _QueryLoggingNewsClient()
+    await run_ingest_news(
+        db,
+        client,  # type: ignore[arg-type]
+        include_techcrunch_broad=False,
+        max_companies=10,
+    )
+
+    await db.refresh(company)
+    assert company.news_checked_at is not None
