@@ -1,9 +1,17 @@
+import logging
+
 import click
 
 
 @click.group()
 def cli() -> None:
     """nous pipeline CLI."""
+    # Configure the root logger once for the entire CLI so every stage's
+    # logger.info() lines (including run telemetry) are visible in CI logs.
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s %(message)s",
+    )
 
 
 @cli.command("resolve-homepages")
@@ -159,16 +167,20 @@ def enrich_companies(limit: int | None, refetch_after_days: int | None) -> None:
     import asyncio
 
     from nous.db.session import AsyncSessionLocal
+    from nous.observability import emit_run_telemetry
     from nous.pipeline.enrich_companies import run_enrich_companies
 
     async def _run() -> None:
-        async with AsyncSessionLocal() as session:
-            summary = await run_enrich_companies(
-                session,
-                max_companies=limit,
-                refetch_after_days=refetch_after_days,
-            )
-            click.echo(summary.model_dump_json(indent=2))
+        try:
+            async with AsyncSessionLocal() as session:
+                summary = await run_enrich_companies(
+                    session,
+                    max_companies=limit,
+                    refetch_after_days=refetch_after_days,
+                )
+                click.echo(summary.model_dump_json(indent=2))
+        finally:
+            emit_run_telemetry("enrich-companies")
 
     asyncio.run(_run())
 
@@ -199,7 +211,6 @@ def refresh_vc_portfolios_cmd(
 ) -> None:
     """Refresh companies from registered VC firm portfolio pages."""
     import asyncio
-    import logging
 
     from nous.config import Settings
     from nous.db.session import AsyncSessionLocal
@@ -278,6 +289,7 @@ def ingest_news(
 
     from nous.config import Settings
     from nous.db.session import AsyncSessionLocal
+    from nous.observability import emit_run_telemetry
     from nous.pipeline.ingest_news import run_ingest_news
     from nous.sources.news import NewsClient
 
@@ -289,22 +301,25 @@ def ingest_news(
     )
 
     async def _run() -> None:
-        async with (
-            NewsClient(
-                settings.SEC_USER_AGENT,
-                requests_per_second_per_domain=1.0,
-            ) as news_client,
-            AsyncSessionLocal() as session,
-        ):
-            summary = await run_ingest_news(
-                session,
-                news_client,
-                lookback_days=lookback_days,
-                include_techcrunch_broad=not no_techcrunch,
-                max_companies=limit,
-                similarity_threshold=threshold,
-            )
-            click.echo(summary.model_dump_json(indent=2))
+        try:
+            async with (
+                NewsClient(
+                    settings.SEC_USER_AGENT,
+                    requests_per_second_per_domain=1.0,
+                ) as news_client,
+                AsyncSessionLocal() as session,
+            ):
+                summary = await run_ingest_news(
+                    session,
+                    news_client,
+                    lookback_days=lookback_days,
+                    include_techcrunch_broad=not no_techcrunch,
+                    max_companies=limit,
+                    similarity_threshold=threshold,
+                )
+                click.echo(summary.model_dump_json(indent=2))
+        finally:
+            emit_run_telemetry("ingest-news")
 
     asyncio.run(_run())
 
@@ -328,16 +343,20 @@ def extract_funding(limit: int, include_low_confidence: bool) -> None:
     import asyncio
 
     from nous.db.session import AsyncSessionLocal
+    from nous.observability import emit_run_telemetry
     from nous.pipeline.extract_funding import run_extract_funding
 
     async def _run() -> None:
-        async with AsyncSessionLocal() as session:
-            summary = await run_extract_funding(
-                session,
-                limit=limit,
-                skip_low_confidence=not include_low_confidence,
-            )
-            click.echo(summary.model_dump_json(indent=2))
+        try:
+            async with AsyncSessionLocal() as session:
+                summary = await run_extract_funding(
+                    session,
+                    limit=limit,
+                    skip_low_confidence=not include_low_confidence,
+                )
+                click.echo(summary.model_dump_json(indent=2))
+        finally:
+            emit_run_telemetry("extract-funding")
 
     asyncio.run(_run())
 
@@ -377,17 +396,21 @@ def extract_funding_website(
     import asyncio
 
     from nous.db.session import AsyncSessionLocal
+    from nous.observability import emit_run_telemetry
     from nous.pipeline.extract_funding import run_extract_funding_website
 
     async def _run() -> None:
-        async with AsyncSessionLocal() as session:
-            summary = await run_extract_funding_website(
-                session,
-                limit=limit,
-                skip_low_confidence=not include_low_confidence,
-                recheck_after_days=recheck_after_days,
-            )
-            click.echo(summary.model_dump_json(indent=2))
+        try:
+            async with AsyncSessionLocal() as session:
+                summary = await run_extract_funding_website(
+                    session,
+                    limit=limit,
+                    skip_low_confidence=not include_low_confidence,
+                    recheck_after_days=recheck_after_days,
+                )
+                click.echo(summary.model_dump_json(indent=2))
+        finally:
+            emit_run_telemetry("extract-funding-website")
 
     asyncio.run(_run())
 
@@ -418,17 +441,21 @@ def analyze_competitors(limit: int, ttl_days: int, dry_run: bool) -> None:
     import asyncio
 
     from nous.db.session import AsyncSessionLocal
+    from nous.observability import emit_run_telemetry
     from nous.pipeline.analyze_competitors import run_analyze_competitors
 
     async def _run() -> None:
-        async with AsyncSessionLocal() as session:
-            summary = await run_analyze_competitors(
-                session,
-                limit=limit,
-                ttl_days=ttl_days,
-                dry_run=dry_run,
-            )
-            click.echo(summary.model_dump_json(indent=2))
+        try:
+            async with AsyncSessionLocal() as session:
+                summary = await run_analyze_competitors(
+                    session,
+                    limit=limit,
+                    ttl_days=ttl_days,
+                    dry_run=dry_run,
+                )
+                click.echo(summary.model_dump_json(indent=2))
+        finally:
+            emit_run_telemetry("analyze-competitors")
 
     asyncio.run(_run())
 
@@ -452,16 +479,20 @@ def dedup_companies(llm_limit: int, dry_run: bool) -> None:
     import asyncio
 
     from nous.db.session import AsyncSessionLocal
+    from nous.observability import emit_run_telemetry
     from nous.pipeline.dedup_companies import run_dedup_companies
 
     async def _run() -> None:
-        async with AsyncSessionLocal() as session:
-            summary = await run_dedup_companies(
-                session,
-                llm_limit=llm_limit,
-                dry_run=dry_run,
-            )
-            click.echo(summary.model_dump_json(indent=2))
+        try:
+            async with AsyncSessionLocal() as session:
+                summary = await run_dedup_companies(
+                    session,
+                    llm_limit=llm_limit,
+                    dry_run=dry_run,
+                )
+                click.echo(summary.model_dump_json(indent=2))
+        finally:
+            emit_run_telemetry("dedup-companies")
 
     asyncio.run(_run())
 
@@ -534,6 +565,54 @@ def estimate_employees(
                 max_runtime_minutes=max_runtime_minutes,
             )
             click.echo(summary.model_dump_json(indent=2))
+
+    asyncio.run(_run())
+
+
+@cli.command("db-stats")
+@click.option(
+    "--cap-mb",
+    type=int,
+    default=None,
+    help="Database size cap in MB. Default: Settings.DB_SIZE_CAP_MB (500).",
+)
+@click.option(
+    "--warn-pct",
+    type=int,
+    default=None,
+    help="Warn threshold as a percentage of the cap. Default: Settings.DB_SIZE_WARN_PCT (80).",
+)
+def db_stats(cap_mb: int | None, warn_pct: int | None) -> None:
+    """Report per-table and total database sizes; warn if nearing the free-tier cap."""
+    import asyncio
+
+    from nous.config import Settings
+    from nous.db.session import AsyncSessionLocal
+    from nous.pipeline.db_stats import emit_db_stats_summary, run_db_stats
+
+    settings = Settings()
+    effective_cap = cap_mb if cap_mb is not None else settings.DB_SIZE_CAP_MB
+    effective_warn = warn_pct if warn_pct is not None else settings.DB_SIZE_WARN_PCT
+
+    _logger = logging.getLogger("nous.cli.db_stats")
+
+    async def _run() -> None:
+        async with AsyncSessionLocal() as session:
+            summary = await run_db_stats(
+                session,
+                cap_mb=effective_cap,
+                warn_pct=effective_warn,
+            )
+        click.echo(summary.model_dump_json(indent=2))
+        emit_db_stats_summary(summary)
+        if summary.warn:
+            _logger.warning(
+                "DB SIZE WARNING: %.1f MB used of %d MB cap (%.1f%%) — "
+                "approaching Supabase free-tier limit",
+                summary.total_bytes / (1024 * 1024),
+                effective_cap,
+                summary.pct_of_cap,
+            )
 
     asyncio.run(_run())
 

@@ -1,26 +1,35 @@
 """DeepSeek LLM wrapper. All LLM calls in nous go through complete_json().
 
 Backend: DeepSeek's OpenAI-compatible chat-completions API at
-api.deepseek.com. Paid (≈$0.27/1M input, $1.10/1M output as of 2026). The
-spec rule "free tier first" is intentionally bypassed — a deliberate,
-cost-incurring choice, made because Gemini's free tier (20 RPD on
-gemini-2.5-flash) was too low for bulk enrichment.
+api.deepseek.com. Paid — see DEEPSEEK_USD_PER_MTOK_INPUT /
+DEEPSEEK_USD_PER_MTOK_OUTPUT for current rates. The spec rule "free tier
+first" is intentionally bypassed — a deliberate, cost-incurring choice, made
+because Gemini's free tier (20 RPD on gemini-2.5-flash) was too low for bulk
+enrichment.
 
 The wrapper honors:
 - Pydantic schema validation on the response
 - One retry on ValidationError (per CLAUDE.md)
 - Tenacity exponential backoff on transient (5xx) errors
 - LLMRateLimitError on 429 (no retry; caller decides whether to pause)
+
+Pricing: see DEEPSEEK_USD_PER_MTOK_INPUT / DEEPSEEK_USD_PER_MTOK_OUTPUT
+constants below (single source of truth).
+
+A module-level LLMUsageLedger accumulates calls/tokens across the lifetime
+of the process (single-asyncio-loop; no locking needed). Use get_ledger() to
+read a copy and reset_ledger() to clear it between stages.
 """
 
 from __future__ import annotations
 
+import copy
 import json
 import logging
 from typing import TypeVar
 
 import httpx
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, ValidationError, computed_field
 from tenacity import (
     AsyncRetrying,
     retry_if_exception_type,
@@ -42,6 +51,47 @@ DEEPSEEK_BASE_URL = "https://api.deepseek.com/v1"
 # articles ~6k) keep their own local constant and note it is intentionally
 # below this shared ceiling.
 MAX_PROMPT_INPUT_CHARS: int = 32_000
+
+# DeepSeek pricing constants (USD per million tokens, as of 2026).
+# Referenced in the module docstring above.
+DEEPSEEK_USD_PER_MTOK_INPUT: float = 0.27
+DEEPSEEK_USD_PER_MTOK_OUTPUT: float = 1.10
+
+
+class LLMUsageLedger(BaseModel):
+    """Accumulates LLM usage across one pipeline stage run.
+
+    Module-level singleton — single asyncio loop, no locking needed.
+    """
+
+    calls: int = 0
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    parse_retries: int = 0
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def estimated_cost_usd(self) -> float:
+        """Estimated spend at current DeepSeek pricing (USD)."""
+        return (
+            self.prompt_tokens * DEEPSEEK_USD_PER_MTOK_INPUT / 1_000_000
+            + self.completion_tokens * DEEPSEEK_USD_PER_MTOK_OUTPUT / 1_000_000
+        )
+
+
+# Module-level ledger — lives as long as the process.
+_ledger: LLMUsageLedger = LLMUsageLedger()
+
+
+def get_ledger() -> LLMUsageLedger:
+    """Return a copy of the current ledger (caller cannot mutate the live one)."""
+    return copy.copy(_ledger)
+
+
+def reset_ledger() -> None:
+    """Reset the ledger to zero (e.g. between CLI command invocations)."""
+    global _ledger
+    _ledger = LLMUsageLedger()
 
 
 class LLMError(Exception):
@@ -139,6 +189,15 @@ async def _complete_json_deepseek(
                 f"DeepSeek {resp.status_code}: {resp.text}"
             )
         data = resp.json()
+        # Only successful responses are recorded: failed attempts (429/5xx)
+        # carry no billed usage, and this ledger tracks spend, not transport
+        # health.
+        usage = data.get("usage") or {}
+        _ledger.calls += 1
+        # Use `or 0` (not default=0) so an explicit JSON null yields 0
+        # rather than TypeError on +=.
+        _ledger.prompt_tokens += usage.get("prompt_tokens") or 0
+        _ledger.completion_tokens += usage.get("completion_tokens") or 0
         try:
             return str(data["choices"][0]["message"]["content"])
         except (KeyError, IndexError, TypeError) as exc:
@@ -166,6 +225,11 @@ async def _complete_json_deepseek(
             return schema.model_validate_json(raw_text)
         except ValidationError as exc:
             last_validation_error = exc
+            if attempt == 1:
+                # First attempt failed validation — this failure causes the
+                # retry to be issued (and billed), whether or not the retry
+                # itself validates.
+                _ledger.parse_retries += 1
             logger.warning(
                 "DeepSeek JSON did not validate (attempt %d): %s", attempt, exc
             )
