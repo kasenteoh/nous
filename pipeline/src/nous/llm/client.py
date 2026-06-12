@@ -23,6 +23,7 @@ read a copy and reset_ledger() to clear it between stages.
 
 from __future__ import annotations
 
+import asyncio
 import copy
 import json
 import logging
@@ -45,6 +46,15 @@ T = TypeVar("T", bound=BaseModel)
 
 DEFAULT_DEEPSEEK_MODEL = "deepseek-chat"
 DEEPSEEK_BASE_URL = "https://api.deepseek.com/v1"
+
+# Overall wall-clock deadline for one provider call. The httpx timeout below
+# is per-fragment (connect / read-between-chunks), so a stalled server that
+# keeps the socket alive can extend a single call indefinitely — production
+# run 27425089917 lost 59 minutes of its enrich budget to exactly one such
+# wedged request. This deadline bounds the whole call; on expiry the call
+# fails as a plain LLMError and the calling stage skips one company instead
+# of losing its hour.
+_CALL_DEADLINE_SECONDS: float = 180.0
 
 # Shared ceiling for prompt input text across all LLM-using stages.
 # Stages that deliberately use a smaller limit (e.g. TechCrunch headline
@@ -168,12 +178,19 @@ async def _complete_json_deepseek(
     }
 
     async def _call() -> str:
-        async with httpx.AsyncClient(timeout=120.0) as client:
-            resp = await client.post(
-                f"{DEEPSEEK_BASE_URL}/chat/completions",
-                json=body,
-                headers=headers,
-            )
+        try:
+            async with asyncio.timeout(_CALL_DEADLINE_SECONDS):
+                async with httpx.AsyncClient(timeout=120.0) as client:
+                    resp = await client.post(
+                        f"{DEEPSEEK_BASE_URL}/chat/completions",
+                        json=body,
+                        headers=headers,
+                    )
+        except TimeoutError as exc:
+            raise LLMError(
+                f"DeepSeek call exceeded the {_CALL_DEADLINE_SECONDS:.0f}s "
+                "overall deadline (wedged connection)"
+            ) from exc
         if resp.status_code == 429:
             raise LLMRateLimitError(f"DeepSeek 429: {resp.text}")
         if resp.status_code >= 500:

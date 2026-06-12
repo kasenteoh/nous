@@ -175,3 +175,38 @@ async def test_ledger_call_counted_even_without_usage(
     assert ledger.calls == 1
     assert ledger.prompt_tokens == 0
     assert ledger.completion_tokens == 0
+
+
+async def test_wedged_call_hits_overall_deadline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A call whose response never arrives fails at the overall deadline.
+
+    Production run 27425089917 lost 59 minutes to a single wedged request:
+    httpx's read timeout resets on every received fragment, so a stalled
+    server that drips bytes (or a hung handshake path) can extend a call
+    indefinitely. The overall asyncio deadline converts that into a bounded
+    LLMError so the stage skips one company instead of losing its hour.
+    """
+    import asyncio
+
+    import httpx as _httpx
+
+    async def _never_responds(
+        request: _httpx.Request,
+    ) -> _httpx.Response:  # pragma: no cover - body intentionally unreachable
+        await asyncio.Event().wait()
+        raise AssertionError("unreachable")
+
+    transport = _httpx.MockTransport(_never_responds)
+    original_async_client = _httpx.AsyncClient
+
+    def factory(*args: object, **kwargs: object) -> _httpx.AsyncClient:
+        kwargs.pop("transport", None)
+        return original_async_client(*args, transport=transport, **kwargs)
+
+    monkeypatch.setattr("nous.llm.client.httpx.AsyncClient", factory)
+    monkeypatch.setattr("nous.llm.client._CALL_DEADLINE_SECONDS", 0.2)
+
+    with pytest.raises(LLMError, match="deadline"):
+        await asyncio.wait_for(complete_json("prompt", CompanyDescription), timeout=5)
