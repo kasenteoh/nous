@@ -15,6 +15,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
@@ -49,6 +50,11 @@ class Company(Base):
         CheckConstraint(
             "status IN ('active', 'acquired', 'shut_down', 'ipo')",
             name="ck_companies_status",
+        ),
+        CheckConstraint(
+            "exclusion_reason IN ('parse_artifact', 'non_us', 'not_a_startup', 'manual') "
+            "OR exclusion_reason IS NULL",
+            name="ck_companies_exclusion_reason",
         ),
     )
 
@@ -163,6 +169,41 @@ class Company(Base):
         Text, nullable=True
     )
     total_raised_as_of: Mapped[date | None] = mapped_column(Date, nullable=True)
+
+    # Catalog-quality soft exclusion (spec 2026-06-12). NULL = included.
+    # 'parse_artifact' | 'non_us' | 'not_a_startup' | 'manual' (CHECK above).
+    # Set by enrich-companies / judge-eligibility / repair-catalog / the
+    # exclude-company CLI; NEVER cleared by discovery (re-appearing on a VC
+    # portfolio page is not new evidence). Indexed: every catalog query and
+    # every pipeline selection filters on IS NULL.
+    exclusion_reason: Mapped[str | None] = mapped_column(Text, nullable=True, index=True)
+    exclusion_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    excluded_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    # When the is-this-a-startup judgment last ran (enrich path or the
+    # judge-eligibility backfill). Lets the backfill find enriched-but-unjudged
+    # rows exactly once. Indexed for that WHERE.
+    eligibility_checked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
+
+    # URLs confirmed NOT to be this company's site (parked/for-sale or an
+    # unrelated business) — resolve-homepages must never re-pick a domain in
+    # here. JSONB list of strings; ALWAYS reassign (rejected_urls = [*old, new]),
+    # never append in place — plain JSONB columns don't track mutation.
+    rejected_urls: Mapped[list[str]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'[]'::jsonb")
+    )
+
+    # Denormalized count(funding_rounds) maintained by reconcile_funding_round
+    # + merge_companies and backfilled in migration 0022. Exists so the web
+    # catalog bar (description OR funded) is a flat indexed WHERE — PostgREST
+    # can't paginate an OR over an EXISTS subquery.
+    funding_round_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default="0", index=True
+    )
 
 
 class RawPage(Base):
