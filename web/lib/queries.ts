@@ -176,33 +176,23 @@ export async function listCompanies(
 }
 
 /**
- * Distinct, non-null `industry_group` values for the index filter dropdown.
- * Deduped client-side; the catalog is small enough that this is cheaper than a
- * dedicated RPC. `discovered_via` is a small fixed enum, so the page hardcodes
- * those options rather than querying for them.
+ * Distinct, non-null `industry_group` values for the index filter dropdown,
+ * deduped in-process from a full keyset scan via {@link scanCompanies}. A flat
+ * select is silently capped at 1000 rows by PostgREST (`.limit(5000)` does not
+ * override the server cap), which dropped every group that only occurs outside
+ * that arbitrary unordered sample. `discovered_via` is a small fixed enum, so
+ * the page hardcodes those options rather than querying for them.
  */
 export async function listIndustryGroups(): Promise<string[]> {
-  let supabase: ReturnType<typeof createSupabaseServerClient>;
-  try {
-    supabase = createSupabaseServerClient();
-  } catch (err) {
-    console.warn("[listIndustryGroups] Supabase not configured:", (err as Error).message);
-    return [];
-  }
-
-  const { data, error } = await supabase
-    .from("companies")
-    .select("industry_group")
-    .not("industry_group", "is", null)
-    .limit(5000);
-
-  if (error) {
-    console.error("[listIndustryGroups] query failed:", error.message);
-    return [];
-  }
+  const rows = await scanCompanies(
+    "listIndustryGroups",
+    "slug, industry_group",
+    "industry_group",
+  );
+  if (rows === null) return [];
 
   const seen = new Set<string>();
-  for (const row of data ?? []) {
+  for (const row of rows) {
     const value = row.industry_group as string | null;
     if (value) seen.add(value);
   }
@@ -329,34 +319,22 @@ export interface IndustrySummary {
 }
 
 /**
- * Count industry_group frequencies in-process (same column fetch as
- * listIndustryGroups — the catalog is small) and return the top N.
+ * Count industry_group frequencies in-process from a full keyset scan via
+ * {@link scanCompanies} (same fetch as listIndustryGroups) and return the top
+ * N. Ranking over the whole catalog — not the first 1000 rows PostgREST
+ * happens to return — keeps the top-N and the "+N more" count accurate and
+ * deterministic across ISR revalidations.
  */
 export async function getIndustrySummary(topN = 6): Promise<IndustrySummary> {
-  let supabase: ReturnType<typeof createSupabaseServerClient>;
-  try {
-    supabase = createSupabaseServerClient();
-  } catch (err) {
-    console.warn(
-      "[getIndustrySummary] Supabase not configured:",
-      (err as Error).message,
-    );
-    return { top: [], moreCount: 0 };
-  }
-
-  const { data, error } = await supabase
-    .from("companies")
-    .select("industry_group")
-    .not("industry_group", "is", null)
-    .limit(5000);
-
-  if (error) {
-    console.error("[getIndustrySummary] query failed:", error.message);
-    return { top: [], moreCount: 0 };
-  }
+  const rows = await scanCompanies(
+    "getIndustrySummary",
+    "slug, industry_group",
+    "industry_group",
+  );
+  if (rows === null) return { top: [], moreCount: 0 };
 
   const counts = new Map<string, number>();
-  for (const row of data ?? []) {
+  for (const row of rows) {
     const value = row.industry_group as string | null;
     if (value) counts.set(value, (counts.get(value) ?? 0) + 1);
   }
@@ -447,10 +425,10 @@ export interface CompanySlugRow {
 }
 
 /**
- * Keyset-paginated full scan of the `companies` table, shared by the sitemap
- * queries below. PostgREST caps every response at 1000 rows regardless of
- * `.limit()`, and the catalog holds ~4,200 companies, so any single-shot
- * select silently truncates. This walks the table ordered by `slug` (unique,
+ * Keyset-paginated full scan of the `companies` table, shared by the sitemap,
+ * tag/location, and industry queries. PostgREST caps every response at 1000
+ * rows regardless of `.limit()`, and the catalog holds ~4,200 companies, so
+ * any single-shot select silently truncates. This walks the table ordered by `slug` (unique,
  * so the cursor strictly advances) in 1000-row pages via `.gt("slug", cursor)`
  * until a short page. Keyset beats offset `.range()` here: termination is
  * provable, and rows inserted mid-iteration can't shift offsets and cause
