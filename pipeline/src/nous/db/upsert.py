@@ -49,16 +49,35 @@ async def _is_slug_taken(session: AsyncSession, slug: str, exclude_id: UUID | No
 
 
 async def _build_slug(
-    session: AsyncSession, name: str, company_id: UUID | None
+    session: AsyncSession, name: str, company_id: UUID | None, website: str | None = None
 ) -> str:
-    """Generate a unique slug for *name*, appending a disambiguator if needed."""
+    """Generate a unique slug for *name*, appending a disambiguator if needed.
+
+    The disambiguator seed is ``name + (website or "")``, making it
+    deterministic: re-creating the same company produces the same slug.
+
+    Edge-case: names whose normalized form is empty (e.g. all-symbol names like
+    "!!!" or "---") all fall back to base="company" and bypass
+    find_company_by_name (which returns None for empty norm). When website is
+    also None, every such name produces the same seed "" → the same final slug
+    → IntegrityError on the second insert.  We detect this by checking the
+    disambiguated candidate and extending the hash suffix deterministically
+    (counter-appended to the seed) until a free slot is found.
+    """
     base = slugify(name)
     if not base:
         # Fallback: use a disambiguator on an empty base slug to avoid ''
         base = "company"
     candidate = base
     if await _is_slug_taken(session, candidate, exclude_id=company_id):
-        candidate = slug_with_disambiguator(base)
+        seed = name + (website or "")
+        candidate = slug_with_disambiguator(base, seed)
+        # If the deterministic candidate is also taken (see norm-empty edge case
+        # in the docstring), keep extending by hashing seed+counter until free.
+        counter = 1
+        while await _is_slug_taken(session, candidate, exclude_id=company_id):
+            candidate = slug_with_disambiguator(base, seed + str(counter))
+            counter += 1
     return candidate
 
 
@@ -168,6 +187,12 @@ async def find_company_by_name(
     Returns the highest-similarity match when multiple rows clear the
     threshold; returns None when no match.
 
+    Short-name guard: names whose normalized form is fewer than 6 characters
+    never enter the trigram branch (trigram similarity is unreliable for very
+    short strings — "ai", "vue", "x" can score above 0.85 against unrelated
+    companies). Exact matches are unaffected by this guard and are always
+    returned regardless of length.
+
     The trigram path requires the pg_trgm extension to be installed (handled
     by migration 0003). If the extension is unavailable, the similarity()
     call will raise — callers should treat that as a deployment problem,
@@ -180,6 +205,12 @@ async def find_company_by_name(
     exact = await _find_by_normalized_name(session, norm)
     if exact is not None:
         return exact
+
+    # Trigram similarity is unreliable for very short normalized strings:
+    # "ai", "vue", "x" match unrelated companies at 0.85. Skip the fuzzy
+    # branch entirely when the key is shorter than 6 chars.
+    if len(norm) < 6:
+        return None
 
     similarity = func.similarity(Company.normalized_name, norm)
     stmt = (
@@ -232,8 +263,9 @@ async def auto_create_company(
 
     Behavior on insert:
     - hq_country defaults to "US"
-    - slug is built via _build_slug, with disambiguation via a random suffix
-      when the base slug is already taken
+    - slug is built via _build_slug, with disambiguation via a deterministic
+      sha256-seeded suffix (first 6 hex chars of sha256(name + website)) when
+      the base slug is already taken
     - description_short stays NULL — M2's enrich-companies stage will fill
       it from the scraped homepage, which is more authoritative than any
       VC-portfolio one-liner.
@@ -257,7 +289,7 @@ async def auto_create_company(
         return existing, False
 
     norm = normalize_name(name)
-    slug = await _build_slug(session, name, None)
+    slug = await _build_slug(session, name, None, website)
     company = Company(
         name=name,
         slug=slug,

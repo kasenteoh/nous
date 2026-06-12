@@ -251,7 +251,7 @@ class NewsClient:
     async def _get_with_retry(self, url: str) -> httpx.Response:
         return await self._throttled_get(url)
 
-    async def _fetch_text(self, url: str) -> str:
+    async def fetch_text(self, url: str) -> str:
         """Robots-checked, throttled, retried GET. Returns response body text."""
         _, robots = self._assert_open()
         allowed = await robots.is_allowed(url)
@@ -282,7 +282,7 @@ class NewsClient:
         """
         rss_url = f"{GOOGLE_NEWS_RSS_BASE}?q={quote_plus(query)}&hl=en-US&gl=US&ceid=US:en"
         try:
-            xml_text = await self._fetch_text(rss_url)
+            xml_text = await self.fetch_text(rss_url)
         except RobotsBlockedError:
             logger.warning("Google News RSS blocked by robots.txt for query %r", query)
             return []
@@ -307,7 +307,7 @@ class NewsClient:
         - Extracted text shorter than MIN_BODY_CHARS (paywall / JS shell)
         """
         try:
-            html_text = await self._fetch_text(url)
+            html_text = await self.fetch_text(url)
         except RobotsBlockedError:
             logger.info("robots.txt blocked article body fetch: %s", url)
             return None

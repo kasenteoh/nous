@@ -460,6 +460,8 @@ was removed (see the banner at the top of this spec), leaving legacy rows tagged
 
 Run once to retire the Form D legacy, then drop from the playbook.
 
+*(Stage removed 2026-06-12 — confirmed run in prod; zero `discovered_via='form_d'` rows remain.)*
+
 ### 5.11 Idempotency
 
 Every stage should be safe to re-run. Use upserts keyed on natural unique identifiers (accession_number, news URL, etc.). The pipeline should never throw on duplicate data.

@@ -103,6 +103,7 @@ async def run_ingest_news(
     lookback_days: int = 7,
     include_techcrunch_broad: bool = True,
     max_companies: int | None = None,
+    similarity_threshold: float = 0.85,
 ) -> IngestNewsSummary:
     """Fetch per-company Google News results + optional TechCrunch broad sweep.
 
@@ -205,6 +206,7 @@ async def run_ingest_news(
                     name=candidate,
                     website=None,
                     discovered_via="techcrunch",
+                    similarity_threshold=similarity_threshold,
                 )
                 if created:
                     summary.auto_created_companies += 1

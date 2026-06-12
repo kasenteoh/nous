@@ -21,10 +21,12 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-# Matches the ~8K-token cap M2's enrich-companies stage uses for homepage
-# text. News articles are usually well under this, but we truncate
+from nous.llm.client import MAX_PROMPT_INPUT_CHARS
+
+# News articles are usually well under the shared ceiling, but we truncate
 # defensively so a malformed scrape can't blow the prompt budget.
-MAX_ARTICLE_CHARS = 32_000
+# Uses the shared MAX_PROMPT_INPUT_CHARS ceiling (32_000).
+MAX_ARTICLE_CHARS = MAX_PROMPT_INPUT_CHARS
 
 
 class FundingExtraction(BaseModel):
@@ -125,8 +127,8 @@ Article body:
 def build_prompt(*, company_name: str, article_text: str) -> str:
     """Render the funding-extraction prompt with the given inputs.
 
-    `article_text` is truncated to MAX_ARTICLE_CHARS (~8K tokens) to mirror
-    the cap used by M2's company-description prompt.
+    `article_text` is truncated to MAX_ARTICLE_CHARS (= MAX_PROMPT_INPUT_CHARS)
+    to bound prompt cost.
     """
     return PROMPT_TEMPLATE.format(
         company_name=company_name,

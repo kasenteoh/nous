@@ -54,7 +54,6 @@ def _make_cache(transport: httpx.AsyncBaseTransport) -> RobotsCache:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
 async def test_is_allowed_when_robots_missing() -> None:
     """A 404 on robots.txt means the site has no restrictions → allow."""
     transport = _make_transport({})
@@ -68,7 +67,6 @@ async def test_is_allowed_when_robots_missing() -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
 async def test_is_allowed_for_permitted_path() -> None:
     robots_txt = (FIXTURES / "sample_robots_disallow.txt").read_text()
     transport = _make_transport({"robots.txt": (200, robots_txt)})
@@ -82,7 +80,6 @@ async def test_is_allowed_for_permitted_path() -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
 async def test_is_disallowed_for_secret_path() -> None:
     robots_txt = (FIXTURES / "sample_robots_disallow.txt").read_text()
     transport = _make_transport({"robots.txt": (200, robots_txt)})
@@ -96,7 +93,6 @@ async def test_is_disallowed_for_secret_path() -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
 async def test_cache_reuses_parser_within_ttl() -> None:
     """Two is_allowed calls for the same domain should only fetch robots.txt once."""
     robots_txt = (FIXTURES / "sample_robots_disallow.txt").read_text()
@@ -127,7 +123,6 @@ async def test_cache_reuses_parser_within_ttl() -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
 async def test_cache_refetches_after_ttl_expiry(monkeypatch: pytest.MonkeyPatch) -> None:
     """After TTL expiry, a second call to is_allowed should re-fetch robots.txt."""
     robots_txt = (FIXTURES / "sample_robots_disallow.txt").read_text()

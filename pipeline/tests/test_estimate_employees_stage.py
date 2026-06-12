@@ -80,6 +80,8 @@ def _client() -> MagicMock:
 async def test_first_source_wins_and_records_attribution(
     db: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    # The Org is now first in the probe chain (Wellfound is last due to
+    # Cloudflare blocks). When both return data, The Org wins.
     _patch_sources(monkeypatch, wellfound=(11, 50), theorg=(51, 200))
     company = _make_company(slug="first-wins", website="https://acme.com")
     db.add(company)
@@ -88,18 +90,20 @@ async def test_first_source_wins_and_records_attribution(
     summary = await run_estimate_employees(db, _client(), "", refetch_after_days=90)
 
     await db.refresh(company)
-    assert (company.employee_count_min, company.employee_count_max) == (11, 50)
-    assert company.employee_count_source == "wellfound"
+    assert (company.employee_count_min, company.employee_count_max) == (51, 200)
+    assert company.employee_count_source == "theorg"
     assert company.employee_count_checked_at is not None
     assert summary.companies_seen == 1
     assert summary.updated == 1
     assert summary.no_data == 0
 
 
-async def test_falls_through_to_next_source_when_first_is_none(
+async def test_falls_through_to_wellfound_when_earlier_sources_none(
     db: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    _patch_sources(monkeypatch, wellfound=None, theorg=(51, 200))
+    """When The Org, GrowJo, careers, and GitHub all return None,
+    Wellfound (last in chain) is tried and its result is used."""
+    _patch_sources(monkeypatch, wellfound=(11, 50), theorg=None)
     company = _make_company(slug="fall-through")
     db.add(company)
     await db.commit()
@@ -107,7 +111,22 @@ async def test_falls_through_to_next_source_when_first_is_none(
     await run_estimate_employees(db, _client(), "", refetch_after_days=90)
 
     await db.refresh(company)
-    assert (company.employee_count_min, company.employee_count_max) == (51, 200)
+    assert (company.employee_count_min, company.employee_count_max) == (11, 50)
+    assert company.employee_count_source == "wellfound"
+
+
+async def test_theorg_wins_over_growjo_when_both_return_data(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The Org (position 1) wins over GrowJo (position 2)."""
+    _patch_sources(monkeypatch, theorg=(51, 200), growjo=(201, 500))
+    company = _make_company(slug="theorg-first")
+    db.add(company)
+    await db.commit()
+
+    await run_estimate_employees(db, _client(), "", refetch_after_days=90)
+
+    await db.refresh(company)
     assert company.employee_count_source == "theorg"
 
 
@@ -237,3 +256,28 @@ async def test_max_runtime_zero_stops_before_first_company(
 
     assert summary.companies_seen == 0
     assert summary.stopped_early is True
+
+
+async def test_github_wins_over_wellfound_when_both_return_data(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """GitHub (earlier in chain) wins over Wellfound (strictly last) when both
+    return data.
+
+    This is a middle-of-chain discriminating case: if Wellfound were moved
+    anywhere before GitHub in the probe chain, wellfound's data (11, 50) would
+    be used instead of github's (201, 500), and this test would fail on the
+    source assertion.  It pins Wellfound's position as strictly last.
+    """
+    _patch_sources(monkeypatch, github=(201, 500), wellfound=(11, 50))
+    company = _make_company(slug="github-over-wellfound", website="https://acme.com")
+    db.add(company)
+    await db.commit()
+
+    await run_estimate_employees(db, _client(), "", refetch_after_days=90)
+
+    await db.refresh(company)
+    assert company.employee_count_source == "github", (
+        "GitHub should beat Wellfound when both return data — Wellfound is last in chain"
+    )
+    assert (company.employee_count_min, company.employee_count_max) == (201, 500)

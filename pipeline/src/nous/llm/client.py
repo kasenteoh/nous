@@ -37,6 +37,12 @@ T = TypeVar("T", bound=BaseModel)
 DEFAULT_DEEPSEEK_MODEL = "deepseek-chat"
 DEEPSEEK_BASE_URL = "https://api.deepseek.com/v1"
 
+# Shared ceiling for prompt input text across all LLM-using stages.
+# Stages that deliberately use a smaller limit (e.g. TechCrunch headline
+# articles ~6k) keep their own local constant and note it is intentionally
+# below this shared ceiling.
+MAX_PROMPT_INPUT_CHARS: int = 32_000
+
 
 class LLMError(Exception):
     """Base class for LLM failures."""

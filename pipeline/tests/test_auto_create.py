@@ -349,3 +349,137 @@ async def test_auto_create_does_not_downgrade_cased_name(db: AsyncSession) -> No
     refetched = await db.get(Company, existing.id)
     assert refetched is not None
     assert refetched.name == "Airbnb"
+
+
+# ---------------------------------------------------------------------------
+# Short-name fuzzy guard
+# ---------------------------------------------------------------------------
+
+
+async def test_short_name_does_not_fuzzy_match(db: AsyncSession) -> None:
+    """A normalized name shorter than 6 chars must not fuzzy-match an existing
+    company — trigram similarity is unreliable for such short strings (e.g.
+    'ai', 'vue', 'x' could match unrelated companies at 0.85).
+
+    The exact-match path is still intact, so exact hits are always found.
+    The guard applies only in the trigram branch.
+
+    We use similarity_threshold=0.2 to make this test discriminating:
+    "ai" vs "acmeai" would not match even at 0.85 (trigram scores for length-2
+    vs length-6 strings are very low), so a high threshold could give a false
+    green even if the guard were removed.  At 0.2, trigram("ai", "acmeai")
+    would clear the threshold and produce a match — making the guard the ONLY
+    thing preventing it.  If the guard is removed, this test fails.
+    """
+    # Insert a company whose normalized_name is long enough that a short query
+    # could score high similarity against it.
+    existing = make_company(
+        name="Acme AI Corp",
+        slug=f"acme-ai-corp-{os.urandom(3).hex()}",
+        normalized_name="acmeai",  # 6 chars — this is the *stored* company
+    )
+    db.add(existing)
+    await db.flush()
+    await db.commit()
+
+    # "AI" normalizes to "ai" (2 chars) — below the 6-char guard, so the
+    # fuzzy branch is skipped and no match is returned.
+    # Threshold 0.2: low enough that trigram("ai", "acmeai") would match if
+    # the guard were absent — so the guard is what blocks this, not the threshold.
+    found = await find_company_by_name(db, "AI", similarity_threshold=0.2)
+    assert found is None, (
+        "Short normalized name 'ai' should not fuzzy-match an existing company"
+    )
+
+
+async def test_short_name_exact_match_still_works(db: AsyncSession) -> None:
+    """The short-name guard must not block exact normalized-name matches —
+    it applies only inside the trigram branch."""
+    existing = make_company(
+        name="X Co",  # normalizes to "x" (1 char after suffix strip)
+        slug=f"x-co-{os.urandom(3).hex()}",
+        normalized_name="x",
+    )
+    db.add(existing)
+    await db.flush()
+    await db.commit()
+
+    # Exact match on "x" must still work even though len("x") < 6.
+    found = await find_company_by_name(db, "X Co")
+    assert found is not None
+    assert found.id == existing.id
+
+
+async def test_six_char_name_can_fuzzy_match(db: AsyncSession) -> None:
+    """A normalized name with exactly 6 chars passes the guard and can
+    fuzzy-match a near-identical existing company.
+
+    This is a true boundary test: the stored company normalized_name is exactly
+    6 chars ("acmeco"), and the query also normalizes to exactly 6 chars
+    ("acmec0" — last char differs).  At threshold=0.2, trigram similarity
+    between "acmeco" and "acmec0" is high enough to match.  The guard only
+    blocks names with fewer than 6 chars, so len==6 passes through to the
+    fuzzy branch.
+
+    Why threshold=0.2: trigram similarity on 6-char strings is lower than on
+    long strings, so 0.85 may not match even valid near-duplicates at this
+    boundary length.  0.2 is low enough to guarantee the pair matches while
+    still discriminating against completely unrelated strings.
+    """
+    existing = make_company(
+        name="Acme Co",
+        slug=f"acmeco-{os.urandom(3).hex()}",
+        normalized_name="acmeco",  # exactly 6 chars — on the boundary
+    )
+    db.add(existing)
+    await db.flush()
+    await db.commit()
+
+    # "Acme C0" (letter O → digit 0) normalizes to "acmec0" — 6 chars, one
+    # char different, so trigram similarity ~0.5 at 6 chars.  At threshold=0.2
+    # this must match (passes the guard, clears the threshold).
+    found = await find_company_by_name(db, "Acme C0", similarity_threshold=0.2)
+    assert found is not None, (
+        "A 6-char normalized name should pass the guard and be able to fuzzy-match"
+    )
+    assert found.id == existing.id
+
+
+# ---------------------------------------------------------------------------
+# Norm-empty slug collision (_build_slug deterministic dedup)
+# ---------------------------------------------------------------------------
+
+
+async def test_two_all_symbol_names_yield_distinct_slugs(db: AsyncSession) -> None:
+    """Two companies whose names normalize to empty (all-symbol names like
+    '!!!' and '---') must get distinct slugs without raising IntegrityError.
+
+    Both names slugify to '' → _build_slug falls back to base='company'.
+    Both have website=None → same seed '' → same first candidate 'company-<hash>'.
+    Without the counter-loop fix, the second insert would raise IntegrityError.
+    With it, the second gets a different suffix via seed+counter.
+    """
+    company1, created1 = await auto_create_company(
+        db,
+        name="!!!",
+        website=None,
+        discovered_via="vc_portfolio",
+    )
+    assert created1 is True
+    await db.commit()
+
+    # Different all-symbol name also normalizes to empty — same slug collision path.
+    company2, created2 = await auto_create_company(
+        db,
+        name="---",
+        website=None,
+        discovered_via="vc_portfolio",
+    )
+    assert created2 is True
+    await db.commit()
+
+    assert company1.id != company2.id
+    assert company1.slug != company2.slug, (
+        "Two all-symbol companies must get distinct slugs — "
+        "the counter-loop in _build_slug should break the collision"
+    )

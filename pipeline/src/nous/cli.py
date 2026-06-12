@@ -258,7 +258,21 @@ def refresh_vc_portfolios_cmd(
     default=None,
     help="Maximum number of companies to query (per-company Google News path).",
 )
-def ingest_news(lookback_days: int, no_techcrunch: bool, limit: int | None) -> None:
+@click.option(
+    "--similarity-threshold",
+    type=float,
+    default=None,
+    help=(
+        "pg_trgm similarity threshold for fuzzy company-name matching on the "
+        "TC auto-create path. Default: Settings.COMPANY_FUZZY_MATCH_THRESHOLD."
+    ),
+)
+def ingest_news(
+    lookback_days: int,
+    no_techcrunch: bool,
+    limit: int | None,
+    similarity_threshold: float | None,
+) -> None:
     """Pull funding-keyword news articles into the news_articles table."""
     import asyncio
 
@@ -268,6 +282,11 @@ def ingest_news(lookback_days: int, no_techcrunch: bool, limit: int | None) -> N
     from nous.sources.news import NewsClient
 
     settings = Settings()
+    threshold = (
+        similarity_threshold
+        if similarity_threshold is not None
+        else settings.COMPANY_FUZZY_MATCH_THRESHOLD
+    )
 
     async def _run() -> None:
         async with (
@@ -283,6 +302,7 @@ def ingest_news(lookback_days: int, no_techcrunch: bool, limit: int | None) -> N
                 lookback_days=lookback_days,
                 include_techcrunch_broad=not no_techcrunch,
                 max_companies=limit,
+                similarity_threshold=threshold,
             )
             click.echo(summary.model_dump_json(indent=2))
 
@@ -446,28 +466,6 @@ def dedup_companies(llm_limit: int, dry_run: bool) -> None:
     asyncio.run(_run())
 
 
-@cli.command("cleanup-form-d")
-@click.option(
-    "--dry-run",
-    is_flag=True,
-    default=False,
-    help="Report counts but perform no re-tag/delete writes.",
-)
-def cleanup_form_d(dry_run: bool) -> None:
-    """Re-tag corroborated form_d companies (vc_portfolio/news), delete the rest."""
-    import asyncio
-
-    from nous.db.session import AsyncSessionLocal
-    from nous.pipeline.cleanup_form_d import run_cleanup_form_d
-
-    async def _run() -> None:
-        async with AsyncSessionLocal() as session:
-            summary = await run_cleanup_form_d(session, dry_run=dry_run)
-            click.echo(summary.model_dump_json(indent=2))
-
-    asyncio.run(_run())
-
-
 @cli.command("estimate-employees")
 @click.option(
     "--limit",
@@ -500,9 +498,10 @@ def estimate_employees(
 ) -> None:
     """Estimate employee headcount from public sources.
 
-    Sources are tried in priority order (Wellfound, The Org, GrowJo, careers-page
-    job count, GitHub org); the first non-null result wins and its source is
-    recorded for attribution.
+    Sources are tried in priority order (The Org, GrowJo, careers-page job
+    count, GitHub org, Wellfound); the first non-null result wins and its
+    source is recorded for attribution. Wellfound is tried last because it is
+    mostly Cloudflare-blocked.
     """
     import asyncio
 

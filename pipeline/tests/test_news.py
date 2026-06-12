@@ -181,7 +181,6 @@ def test_extract_real_techcrunch_article_meets_min_chars() -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
 async def test_google_news_rss_returns_keyword_matches() -> None:
     transport = _MockTransport(
         [
@@ -212,7 +211,6 @@ async def test_google_news_rss_returns_keyword_matches() -> None:
     assert sample.source  # hostname populated
 
 
-@pytest.mark.asyncio
 async def test_google_news_rss_filters_out_non_funding_entries() -> None:
     """An RSS with mixed funding + non-funding entries returns only funding ones."""
     rss = """<?xml version="1.0" encoding="UTF-8"?>
@@ -249,7 +247,6 @@ async def test_google_news_rss_filters_out_non_funding_entries() -> None:
     assert not any("acme-product" in u for u in urls)
 
 
-@pytest.mark.asyncio
 async def test_google_news_rss_deduplicates_by_canonical_url() -> None:
     """Two RSS items differing only in tracking params collapse to one entry."""
     rss = """<?xml version="1.0" encoding="UTF-8"?>
@@ -285,7 +282,6 @@ async def test_google_news_rss_deduplicates_by_canonical_url() -> None:
     assert results[0].url == "https://example.com/acme"
 
 
-@pytest.mark.asyncio
 async def test_google_news_rss_robots_block_returns_empty() -> None:
     """robots.txt disallowing /rss/search must produce an empty result, not raise."""
     transport = _MockTransport(
@@ -308,7 +304,6 @@ async def test_google_news_rss_robots_block_returns_empty() -> None:
     assert rss_route.call_count == 0
 
 
-@pytest.mark.asyncio
 async def test_google_news_rss_applies_lookback_window() -> None:
     """Entries older than lookback_days are dropped."""
     # One fresh-ish, one ancient. Use 2020 for ancient — well past any
@@ -361,7 +356,6 @@ async def test_google_news_rss_applies_lookback_window() -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
 async def test_fetch_article_body_returns_clean_text() -> None:
     transport = _MockTransport(
         [
@@ -383,7 +377,6 @@ async def test_fetch_article_body_returns_clean_text() -> None:
     assert "<script" not in body.lower()
 
 
-@pytest.mark.asyncio
 async def test_fetch_article_body_returns_none_on_robots_block() -> None:
     transport = _MockTransport(
         [
@@ -399,7 +392,6 @@ async def test_fetch_article_body_returns_none_on_robots_block() -> None:
     assert body is None
 
 
-@pytest.mark.asyncio
 async def test_fetch_article_body_returns_none_on_404() -> None:
     transport = _MockTransport(
         [
@@ -415,7 +407,6 @@ async def test_fetch_article_body_returns_none_on_404() -> None:
     assert body is None
 
 
-@pytest.mark.asyncio
 async def test_fetch_article_body_returns_none_on_500() -> None:
     transport = _MockTransport(
         [
@@ -431,7 +422,6 @@ async def test_fetch_article_body_returns_none_on_500() -> None:
     assert body is None
 
 
-@pytest.mark.asyncio
 async def test_fetch_article_body_returns_none_on_short_body() -> None:
     """A page below MIN_BODY_CHARS of extracted text returns None (paywall stub)."""
     short_html = "<html><body><p>Subscribe to read this article.</p></body></html>"
@@ -449,7 +439,6 @@ async def test_fetch_article_body_returns_none_on_short_body() -> None:
     assert body is None
 
 
-@pytest.mark.asyncio
 async def test_fetch_article_body_returns_none_on_network_error() -> None:
     transport = _MockTransport(
         [
@@ -470,7 +459,6 @@ async def test_fetch_article_body_returns_none_on_network_error() -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
 async def test_client_without_context_manager_raises() -> None:
     client = NewsClient(user_agent=USER_AGENT)
     with pytest.raises(RuntimeError, match="async context manager"):
@@ -482,7 +470,6 @@ async def test_client_without_context_manager_raises() -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
 async def test_techcrunch_adapter_returns_entries_from_fixture() -> None:
     transport = _MockTransport(
         [
@@ -503,7 +490,6 @@ async def test_techcrunch_adapter_returns_entries_from_fixture() -> None:
         assert r.url.startswith("https://techcrunch.com/")
 
 
-@pytest.mark.asyncio
 async def test_techcrunch_adapter_robots_block_returns_empty() -> None:
     transport = _MockTransport(
         [
@@ -523,7 +509,6 @@ async def test_techcrunch_adapter_robots_block_returns_empty() -> None:
     assert feed_route.call_count == 0
 
 
-@pytest.mark.asyncio
 async def test_techcrunch_adapter_handles_http_error() -> None:
     transport = _MockTransport(
         [

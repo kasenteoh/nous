@@ -171,7 +171,6 @@ def test_whitespace_user_agent_raises() -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
 async def test_successful_fetch_returns_fetch_result() -> None:
     routes = [
         RouteSpec("example.com/robots.txt", status=404),
@@ -196,7 +195,6 @@ async def test_successful_fetch_returns_fetch_result() -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
 async def test_robots_blocked_raises_and_no_get() -> None:
     """When robots.txt disallows a URL, we must raise before making the GET."""
     page_route = RouteSpec("example.com/secret/", status=200, body="secret page")
@@ -218,7 +216,6 @@ async def test_robots_blocked_raises_and_no_get() -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
 async def test_per_domain_throttle_same_domain() -> None:
     """Two consecutive fetches to the same domain wait at least 1/rps seconds apart."""
     rps = 10.0  # fast enough that the test only takes ~100ms
@@ -250,7 +247,6 @@ async def test_per_domain_throttle_same_domain() -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
 async def test_different_domains_run_in_parallel() -> None:
     """Two fetches to different domains should complete faster than sequential."""
     rps = 5.0  # 200ms per domain
@@ -323,7 +319,6 @@ class RetryTransport(httpx.AsyncBaseTransport):
         return httpx.Response(404, content=b"Not Found")
 
 
-@pytest.mark.asyncio
 async def test_retry_on_429_succeeds() -> None:
     transport = RetryTransport("example.com", "<html><body>ok</body></html>")
     client = HomepageClient(user_agent=USER_AGENT)
@@ -377,7 +372,6 @@ class ResolverTransport(httpx.AsyncBaseTransport):
         return httpx.Response(404, content=b"Not Found")
 
 
-@pytest.mark.asyncio
 async def test_resolve_homepage_finds_matching_name() -> None:
     """slug 'acme' → acme.com returns name-matching HTML → return that URL."""
     transport = ResolverTransport({"acme.com": (200, HTML_WITH_NAME)})
@@ -391,7 +385,6 @@ async def test_resolve_homepage_finds_matching_name() -> None:
     assert "acme.com" in result
 
 
-@pytest.mark.asyncio
 async def test_resolve_homepage_returns_none_when_all_404() -> None:
     """slug 'ghostco' → all TLDs return 404 → None."""
     transport = ResolverTransport({})  # everything 404
@@ -404,7 +397,6 @@ async def test_resolve_homepage_returns_none_when_all_404() -> None:
     assert result is None
 
 
-@pytest.mark.asyncio
 async def test_resolve_homepage_rejects_parked_domain() -> None:
     """slug 'parked' → page without the name in text → None."""
     transport = ResolverTransport({"parked.com": (200, HTML_NO_NAME)})
@@ -417,7 +409,6 @@ async def test_resolve_homepage_rejects_parked_domain() -> None:
     assert result is None
 
 
-@pytest.mark.asyncio
 async def test_resolve_homepage_tries_tlds_in_order() -> None:
     """Given .com → 404, .io → match, .ai → match: should return .io first."""
     transport = ResolverTransport(
@@ -457,7 +448,6 @@ class MockSearchHomepageClient(HomepageClient):
         return self._mock_search_results[:limit]
 
 
-@pytest.mark.asyncio
 async def test_resolve_homepage_phase2_ddg_fallback() -> None:
     """When TLD phase misses, DDG search returns a valid candidate → return it."""
     # TLD phase: all 404
@@ -495,7 +485,6 @@ async def test_resolve_homepage_phase2_ddg_fallback() -> None:
     assert real_homepage_host in result
 
 
-@pytest.mark.asyncio
 async def test_resolve_homepage_phase2_skips_aggregators() -> None:
     """When DDG only returns aggregator URLs, phase 2 returns None."""
     search_results = [
@@ -520,7 +509,6 @@ async def test_resolve_homepage_phase2_skips_aggregators() -> None:
     assert result is None
 
 
-@pytest.mark.asyncio
 async def test_resolve_homepage_phase2_rejects_no_name_match() -> None:
     """DDG candidate fetched but doesn't mention company name → skip, return None."""
     # Page exists but doesn't mention the company name

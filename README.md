@@ -38,7 +38,6 @@ uv run nous dedup-companies
 | `extract-funding` | LLM: parse funding rounds, valuations, and investors from news articles. |
 | `analyze-competitors` | LLM: ranked competitor list (sourced as TechCrunch vs LLM-inferred). |
 | `dedup-companies` | Merge duplicate companies: auto-merge on shared website domain (shared-hosting blocklist), LLM `company-match` adjudicator for fuzzy matches (similar name / shared HQ / similar description), high-confidence only. |
-| `cleanup-form-d` | One-time (not in cron): re-tag legacy `discovered_via='form_d'` rows that have VC-investor or news evidence (→ `vc_portfolio`/`news`) and delete the rest. |
 
 Get a free Gemini API key at <https://ai.google.dev/> (no credit card). The enrichment stage costs ~1 LLM call per company and stays well under the free tier's 1500/day limit.
 
