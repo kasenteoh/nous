@@ -317,6 +317,58 @@ async def test_skips_articles_with_thin_body(
 
 
 @pytestmark_db
+async def test_google_news_redirect_stores_headline_without_body_fetch(
+    db: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A Google News redirect URL is stored from its headline (+ snippet) with no
+    body fetch — the body sits behind Google's opaque interstitial. Without this
+    the per-company funding-news source stored nothing (every hit went 'thin')."""
+    company = _make_company("Redirect Co")
+    db.add(company)
+    await db.flush()
+    await db.commit()
+
+    article = NewsArticleResult(
+        url="https://news.google.com/rss/articles/CBMiOPAQUE?oc=5",
+        title="Redirect Co Raises $30M Series B - Reuters",
+        source="reuters.com",
+        published_date=date(2026, 6, 1),
+        raw_content="Redirect Co announced a $30M Series B led by Acme Ventures.",
+    )
+    client = _MockNewsClient(
+        rss_results={'"Redirect Co" funding': [article]},
+        bodies={},  # any body fetch would return None → assertions below would fail
+    )
+
+    async def _no_tc(*args: Any, **kwargs: Any) -> list[NewsArticleResult]:
+        return []
+
+    monkeypatch.setattr(
+        "nous.pipeline.ingest_news.fetch_techcrunch_funding_articles", _no_tc
+    )
+
+    summary = await run_ingest_news(db, client, include_techcrunch_broad=False)
+
+    assert summary.articles_inserted == 1
+    assert summary.articles_skipped_thin == 0
+    assert client.body_fetches == []  # no wasted ~600KB interstitial fetch
+
+    stored = (
+        (
+            await db.execute(
+                select(NewsArticle).where(NewsArticle.company_id == company.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert len(stored) == 1
+    assert "Series B" in stored[0].raw_content  # the headline became the content
+    assert stored[0].source == "reuters.com"  # real publisher preserved for attribution
+
+
+@pytestmark_db
 async def test_tc_broad_failed_body_does_not_auto_create(
     db: AsyncSession,
     monkeypatch: pytest.MonkeyPatch,

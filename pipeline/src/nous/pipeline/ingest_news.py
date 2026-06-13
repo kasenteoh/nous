@@ -1,8 +1,10 @@
 """ingest-news pipeline stage.
 
 For each company we already track, query Google News RSS for funding-related
-articles in the lookback window, fetch the article bodies, and persist them
-to ``news_articles``. Then, if requested, sweep the TechCrunch venture-tag
+articles in the lookback window and persist them to ``news_articles`` — storing
+the funding headline (Google News links are opaque redirects whose body is
+unreachable; see ``_GOOGLE_NEWS_HOST``). Then, if requested, sweep the
+TechCrunch venture-tag
 broad feed to catch funding announcements for companies we don't yet have —
 asking the LLM to identify the funded company from each headline + snippet and
 auto-creating a row.
@@ -30,8 +32,20 @@ from nous.llm.client import LLMError, LLMRateLimitError, complete_json
 from nous.llm.prompts.news_company import HeadlineCompany, build_prompt
 from nous.sources.news import NewsArticleResult, NewsClient
 from nous.sources.techcrunch import fetch_techcrunch_funding_articles
+from nous.util.url import hostname
 
 logger = logging.getLogger(__name__)
+
+# Google News RSS <link>s are opaque redirect URLs (news.google.com/rss/articles/
+# CBMi...). Fetching one returns a ~600KB consent/redirect interstitial, NEVER
+# the article body, and the real publisher URL is encoded so it needs Google's
+# batchexecute endpoint to decode — fragile and frequently broken. So for these
+# we DON'T fetch a body: the funding headline (+ snippet) carries the core facts
+# ("Ramp Raises Series F at $44 Billion Valuation"), which is enough for
+# extract-funding. Without this, every per-company Google News hit was fetched,
+# came back under MIN_BODY_CHARS, and was dropped as "thin" — so the per-company
+# funding-news source (its whole point) stored nothing.
+_GOOGLE_NEWS_HOST = "news.google.com"
 
 
 async def _extract_company_from_tc_result(result: NewsArticleResult) -> str | None:
@@ -68,6 +82,19 @@ async def _article_already_stored(session: AsyncSession, url: str) -> bool:
     return bool(await session.scalar(stmt))
 
 
+def _headline_content(result: NewsArticleResult) -> str:
+    """The funding-news content for a Google News result: headline (+ snippet).
+
+    See ``_GOOGLE_NEWS_HOST``: the article body is unreachable behind Google's
+    redirect, but the headline carries the company + round + amount/valuation.
+    """
+    title = result.title.strip()
+    snippet = result.raw_content.strip()
+    if snippet and snippet not in title:
+        return f"{title}\n\n{snippet}"
+    return title
+
+
 async def _ingest_one_article(
     session: AsyncSession,
     client: NewsClient,
@@ -75,13 +102,23 @@ async def _ingest_one_article(
     result: NewsArticleResult,
     summary: IngestNewsSummary,
 ) -> None:
-    """Fetch the article body and persist to news_articles. Per-row commit."""
+    """Persist one article to news_articles. Per-row commit.
+
+    Google News redirect URLs store the headline (+ snippet) directly — no body
+    fetch (see ``_GOOGLE_NEWS_HOST``). A direct publisher link (rare in GN RSS)
+    still gets a real body fetch with the thin-body guard.
+    """
     if await _article_already_stored(session, result.url):
         return
-    body = await client.fetch_article_body(result.url)
-    if body is None:
-        summary.articles_skipped_thin += 1
-        return
+
+    if hostname(result.url) == _GOOGLE_NEWS_HOST:
+        content = _headline_content(result)
+    else:
+        body = await client.fetch_article_body(result.url)
+        if body is None:
+            summary.articles_skipped_thin += 1
+            return
+        content = body
 
     article = NewsArticle(
         company_id=company_id,
@@ -89,7 +126,7 @@ async def _ingest_one_article(
         title=result.title,
         source=result.source,
         published_date=result.published_date,
-        raw_content=body,
+        raw_content=content,
     )
     session.add(article)
     await session.commit()
