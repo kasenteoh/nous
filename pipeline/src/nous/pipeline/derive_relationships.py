@@ -49,8 +49,10 @@ logger = logging.getLogger(__name__)
 
 _DEFAULT_MAX_SIMILAR_PER_COMPANY: int = 8
 
-# The six columns derive-relationships writes; id/created_at/updated_at fall back
-# to their DB server defaults (gen_random_uuid()/now()).
+# The data columns the competitor projection writes. The from_select prepends
+# "id" (a per-row gen_random_uuid() — see run_derive_relationships) because
+# INSERT...FROM SELECT can't apply the model's per-row uuid4 default;
+# created_at/updated_at still fall back to their now() server defaults.
 _INSERT_COLUMNS: list[str] = [
     "company_id",
     "related_company_id",
@@ -141,6 +143,12 @@ async def run_derive_relationships(
     # Self-references are excluded (the target table CHECK forbids them).
     competitor_select = (
         select(
+            # Generate the PK per row in SQL. INSERT...FROM SELECT cannot apply
+            # the model's Python-side uuid4 default per row — it evaluates that
+            # default ONCE and reuses the id for every row, so the 2nd projected
+            # edge violates the PK (the whole derive then rolls back, leaving the
+            # competitor graph empty). gen_random_uuid() is volatile → per row.
+            func.gen_random_uuid().label("id"),
             Competitor.company_id,
             Competitor.competitor_company_id,
             literal("competitor").label("relationship_type"),
@@ -195,7 +203,9 @@ async def run_derive_relationships(
         delete(CompanyRelationship).where(CompanyRelationship.source == "competitors")
     )
     await session.execute(
-        insert(CompanyRelationship).from_select(_INSERT_COLUMNS, competitor_select)
+        insert(CompanyRelationship).from_select(
+            ["id", *_INSERT_COLUMNS], competitor_select
+        )
     )
     await session.execute(
         delete(CompanyRelationship).where(
