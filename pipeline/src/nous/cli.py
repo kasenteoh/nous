@@ -667,6 +667,32 @@ def db_stats(cap_mb: int | None, warn_pct: int | None) -> None:
     asyncio.run(_run())
 
 
+@cli.command("judge-eligibility")
+@click.option(
+    "--limit",
+    type=int,
+    default=None,
+    help="Maximum number of companies to judge (caps LLM spend per run).",
+)
+def judge_eligibility(limit: int | None) -> None:
+    """Backfill the is-this-a-startup judgment for already-enriched companies."""
+    import asyncio
+
+    from nous.db.session import AsyncSessionLocal
+    from nous.observability import emit_run_telemetry
+    from nous.pipeline.judge_eligibility import run_judge_eligibility
+
+    async def _run() -> None:
+        try:
+            async with AsyncSessionLocal() as session:
+                summary = await run_judge_eligibility(session, limit=limit)
+                click.echo(summary.model_dump_json(indent=2))
+        finally:
+            emit_run_telemetry("judge-eligibility")
+
+    asyncio.run(_run())
+
+
 def main() -> None:
     cli()
 
