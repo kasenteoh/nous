@@ -83,6 +83,15 @@ on:
         description: "Enrich: max companies to enrich (caps LLM spend). Default: 30."
         required: false
         type: string
+      judge_limit:
+        description: "Judge eligibility: max companies to judge this run (drains the backlog). Default: 30."
+        required: false
+        type: string
+      run_repair_websites:
+        description: "Run the one-off repair-wrong-websites poisoned-row cleanup (Task 2.2). Default: false."
+        required: false
+        type: boolean
+        default: false
 
 # Serialize against every other workflow that mutates the companies table (see
 # discovery.yml). resolve / enrich UPDATE company rows and ingest-news /
@@ -161,6 +170,18 @@ jobs:
         timeout-minutes: 15
         continue-on-error: true
         run: uv run nous repair-catalog
+
+      - name: Repair wrong websites
+        id: repair_websites
+        if: ${{ inputs.run_repair_websites == true }}
+        # One-off (Task 2.2): reset companies whose website is a directory/
+        # aggregator/parked host or whose description is parked prose, and
+        # re-queue false exclusions, so the hardened resolver re-resolves them
+        # cleanly on the next run. Gated off by default; dispatch with
+        # run_repair_websites=true to apply the cleanup once.
+        timeout-minutes: 15
+        continue-on-error: true
+        run: uv run nous repair-wrong-websites
 
       # ----- Funding news (freshness-first) -----------------------------------
 
@@ -261,10 +282,16 @@ jobs:
         # enriched before that judgment existed (~1,600 one-time DeepSeek calls).
         # Each judged row is stamped, so this drains in a couple of weeks at 10x/
         # day and then no-ops. Runs after enrich so freshly described rows are
-        # already stamped by enrich itself and skipped here.
-        timeout-minutes: 10
+        # already stamped by enrich itself and skipped here. Timeout raised to
+        # 45m so a high judge_limit can drain the one-time backlog in a single
+        # dispatch (each row is stamped as it's judged, so a timeout mid-drain
+        # still preserves progress).
+        timeout-minutes: 45
         continue-on-error: true
-        run: uv run nous judge-eligibility --limit 30
+        run: |
+          JUDGE_LIMIT="${{ inputs.judge_limit }}"
+          if [ -z "$JUDGE_LIMIT" ]; then JUDGE_LIMIT=30; fi
+          uv run nous judge-eligibility --limit "$JUDGE_LIMIT"
 
       - name: Database stats
         if: ${{ !cancelled() }}
