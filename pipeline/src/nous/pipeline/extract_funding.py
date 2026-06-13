@@ -60,6 +60,7 @@ from nous.llm.prompts.funding_extraction import (
     build_prompt,
     build_website_prompt,
 )
+from nous.pipeline.refresh_investor_counts import refresh_investor_counts
 from nous.util.text import extract_visible_text, truncate_to_chars
 
 logger = logging.getLogger(__name__)
@@ -410,6 +411,12 @@ async def run_extract_funding(
         article.processed = True
         session.add(article)
         await session.commit()
+
+    # Recompute portfolio_count for all investors now that funding-round
+    # investor links may have been added. Committed in its own transaction so a
+    # count failure doesn't roll back the extraction work.
+    await refresh_investor_counts(session)
+    await session.commit()
 
     return summary
 

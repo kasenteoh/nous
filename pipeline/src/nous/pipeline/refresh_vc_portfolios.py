@@ -29,6 +29,7 @@ from nous.db.upsert import (
     link_company_investor,
     upsert_investor,
 )
+from nous.pipeline.refresh_investor_counts import refresh_investor_counts
 from nous.sources.homepage import HomepageClient
 from nous.sources.vc_portfolios import ADAPTERS, FIRM_DISPLAY_NAMES, PortfolioEntry
 
@@ -140,5 +141,11 @@ async def run_refresh_vc_portfolios(
                 # in-flight transaction so subsequent entries get a clean
                 # session, then move on.
                 await session.rollback()
+
+    # Recompute portfolio_count for all investors now that VC portfolio links
+    # may have changed. Committed separately from the per-entry commits above
+    # so a count failure doesn't roll back the discovery work.
+    await refresh_investor_counts(session)
+    await session.commit()
 
     return summary

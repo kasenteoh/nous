@@ -543,6 +543,39 @@ def analyze_competitors(limit: int, ttl_days: int, dry_run: bool) -> None:
     asyncio.run(_run())
 
 
+@cli.command("refresh-investor-counts")
+def refresh_investor_counts_cmd() -> None:
+    """Recompute investors.portfolio_count across both link tables.
+
+    Counts distinct non-excluded companies per investor via company_investors
+    and funding_round_investors → funding_rounds (UNION, so no double-count).
+    Idempotent: a full recompute from first principles, including zeroing
+    investors with no qualifying links.
+    """
+    import asyncio
+    from datetime import UTC, datetime
+
+    from nous.db.session import AsyncSessionLocal
+    from nous.observability import record_pipeline_run
+    from nous.pipeline.refresh_investor_counts import refresh_investor_counts
+
+    async def _run() -> None:
+        started = datetime.now(UTC)
+        async with AsyncSessionLocal() as session:
+            summary = await refresh_investor_counts(session)
+            await session.commit()
+            click.echo(summary.model_dump_json(indent=2))
+        await record_pipeline_run(
+            "refresh-investor-counts",
+            started_at=started,
+            inputs_seen=0,
+            rows_written=summary.investors_updated,
+            summary=summary,
+        )
+
+    asyncio.run(_run())
+
+
 @cli.command("dedup-companies")
 @click.option(
     "--llm-limit",

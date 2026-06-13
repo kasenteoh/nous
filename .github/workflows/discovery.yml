@@ -118,6 +118,19 @@ jobs:
           fi
           uv run nous refresh-vc-portfolios "${ARGS[@]}"
 
+      - name: Refresh investor counts
+        id: refresh_investor_counts
+        # Recomputes investors.portfolio_count from both company_investors and
+        # funding_round_investors so the investor index can ORDER BY
+        # portfolio_count DESC. Runs un-gated (regardless of skip_vc) so counts
+        # stay correct even when VC refresh is skipped, e.g. on manual dispatch.
+        # Also called inside refresh-vc-portfolios and extract-funding, but an
+        # explicit step here ensures it runs even when those pipeline stages
+        # are not in this workflow.
+        timeout-minutes: 10
+        continue-on-error: true
+        run: uv run nous refresh-investor-counts
+
       - name: Deduplicate companies
         id: dedup
         if: ${{ inputs.skip_dedup != true }}
