@@ -693,6 +693,28 @@ def judge_eligibility(limit: int | None) -> None:
     asyncio.run(_run())
 
 
+@cli.command("repair-catalog")
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    default=False,
+    help="Log intended repairs without writing.",
+)
+def repair_catalog(dry_run: bool) -> None:
+    """One-time catalog repair: Lightspeed badge-suffix names + parked-domain rows."""
+    import asyncio
+
+    from nous.db.session import AsyncSessionLocal
+    from nous.pipeline.repair_catalog import run_repair_catalog
+
+    async def _run() -> None:
+        async with AsyncSessionLocal() as session:
+            summary = await run_repair_catalog(session, dry_run=dry_run)
+            click.echo(summary.model_dump_json(indent=2))
+
+    asyncio.run(_run())
+
+
 def main() -> None:
     cli()
 
