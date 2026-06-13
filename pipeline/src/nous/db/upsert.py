@@ -9,13 +9,14 @@ from __future__ import annotations
 from datetime import timedelta
 from uuid import UUID
 
-from sqlalchemy import and_, delete, func, select, update
+from sqlalchemy import and_, delete, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from nous.db.models import (
     Company,
     CompanyInvestor,
+    CompanyRelationship,
     Competitor,
     FundingRound,
     FundingRoundInvestor,
@@ -637,6 +638,9 @@ async def merge_companies(
       the resulting pairs.
     - **people** — unique (company_id, rank): adopt the loser's people only when
       the survivor has none (enrich is write-once); otherwise the survivor's win.
+    - **company_relationships** — derived edges: drop every edge touching the
+      loser (either direction); derive-relationships rebuilds the survivor's set
+      on its next run (it follows dedup in discovery.yml).
 
     The survivor's NULL scalar/array/jsonb fields are then filled from the loser
     (see :data:`_MERGE_FILL_COLUMNS`) — a one-directional "fill the gaps" so we
@@ -749,6 +753,22 @@ async def merge_companies(
     await session.execute(
         delete(Competitor).where(
             Competitor.id.in_(duplicate_ids_subq)
+        )
+    )
+
+    # --- company_relationships: derived, regenerated edges -----------------
+    # These are recomputed wholesale by derive-relationships, which runs right
+    # after dedup-companies in discovery.yml. Drop every edge touching the loser
+    # in EITHER direction; the survivor's full set is rebuilt on the next derive
+    # run. Repointing instead would risk unique-triple collisions (and transient
+    # self-edge CHECK violations) for zero benefit on regenerated data — the same
+    # reason company_snapshots is left to CASCADE.
+    await session.execute(
+        delete(CompanyRelationship).where(
+            or_(
+                CompanyRelationship.company_id == loser_id,
+                CompanyRelationship.related_company_id == loser_id,
+            )
         )
     )
 

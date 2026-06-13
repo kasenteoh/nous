@@ -212,6 +212,35 @@ export interface NewsArticleRow {
   published_date: string | null;
 }
 
+// ─── Relationship graph (similar / also-backed-by) ────────────────────────────
+
+/**
+ * A "similar" company from the `company_relationships` graph, joined with the
+ * related company's display fields. Built in {@link getRelatedCompanies} from
+ * the nested-select. `evidence` is the human-readable source/attribution string
+ * shown as a muted caption (every fact on the page has a visible source).
+ */
+export interface RelatedCompany {
+  slug: string;
+  name: string;
+  descriptionShort: string | null;
+  status: string;
+  industryGroup: string | null;
+  score: number;
+  evidence: string | null;
+}
+
+/**
+ * A company that shares one or more (low-degree) investors with the company
+ * being viewed, computed read-time in {@link getAlsoBackedBy}. `sharedInvestors`
+ * holds the names of the shared investors, for the attribution caption.
+ */
+export interface AlsoBackedByCompany {
+  slug: string;
+  name: string;
+  sharedInvestors: string[];
+}
+
 /** Full company detail assembled from the DB queries. */
 export interface CompanyDetail {
   company: CompanyRow;
