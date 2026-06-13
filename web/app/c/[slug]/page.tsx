@@ -179,6 +179,14 @@ export default async function CompanyPage({ params }: Props) {
   const hasTotalRaised = hasComputedTotal || statedTotal != null;
   const statedSourceUrl = company.total_raised_source_url ?? null;
   const statedHostname = websiteHostname(statedSourceUrl);
+  // Is the total-raised figure sourced from the company's own site (self-reported)?
+  // Compare normalized hostnames the same way FundingHistory.tsx does.
+  const statedSourceHost = statedHostname; // already www-stripped via websiteHostname
+  const companyHost = websiteHostname(company.website);
+  const totalRaisedIsOwnSite =
+    statedSourceHost !== null &&
+    companyHost !== null &&
+    statedSourceHost === companyHost;
   const statedAsOf = company.total_raised_as_of ?? null;
   const distinctNewsSources = new Set(
     fundingRounds
@@ -324,21 +332,29 @@ export default async function CompanyPage({ params }: Props) {
               {hasTotalRaised ? formatUsd(displayedTotal) : "—"}
             </dd>
             {statedWins ? (
-              // The displayed figure is the article-stated cumulative total —
-              // attribute the stating article (every rendered number needs a
-              // visible source). Degrades to unlinked text when the source
-              // URL is missing or unparseable.
+              // The displayed figure is the cumulative total from a source URL.
+              // If that URL is the company's own site, label "Company-stated";
+              // otherwise link out to the news article ("via {host}"). Every
+              // rendered number must have a visible source (spec §11).
               <dd className="text-xs text-ink-muted">
-                per{" "}
                 {statedSourceUrl && statedHostname ? (
-                  <a
-                    href={statedSourceUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="underline underline-offset-2 decoration-ink-faint hover:text-ink"
-                  >
-                    {statedHostname}
-                  </a>
+                  totalRaisedIsOwnSite ? (
+                    <span title="Figure reported on the company's own website">
+                      Company-stated
+                    </span>
+                  ) : (
+                    <>
+                      via{" "}
+                      <a
+                        href={statedSourceUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="underline underline-offset-2 decoration-ink-faint hover:text-ink"
+                      >
+                        {statedHostname}
+                      </a>
+                    </>
+                  )
                 ) : (
                   "press coverage"
                 )}
@@ -411,7 +427,7 @@ export default async function CompanyPage({ params }: Props) {
       <Team people={people} companyName={company.name} />
 
       {/* ── Funding history (M3) ───────────────────────────────────────── */}
-      <FundingHistory rounds={fundingRounds} />
+      <FundingHistory rounds={fundingRounds} companyWebsite={company.website} />
 
       {/* ── Investors ──────────────────────────────────────────────────── */}
       <Investors
