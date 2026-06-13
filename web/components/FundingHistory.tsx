@@ -7,15 +7,33 @@
 import { formatDate, formatUsd } from "@/lib/format";
 import type { FundingRoundWithInvestors } from "@/lib/types";
 
-// Inline 3-line URL → hostname helper. Kept local rather than in format.ts
-// because nothing else in the app needs it yet (and per Chunk-7 scope).
+// Inline URL → hostname helper. Strips www. for consistent comparison.
+// Kept local rather than in format.ts because nothing else needs it yet.
 function hostname(url: string | null | undefined): string | null {
   if (!url) return null;
   try {
-    return new URL(url).host.toLowerCase();
+    const host = new URL(url).hostname.toLowerCase();
+    return host.startsWith("www.") ? host.slice(4) : host;
   } catch {
     return null;
   }
+}
+
+/**
+ * Derives a compact provenance label for a funding figure given the source URL
+ * and the company's own website. Returns "Company-stated" when the source host
+ * matches the company's own domain (self-reported), or "via {host}" when it
+ * comes from an independent article. Returns null when no source URL exists.
+ */
+function provenanceLabel(
+  sourceUrl: string | null | undefined,
+  companyWebsite: string | null | undefined,
+): { label: string; isOwn: boolean } | null {
+  const srcHost = hostname(sourceUrl);
+  if (!srcHost) return null;
+  const coHost = hostname(companyWebsite);
+  const isOwn = coHost !== null && srcHost === coHost;
+  return { label: isOwn ? "Company-stated" : `via ${srcHost}`, isOwn };
 }
 
 const EM_DASH = "—";
@@ -34,9 +52,12 @@ function joinOthers(names: string[]): string {
 
 interface Props {
   rounds: FundingRoundWithInvestors[];
+  /** The company's own website URL — used to distinguish self-reported figures
+   *  from independently-reported ones (journalism vs company IR page). */
+  companyWebsite: string | null;
 }
 
-export function FundingHistory({ rounds }: Props) {
+export function FundingHistory({ rounds, companyWebsite }: Props) {
   return (
     <section className="mb-12">
       <h2 className="text-lg font-semibold text-ink mb-4">Funding History</h2>
@@ -58,7 +79,6 @@ export function FundingHistory({ rounds }: Props) {
             </thead>
             <tbody>
               {rounds.map((round) => {
-                const sourceHost = hostname(round.primary_news_url);
                 return (
                   <tr
                     key={round.id}
@@ -110,19 +130,33 @@ export function FundingHistory({ rounds }: Props) {
                     </td>
                     <td className="py-3 pr-6 text-ink-soft">
                       <div>{joinNames(round.leadInvestors)}</div>
-                      {sourceHost && round.primary_news_url && (
-                        <div className="mt-1 text-xs text-ink-muted">
-                          via{" "}
-                          <a
-                            href={round.primary_news_url}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="underline underline-offset-2 hover:text-ink-soft"
-                          >
-                            {sourceHost}
-                          </a>
-                        </div>
-                      )}
+                      {round.primary_news_url && (() => {
+                        const prov = provenanceLabel(round.primary_news_url, companyWebsite);
+                        if (!prov) return null;
+                        // srcHost is guaranteed non-null when prov is non-null
+                        const srcHost = hostname(round.primary_news_url)!;
+                        return (
+                          <div className="mt-1 text-xs text-ink-muted">
+                            {prov.isOwn ? (
+                              <span title="Figure reported on the company's own website">
+                                Company-stated
+                              </span>
+                            ) : (
+                              <>
+                                via{" "}
+                                <a
+                                  href={round.primary_news_url}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="underline underline-offset-2 hover:text-ink-soft"
+                                >
+                                  {srcHost}
+                                </a>
+                              </>
+                            )}
+                          </div>
+                        );
+                      })()}
                     </td>
                     <td className="py-3 text-ink-soft">
                       {joinOthers(round.otherInvestors)}
