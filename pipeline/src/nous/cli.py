@@ -964,6 +964,44 @@ def repair_catalog(dry_run: bool) -> None:
     asyncio.run(_run())
 
 
+@cli.command("repair-wrong-websites")
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    default=False,
+    help="Log intended repairs without writing.",
+)
+def repair_wrong_websites(dry_run: bool) -> None:
+    """Repair rows poisoned by the pre-hardening homepage resolver.
+
+    Three passes (all idempotent — a second run is a no-op):
+
+    \b
+    (a) company.website host is in the aggregator/directory reject set
+        → append bad URL to rejected_urls, clear website + enrichment fields,
+          drop stale raw_pages so resolve→scrape→enrich restart cleanly.
+
+    (b) company.description_short contains for-sale / parked prose
+        → same clear action as (a).
+
+    (c) exclusion_reason IN ('not_a_startup','non_us') with exclusion_detail
+        referencing "personal homepage" or a wrong-site phrase
+        → clear exclusion + eligibility_checked_at so judge-eligibility
+          re-judges from the corrected site.
+    """
+    import asyncio
+
+    from nous.db.session import AsyncSessionLocal
+    from nous.pipeline.repair_wrong_websites import run_repair_wrong_websites
+
+    async def _run() -> None:
+        async with AsyncSessionLocal() as session:
+            summary = await run_repair_wrong_websites(session, dry_run=dry_run)
+            click.echo(summary.model_dump_json(indent=2))
+
+    asyncio.run(_run())
+
+
 @cli.command("exclude-company")
 @click.argument("slug")
 @click.option(
@@ -992,6 +1030,26 @@ def exclude_company(slug: str, reason: str, detail: str | None, clear: bool) -> 
             result = await run_exclude_company(
                 session, slug=slug, reason=reason, detail=detail, clear=clear
             )
+            click.echo(result.model_dump_json(indent=2))
+
+    asyncio.run(_run())
+
+
+@cli.command("unexclude-company")
+@click.argument("slug")
+def unexclude_company(slug: str) -> None:
+    """Re-include a company by clearing its exclusion (alias for exclude-company --clear).
+
+    Example: unexclude-company abnormal-security
+    """
+    import asyncio
+
+    from nous.db.session import AsyncSessionLocal
+    from nous.pipeline.exclude_company import run_exclude_company
+
+    async def _run() -> None:
+        async with AsyncSessionLocal() as session:
+            result = await run_exclude_company(session, slug=slug, clear=True)
             click.echo(result.model_dump_json(indent=2))
 
     asyncio.run(_run())
