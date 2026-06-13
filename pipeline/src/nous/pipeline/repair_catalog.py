@@ -1,6 +1,6 @@
 """repair-catalog pipeline stage — one-time data repair, idempotent.
 
-Two repairs (spec 2026-06-12 §3):
+Three repairs (spec 2026-06-12 §3; placeholder-name guard added 2026-06-13):
 
 1. Lightspeed badge-suffix names ("...LSVP and LSIP Investment" /
    "...LSIP Investment", 96 prod rows): strip the suffix; LSIP-only rows are
@@ -14,9 +14,19 @@ Two repairs (spec 2026-06-12 §3):
    cleared, the bad URL recorded in rejected_urls, and their raw_pages
    dropped, so resolve/scrape/enrich start over cleanly.
 
+3. Placeholder names (e.g. "[untitled]", empty): rows whose name matches
+   ``^\\[.*\\]$`` or is empty after stripping. Repair strategy:
+   - If the row has a website, derive a display name from its domain apex
+     (e.g. "untitled.stream" → "Untitled"). Re-slug and re-normalize in place.
+   - If no website and no derivable name, soft-exclude as 'manual' so the row
+     leaves all catalog listings without being deleted (preserves any accrued
+     data for future manual resolution).
+   The adapters now reject these entries at ingest time, so Pass 3 is a
+   one-shot back-fill for the single prod row that already exists.
+
 Idempotent: pass 1 leaves no suffixed names; pass 2 clears the descriptions
-it matches on. A second run selects nothing. ``--dry-run`` logs intended
-actions without writing.
+it matches on; pass 3 renames/excludes placeholder rows. A second run selects
+nothing. ``--dry-run`` logs intended actions without writing.
 """
 
 from __future__ import annotations
@@ -35,7 +45,9 @@ from nous.db.models import Company, FundingRound, NewsArticle, RawPage
 # shared with this one-time stage rather than duplicated. A future refactor of
 # upsert.py should know these names have an external caller.
 from nous.db.upsert import _build_slug, _find_by_normalized_name, merge_companies
+from nous.sources.vc_portfolios.base import is_placeholder_name
 from nous.util.slugify import normalize_name
+from nous.util.url import hostname
 
 logger = logging.getLogger(__name__)
 
@@ -63,7 +75,35 @@ class RepairSummary(BaseModel):
     lsip_deleted: int = 0
     lsip_excluded: int = 0
     parked_reset: int = 0
+    placeholder_renamed: int = 0
+    placeholder_excluded: int = 0
     dry_run: bool = False
+
+
+def _domain_to_display_name(website: str) -> str | None:
+    """Derive a human-readable company name from a website domain.
+
+    Strategy: strip ``www.``, take the part before the first dot (the apex/
+    SLD label), title-case it.  Returns None when the result is empty or would
+    itself be a placeholder.
+
+    Examples:
+        "https://untitled.stream/"  → "Untitled"
+        "https://www.acme.io/"     → "Acme"
+        "https://sub.acme.co.uk/"  → "Sub"   (takes only the leftmost label)
+    """
+    host = hostname(website)  # strips www., lowercases
+    if not host:
+        return None
+    apex_label = host.split(".")[0]
+    if not apex_label:
+        return None
+    candidate = apex_label.replace("-", " ").replace("_", " ").title()
+    # If the derived name is itself a placeholder, return None so we fall
+    # through to the soft-exclude path.
+    if is_placeholder_name(candidate):
+        return None
+    return candidate
 
 
 async def _company_has_funding(session: AsyncSession, company_id: UUID) -> bool:
@@ -206,6 +246,78 @@ async def run_repair_catalog(
             delete(RawPage).where(RawPage.company_id == company.id)
         )
         session.add(company)
+
+    if not dry_run:
+        await session.commit()
+
+    # ── Pass 3: placeholder company names ────────────────────────────────────
+    # Select rows whose name matches ^\[.*\]$ or is empty / whitespace-only.
+    # The LIKE '%[%]%' pre-filter is an indexed approximation; the is_placeholder_name
+    # Python check is the authoritative gate so false-positives (e.g. "Acme [NY]")
+    # are never touched.
+    #
+    # We use two separate queries (bracketed vs. empty-ish) and union their
+    # results in Python so the SQL stays readable and doesn't require a regex
+    # extension.  Both patterns are cheap exact/LIKE lookups.
+    bracketed_rows = (
+        (
+            await session.execute(
+                select(Company).where(Company.name.like("[%]"))
+            )
+        )
+        .scalars()
+        .all()
+    )
+    # Empty / whitespace-only names are pathological but defend against them.
+    empty_rows = (
+        (
+            await session.execute(
+                select(Company).where(Company.name == "")
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+    placeholder_rows: list[Company] = [
+        c
+        for c in {*bracketed_rows, *empty_rows}
+        if is_placeholder_name(c.name)
+    ]
+
+    for company in placeholder_rows:
+        derived_name: str | None = None
+        if company.website:
+            derived_name = _domain_to_display_name(company.website)
+
+        if derived_name:
+            logger.info(
+                "repair: renaming placeholder %r -> %r (website %s)",
+                company.name,
+                derived_name,
+                company.website,
+            )
+            summary.placeholder_renamed += 1
+            if not dry_run:
+                await _rename(session, company, derived_name)
+                session.add(company)
+        else:
+            # No website or no derivable name — soft-exclude so the row
+            # disappears from all catalog views without losing accrued data.
+            logger.info(
+                "repair: soft-excluding un-nameable placeholder %r (website %s)",
+                company.name,
+                company.website,
+            )
+            summary.placeholder_excluded += 1
+            if not dry_run:
+                company.exclusion_reason = "manual"
+                company.exclusion_detail = (
+                    "Placeholder company name — no usable name derivable; "
+                    "manually review and rename or delete."
+                )
+                company.excluded_at = now
+                session.add(company)
 
     if not dry_run:
         await session.commit()

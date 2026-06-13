@@ -13,7 +13,7 @@ import logging
 import re
 
 from nous.sources.homepage import HomepageClient
-from nous.sources.vc_portfolios.base import PortfolioEntry
+from nous.sources.vc_portfolios.base import PortfolioEntry, is_placeholder_name
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +40,18 @@ class A16zAdapter:
             if not isinstance(company, dict):
                 continue
             name = company.get("title")
-            if not isinstance(name, str) or not name.strip():
+            if not isinstance(name, str) or is_placeholder_name(name):
+                # Skip entries with missing, empty, or bracketed placeholder names
+                # (e.g. "[untitled]" for stealth-mode companies). The real company
+                # is untitled.stream; its a16z JSON entry carries "[untitled]" as
+                # the literal title value because its legal name is intentionally
+                # withheld. Storing that verbatim corrupts the catalog.
+                if isinstance(name, str) and name.strip():
+                    logger.debug(
+                        "a16z: skipping entry with placeholder name %r (web=%s)",
+                        name,
+                        company.get("web"),
+                    )
                 continue
             web = company.get("web")
             website: str | None = web if isinstance(web, str) and web.strip() else None
