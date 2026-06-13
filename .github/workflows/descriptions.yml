@@ -123,6 +123,17 @@ jobs:
       - name: Apply migrations
         run: uv run alembic upgrade head
 
+      - name: Repair catalog (idempotent; no-op after first run)
+        id: repair
+        timeout-minutes: 15
+        continue-on-error: true
+        # One-time data repair: strips Lightspeed fund-badge text from names,
+        # drops/excludes India-only holdings, resets parked-domain enrichments.
+        # Idempotent, so leaving it in the daily run is harmless — it selects
+        # nothing once the backlog is clean. Runs right after migrations so the
+        # exclusion columns exist before any stage reads them.
+        run: uv run nous repair-catalog
+
       # Every stage below is continue-on-error + step-timeout'd so one stage
       # failing or hanging never blocks the later ones — the original failure
       # mode was enrich never being reached because resolve ate the whole job.
@@ -168,6 +179,16 @@ jobs:
           LIMIT="${{ inputs.enrich_limit }}"
           if [ -z "$LIMIT" ]; then LIMIT=250; fi
           uv run nous enrich-companies --limit "$LIMIT"
+
+      - name: Judge eligibility (backfill; drains at 200/day then no-ops)
+        id: judge
+        timeout-minutes: 30
+        continue-on-error: true
+        # Backfills the is-this-a-startup / non-US judgment onto companies
+        # enriched before that judgment existed (~1,600 one-time DeepSeek calls
+        # at --limit 200/day). Each judged row is stamped, so steady state
+        # selects nothing.
+        run: uv run nous judge-eligibility --limit 200
 
       - name: Database stats
         # No step id — contains(steps.*.outcome, ...) on the Trigger step only

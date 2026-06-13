@@ -19,7 +19,9 @@ You are the user's CTO partner on this project. The user owns product direction;
 - Postgres 15 on Supabase free tier
 - SQLAlchemy 2.x (async) + Alembic
 - Next.js 16 App Router, React 19, TypeScript strict, Tailwind v4
-- Google Gemini 2.5 Flash (free tier) for LLM extraction
+- DeepSeek (`deepseek-chat`, OpenAI-compatible API) for LLM extraction — paid;
+  replaced Gemini, whose free tier (20 RPD) was too low for bulk enrichment
+  (see `nous-technical-spec.md` §3)
 - GitHub Actions for cron
 
 ## Build and verify commands

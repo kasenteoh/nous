@@ -108,7 +108,7 @@ In `resolve_homepage()`, before the name-mention acceptance check:
 ### 5. Enrichment: structured signals instead of prose
 
 `CompanyDescription` (`pipeline/src/nous/llm/prompts/company_description.py`)
-gains fields, all riding the existing Gemini call (no new LLM cost):
+gains fields, all riding the existing enrichment LLM call (DeepSeek; no new LLM cost):
 
 - `website_state`: required enum — `ok | parked_or_for_sale | under_construction |
   unrelated_site | insufficient_info`.
@@ -136,8 +136,8 @@ Pipeline reactions in `enrich_companies.py`:
 **Backfill:** a `judge-eligibility` stage runs only the eligibility judgment over
 already-enriched companies (`description_short IS NOT NULL AND
 eligibility_checked_at IS NULL`, ~1,600 rows) from their stored `raw_pages` text,
-throttled to fit Gemini free-tier daily limits (spread over a few days; resumable
-because progress is tracked by `eligibility_checked_at`).
+bounded by `--limit 200` per daily run on DeepSeek (~1,600 one-time calls ≈ $1–3;
+resumable because progress is tracked by `eligibility_checked_at`).
 
 ### 6. Pipeline stages skip excluded rows
 
@@ -200,4 +200,4 @@ as the judgment lands.
 - Exact lsvp.com badge selector and fixture capture.
 - Contents of the parked-indicator list.
 - How the repair stage reuses `dedup_companies` merge mechanics.
-- Backfill throttle numbers against current Gemini free-tier usage.
+- Backfill throttle numbers against current DeepSeek spend.
