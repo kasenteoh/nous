@@ -263,7 +263,10 @@ async def auto_create_company(
       wins (Open Question §6 in the M3 plan).
 
     Behavior on insert:
-    - hq_country defaults to "US"
+    - hq_country is left NULL until evidenced (ccTLD inference or an explicit
+      LLM country statement during enrich-companies / judge-eligibility). The
+      old "US" default was silently masking non-US companies — Fresha, Meesho,
+      NOTHS, etc. all appeared as US and the non_us filter never fired.
     - slug is built via _build_slug, with disambiguation via a deterministic
       sha256-seeded suffix (first 6 hex chars of sha256(name + website)) when
       the base slug is already taken
@@ -295,7 +298,10 @@ async def auto_create_company(
         name=name,
         slug=slug,
         normalized_name=norm,
-        hq_country="US",
+        # hq_country intentionally omitted — stays NULL until evidenced by
+        # ccTLD inference or an explicit LLM statement (enrich-companies /
+        # judge-eligibility). The old hq_country="US" default masked every
+        # foreign company as US; the non_us exclusion filter never fired.
         website=website,
         discovered_via=discovered_via,
     )

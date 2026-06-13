@@ -110,9 +110,12 @@ class CompanyDescription(BaseModel):
     hq_country: str | None = Field(
         default=None,
         description=(
-            "Headquarters country as a 2-letter ISO code (e.g. 'US', 'IN', "
-            "'GB') ONLY when the text clearly states it. Null otherwise — "
-            "never guess."
+            "Headquarters country as a 2-letter ISO code (e.g. 'US', 'IN', 'GB'). "
+            "Set this when the text CLEARLY implies a country — a formal HQ line, "
+            "an address, 'UK-based', 'headquartered in Bangalore', a non-US city "
+            "name, or similar. You do NOT need an explicit 'HQ:' line; a clear "
+            "implication is enough. Null when the text is ambiguous or silent on "
+            "location — never invent a country you don't see."
         ),
     )
 
@@ -159,8 +162,12 @@ Rules:
   does not support a confident call, return null. Never guess.
 - `not_startup_reason`: one short factual sentence, only when is_startup is
   false (e.g. "Founded in 2000; publicly traded enterprise").
-- `founded_year` / `hq_country`: only when the text states them. `hq_country`
-  is a 2-letter ISO code. Null otherwise — never fabricate.
+- `founded_year`: only when the text states it. Null otherwise — never fabricate.
+- `hq_country`: a 2-letter ISO code (e.g. 'US', 'IN', 'GB'). Set this when
+  the text CLEARLY implies a country — a formal HQ line, an address, 'UK-based',
+  'headquartered in Bangalore', a recognisable non-US city, or similar. You do
+  NOT need an explicit "HQ:" field; a clear implication is sufficient. Null when
+  the text is ambiguous or silent on country — never invent a value you don't see.
 
 Company name: {company_name}
 
