@@ -38,7 +38,11 @@ class Competitor(BaseModel):
     name: str = Field(..., min_length=1)
     description: str = Field(..., min_length=1)
     reasoning: str = Field(..., min_length=1)
-    rank: int = Field(..., ge=1, le=MAX_COMPETITORS)
+    # The LLM's rank is only an ordering hint; CompetitorAnalysis renumbers it to
+    # a contiguous 1..N. Unbounded + optional (defaults to sort-last) so a single
+    # gapped / offset / omitted rank never sinks the whole analysis — DeepSeek
+    # routinely returns ranks like [2, 3, 4, 5, 6] or [6].
+    rank: int = MAX_COMPETITORS + 1
 
 
 class CompetitorAnalysis(BaseModel):
@@ -47,16 +51,22 @@ class CompetitorAnalysis(BaseModel):
     )
 
     @model_validator(mode="after")
-    def _ranks_must_be_one_through_n(self) -> CompetitorAnalysis:
-        # Sort by rank so out-of-order LLM responses don't get falsely rejected.
-        # The stage iterates the list in order to write rank=rank to the DB.
+    def _renumber_ranks(self) -> CompetitorAnalysis:
+        # Renumber to a contiguous 1..N by the model's rank order (stable sort,
+        # so ties keep input order). The stage writes these to competitors.rank,
+        # whose UNIQUE(company_id, rank) requires them distinct — renumbering
+        # guarantees that for ANY LLM output.
+        #
+        # This REPLACES a strict validator that *rejected* gapped/offset ranks.
+        # Because DeepSeek almost never returns a clean 1..N (it offsets the
+        # start or leaves gaps), that rejection failed validation on nearly every
+        # response — even after the client's one retry — so analyze-competitors
+        # silently dropped competitors for essentially every company and the
+        # competitors table sat empty. Renumbering preserves the model's ordering
+        # while making any non-empty response writable.
         self.competitors.sort(key=lambda c: c.rank)
-        ranks = [c.rank for c in self.competitors]
-        expected = list(range(1, len(ranks) + 1))
-        if ranks != expected:
-            raise ValueError(
-                f"ranks must be 1..N with no gaps or duplicates; got {ranks}"
-            )
+        for new_rank, competitor in enumerate(self.competitors, start=1):
+            competitor.rank = new_rank
         return self
 
 

@@ -61,33 +61,61 @@ def test_more_than_six_competitors_rejected() -> None:
         )
 
 
-def test_duplicate_ranks_rejected() -> None:
-    with pytest.raises(ValidationError):
-        CompetitorAnalysis(
-            competitors=[
-                Competitor(name="A", description="d", reasoning="r", rank=1),
-                Competitor(name="B", description="d", reasoning="r", rank=1),
-            ]
-        )
+def test_duplicate_ranks_are_renumbered() -> None:
+    # Renumbered (stable), not rejected — the DB only needs distinct ranks.
+    ca = CompetitorAnalysis(
+        competitors=[
+            Competitor(name="A", description="d", reasoning="r", rank=1),
+            Competitor(name="B", description="d", reasoning="r", rank=1),
+        ]
+    )
+    assert [c.rank for c in ca.competitors] == [1, 2]
+    assert [c.name for c in ca.competitors] == ["A", "B"]  # input order preserved
 
 
-def test_gap_in_ranks_rejected() -> None:
-    with pytest.raises(ValidationError):
-        CompetitorAnalysis(
-            competitors=[
-                Competitor(name="A", description="d", reasoning="r", rank=1),
-                Competitor(name="B", description="d", reasoning="r", rank=3),
-            ]
-        )
+def test_gapped_ranks_are_renumbered() -> None:
+    ca = CompetitorAnalysis(
+        competitors=[
+            Competitor(name="A", description="d", reasoning="r", rank=1),
+            Competitor(name="B", description="d", reasoning="r", rank=3),
+        ]
+    )
+    assert [c.rank for c in ca.competitors] == [1, 2]
+    assert [c.name for c in ca.competitors] == ["A", "B"]
 
 
-def test_rank_starting_above_one_rejected() -> None:
-    with pytest.raises(ValidationError):
-        CompetitorAnalysis(
-            competitors=[
-                Competitor(name="A", description="d", reasoning="r", rank=2),
-            ]
-        )
+def test_offset_ranks_are_renumbered() -> None:
+    # DeepSeek's most common real shape (observed in prod): ranks that don't
+    # start at 1. Previously rejected → every company silently dropped.
+    ca = CompetitorAnalysis(
+        competitors=[
+            Competitor(name=f"C{r}", description="d", reasoning="r", rank=r)
+            for r in (2, 3, 4, 5, 6)
+        ]
+    )
+    assert [c.rank for c in ca.competitors] == [1, 2, 3, 4, 5]
+    assert [c.name for c in ca.competitors] == ["C2", "C3", "C4", "C5", "C6"]
+
+
+def test_single_competitor_with_offset_rank_is_renumbered() -> None:
+    # The other observed shape: a lone competitor at rank 6.
+    ca = CompetitorAnalysis(
+        competitors=[Competitor(name="Solo", description="d", reasoning="r", rank=6)]
+    )
+    assert [c.rank for c in ca.competitors] == [1]
+
+
+def test_omitted_rank_defaults_and_renumbers() -> None:
+    # A competitor with no rank at all must not sink the response; it sorts last
+    # and is renumbered after the ranked ones.
+    ca = CompetitorAnalysis(
+        competitors=[
+            Competitor(name="Ranked", description="d", reasoning="r", rank=1),
+            Competitor(name="Unranked", description="d", reasoning="r"),
+        ]
+    )
+    assert [c.rank for c in ca.competitors] == [1, 2]
+    assert [c.name for c in ca.competitors] == ["Ranked", "Unranked"]
 
 
 def test_empty_name_rejected() -> None:
@@ -95,14 +123,21 @@ def test_empty_name_rejected() -> None:
         Competitor(name="", description="d", reasoning="r", rank=1)
 
 
-def test_rank_above_six_rejected() -> None:
-    with pytest.raises(ValidationError):
-        Competitor(name="A", description="d", reasoning="r", rank=7)
-
-
-def test_rank_zero_rejected() -> None:
-    with pytest.raises(ValidationError):
-        Competitor(name="A", description="d", reasoning="r", rank=0)
+def test_out_of_range_ranks_accepted_and_renumbered() -> None:
+    # rank is an unbounded ordering hint now: 0 / >MAX are fine at the field
+    # level and get renumbered to a contiguous 1..N by CompetitorAnalysis. (The
+    # old ge=1/le=MAX field bounds rejected DeepSeek's real output and emptied
+    # the competitors table.)
+    assert Competitor(name="A", description="d", reasoning="r", rank=0).rank == 0
+    assert Competitor(name="A", description="d", reasoning="r", rank=99).rank == 99
+    ca = CompetitorAnalysis(
+        competitors=[
+            Competitor(name="Zero", description="d", reasoning="r", rank=0),
+            Competitor(name="Big", description="d", reasoning="r", rank=99),
+        ]
+    )
+    assert [c.rank for c in ca.competitors] == [1, 2]
+    assert [c.name for c in ca.competitors] == ["Zero", "Big"]  # 0 < 99 → order
 
 
 # ---------------------------------------------------------------------------
