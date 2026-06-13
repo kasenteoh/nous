@@ -4,7 +4,12 @@ export const revalidate = 21600;
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { getCompanyBySlug, getInvestorNameToSlugMap } from "@/lib/queries";
+import {
+  getAlsoBackedBy,
+  getCompanyBySlug,
+  getInvestorNameToSlugMap,
+  getRelatedCompanies,
+} from "@/lib/queries";
 import type { CompanyRow } from "@/lib/types";
 import {
   formatDate,
@@ -19,6 +24,7 @@ import { Team } from "@/components/Team";
 import { FundingHistory } from "@/components/FundingHistory";
 import { Investors } from "@/components/Investors";
 import { Competitors } from "@/components/Competitors";
+import { RelatedCompanies } from "@/components/RelatedCompanies";
 import { News } from "@/components/News";
 
 // At or above this many consecutive failed homepage scrapes, the detail page
@@ -141,6 +147,15 @@ export default async function CompanyPage({ params }: Props) {
   }
 
   const { company, people, fundingRounds, competitors, investors, news } = detail;
+
+  // Relationship-graph fetches depend on the resolved company id, so they run
+  // after getCompanyBySlug — but in parallel with each other (same idiom as the
+  // detail fan-out). Both degrade to [] on missing env / error, so the section
+  // simply renders nothing when there's no graph data yet.
+  const [similar, alsoBackedBy] = await Promise.all([
+    getRelatedCompanies(company.id),
+    getAlsoBackedBy(company.id),
+  ]);
 
   // ── M3 key-facts derivations ──────────────────────────────────────────────
   // Hybrid "total raised": computed = sum of non-null amount_raised across all
@@ -390,6 +405,9 @@ export default async function CompanyPage({ params }: Props) {
 
       {/* ── Competitors (M4) ───────────────────────────────────────────── */}
       <Competitors competitors={competitors} />
+
+      {/* ── Related companies (relationship graph) ─────────────────────── */}
+      <RelatedCompanies similar={similar} alsoBackedBy={alsoBackedBy} />
 
       {/* ── News ───────────────────────────────────────────────────────── */}
       <News news={news} />
