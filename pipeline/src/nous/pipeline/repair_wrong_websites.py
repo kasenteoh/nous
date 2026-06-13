@@ -1,6 +1,6 @@
 """repair-wrong-websites pipeline stage — idempotent poisoned-row repair.
 
-Three detection passes (spec 2026-06-13 Task 2.2):
+Four detection passes (spec 2026-06-13 Task 2.2):
 
 (a) Aggregator/directory URL: company.website host is in the shared
     AGGREGATOR_HOSTS reject set (or matches DIRECTORY_PATH_RE).  These were
@@ -19,7 +19,15 @@ Three detection passes (spec 2026-06-13 Task 2.2):
     resolver pointed them at an unrelated business.  Clearing the exclusion +
     eligibility timestamps lets judge-eligibility re-judge from a correct site.
 
-Repair action for (a)/(b):
+(d) For-sale / parked PAGE content: the LLM sometimes narrates a for-sale
+    lander as a real company, so the description escapes pass (b) (Foodology:
+    "...a culinary content platform ... based on a site that is currently for
+    sale", while the scraped page begins "foodology.com is for sale").  Pass (d)
+    re-judges the stored RawPage.content — the extracted text IS still on record
+    — with the same hardened nous.sources.parked detector the resolver uses, and
+    resets live (non-excluded) rows exactly as (a)/(b) do.
+
+Repair action for (a)/(b)/(d):
     - Append bad URL to rejected_urls (so the hardened resolver never re-picks it)
     - Clear: website, website_resolved_at, description_short, description_long,
       primary_category, tags, last_enriched_at, last_enriched_payload,
@@ -36,6 +44,7 @@ Idempotency:
     - (a): after repair, website IS NULL → no longer selected
     - (b): after repair, description_short IS NULL → no longer selected
     - (c): after repair, exclusion_reason IS NULL → no longer selected
+    - (d): after repair, website IS NULL + raw_pages dropped → no longer selected
 
 ``--dry-run`` logs intended actions without writing.
 """
@@ -47,11 +56,13 @@ import re
 from datetime import UTC, datetime
 
 from pydantic import BaseModel
-from sqlalchemy import delete, or_, select
+from sqlalchemy import delete, exists, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from nous.db.models import Company, RawPage
+from nous.sources.parked import text_looks_parked
 from nous.sources.reject_hosts import is_aggregator_url
+from nous.util.url import canonical_domain
 
 logger = logging.getLogger(__name__)
 
@@ -94,6 +105,29 @@ _PARKED_DESC_RE: re.Pattern[str] = re.compile(
     re.IGNORECASE | re.VERBOSE,
 )
 
+# ── (d) page-content tokens ────────────────────────────────────────────────
+# Pass (b) keys on the LLM description, which the model sometimes writes with no
+# domain-sale wording at all even when the page is a lander (Foodology: "...a
+# culinary content platform ... based on a site that is currently for sale" —
+# "site that is" misses pass (b)'s "site is for sale" regex). Pass (d) re-judges
+# the stored RawPage.content (ground truth) with the same hardened detector the
+# resolver uses (nous.sources.parked.text_looks_parked). These SQL ILIKE tokens
+# are a coarse pre-filter — every page that could trip text_looks_parked contains
+# one, so over-selection is harmless (Python re-confirms), but the set MUST stay a
+# superset of every parked.py trigger (the <host>-for-sale regex, the sale
+# phrases, and the marketplace-brand sale-intent words).
+_PAGE_CONTENT_SQL_TOKENS: tuple[str, ...] = (
+    "for sale",
+    "parked",
+    "parking",
+    "marketplace",
+    "this domain",
+    "available for purchase",
+    "buy now",
+    "make an offer",
+    "make offer",
+)
+
 # ── (c) false-exclusion detail patterns ────────────────────────────────────
 # Match exclusion_detail text that references the known mis-exclusion reasons:
 # "personal homepage" or a wrong-site phrase.
@@ -113,6 +147,7 @@ _FALSE_EXCL_REASONS: tuple[str, ...] = ("not_a_startup", "non_us")
 class RepairWrongWebsitesSummary(BaseModel):
     aggregator_url_reset: int = 0
     parked_desc_reset: int = 0
+    page_content_reset: int = 0
     false_exclusion_requeued: int = 0
     dry_run: bool = False
 
@@ -234,7 +269,84 @@ async def run_repair_wrong_websites(
     if not dry_run:
         await session.commit()
 
+    # ── Pass (d): for-sale / parked PAGE content ─────────────────────────────
+    # The scraped page is ground truth. Only live rows (no exclusion) are reset,
+    # so they re-enter resolve→scrape→enrich with the hardened resolver; excluded
+    # for-sale rows are already hidden and left to pass (c) / judge-eligibility.
+    page_candidates = (
+        (
+            await session.execute(
+                select(Company)
+                .where(Company.website.is_not(None))
+                .where(Company.exclusion_reason.is_(None))
+                .where(
+                    exists().where(
+                        RawPage.company_id == Company.id,
+                        or_(
+                            *[
+                                RawPage.content.ilike(f"%{token}%")
+                                for token in _PAGE_CONTENT_SQL_TOKENS
+                            ]
+                        ),
+                    )
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+    for company in page_candidates:
+        page = await _homepage_page(session, company)
+        if page is None or not text_looks_parked(page.content):
+            # SQL token pre-filter was too broad; the precise detector doesn't
+            # confirm the company's own homepage is a lander — skip.
+            continue
+        logger.info(
+            "repair-wrong-websites (d): resetting for-sale lander %r "
+            "(website %s; page %s)",
+            company.name,
+            company.website,
+            page.url,
+        )
+        summary.page_content_reset += 1
+        if not dry_run:
+            await _reset_website_fields(session, company, now)
+
+    if not dry_run:
+        await session.commit()
+
     return summary
+
+
+async def _homepage_page(session: AsyncSession, company: Company) -> RawPage | None:
+    """Return the scraped page for the company's own homepage host, else newest.
+
+    A company can have several raw_pages (the scraper fetches /, /about, ...).
+    Judge only the page served from the resolved website's host so a for-sale
+    phrase on a linked sub-resource cannot reset a real company; fall back to the
+    most recent page when the host cannot be matched (e.g. a shared-hosting
+    website, where ``canonical_domain`` returns None by design).
+    """
+    pages = (
+        (
+            await session.execute(
+                select(RawPage)
+                .where(RawPage.company_id == company.id)
+                .order_by(RawPage.fetched_at.desc())
+            )
+        )
+        .scalars()
+        .all()
+    )
+    if not pages:
+        return None
+    site_domain = canonical_domain(company.website)
+    if site_domain is not None:
+        for page in pages:
+            if canonical_domain(page.url) == site_domain:
+                return page
+    return pages[0]
 
 
 async def _reset_website_fields(

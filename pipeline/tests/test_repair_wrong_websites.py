@@ -418,3 +418,114 @@ async def test_dry_run_writes_nothing(db: AsyncSession) -> None:
     assert co_b.description_short is not None
     await db.refresh(co_c)
     assert co_c.exclusion_reason == "non_us"
+
+
+# ── Pass (d): for-sale / parked PAGE content ─────────────────────────────────
+
+
+async def test_for_sale_page_content_cleared(db: AsyncSession) -> None:
+    """The real Foodology shape: the LLM narrated a for-sale lander as a real
+    'culinary content platform', so the description escapes pass (b) — but the
+    scraped page literally says '<host> is for sale'. Pass (d) re-judges the
+    page content (ground truth) and resets the row."""
+    lander = _co(
+        "Foodology",
+        "foodology-rww-d",
+        website="https://foodology.com",
+        description_short=(
+            "Foodology is a culinary content platform exploring global "
+            "traditions, based on a site that is currently for sale."
+        ),
+        description_long="A culinary content platform.",
+        primary_category="content",
+    )
+    db.add(lander)
+    await db.flush()
+    db.add(
+        RawPage(
+            company_id=lander.id,
+            url="https://foodology.com/",
+            content=(
+                "foodology.com is for sale.\n\nExploring Culinary Delights with "
+                "Foodology\n\nDiscovering Global Culinary Traditions."
+            ),
+        )
+    )
+    await db.commit()
+
+    summary = await run_repair_wrong_websites(db)
+
+    await db.refresh(lander)
+    assert lander.website is None
+    assert lander.description_short is None
+    assert lander.description_long is None
+    assert "https://foodology.com" in lander.rejected_urls
+    assert (
+        (await db.execute(select(RawPage).where(RawPage.company_id == lander.id)))
+        .scalars()
+        .all()
+        == []
+    )
+    # description "...a site that is currently for sale" does NOT match pass (b)'s
+    # regex (which needs "site is for sale"); pass (d) is what caught it.
+    assert summary.parked_desc_reset == 0
+    assert summary.page_content_reset == 1
+
+
+async def test_for_sale_page_content_ignores_real_company(db: AsyncSession) -> None:
+    """A real company whose homepage copy mentions selling is NOT reset by (d)."""
+    real = _co(
+        "SellRaze",
+        "sellraze-rww-d",
+        website="https://sellraze.com",
+        description_short="SellRaze lists your items for sale across marketplaces.",
+    )
+    db.add(real)
+    await db.flush()
+    db.add(
+        RawPage(
+            company_id=real.id,
+            url="https://sellraze.com/",
+            content=(
+                "SellRaze | The fastest way to sell your stuff\n"
+                "List items for sale across every marketplace."
+            ),
+        )
+    )
+    await db.commit()
+
+    summary = await run_repair_wrong_websites(db)
+    assert summary.page_content_reset == 0
+    await db.refresh(real)
+    assert real.website == "https://sellraze.com"
+    assert real.description_short is not None
+
+
+async def test_idempotent_page_content(db: AsyncSession) -> None:
+    """Second run after pass (d) repair finds nothing to fix."""
+    lander = _co(
+        "Citadel AI Lander",
+        "citadel-ai-lander",
+        website="https://citadel.ai",
+        description_short="Citadel offers AI tooling for enterprises.",
+    )
+    db.add(lander)
+    await db.flush()
+    db.add(
+        RawPage(
+            company_id=lander.id,
+            url="https://citadel.ai/",
+            content=(
+                "citadel.ai for sale | Spaceship.com\n"
+                "citadel.ai is for sale on Spaceship. Secure checkout and transfer."
+            ),
+        )
+    )
+    await db.commit()
+
+    first = await run_repair_wrong_websites(db)
+    assert first.page_content_reset == 1
+    second = await run_repair_wrong_websites(db)
+    assert second.page_content_reset == 0
+    assert second.aggregator_url_reset == 0
+    assert second.parked_desc_reset == 0
