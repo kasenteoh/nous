@@ -136,8 +136,9 @@ Pipeline reactions in `enrich_companies.py`:
 **Backfill:** a `judge-eligibility` stage runs only the eligibility judgment over
 already-enriched companies (`description_short IS NOT NULL AND
 eligibility_checked_at IS NULL`, ~1,600 rows) from their stored `raw_pages` text,
-bounded by `--limit 200` per daily run on DeepSeek (~1,600 one-time calls ≈ $1–3;
-resumable because progress is tracked by `eligibility_checked_at`).
+bounded by a small per-run `--limit` on DeepSeek (~1,600 one-time calls ≈ $1–3,
+draining over a couple of weeks at the pipeline's 10×/day cadence; resumable
+because progress is tracked by `eligibility_checked_at`).
 
 ### 6. Pipeline stages skip excluded rows
 

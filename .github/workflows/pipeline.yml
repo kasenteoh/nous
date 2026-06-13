@@ -1,0 +1,301 @@
+name: pipeline
+
+# Consolidated scraping pipeline — funding news + company descriptions — run
+# 10x/day. Replaces the separate daily descriptions.yml + funding-news.yml.
+#
+# Why one workflow instead of two: each GitHub Actions run pays a fixed ~2 min
+# of setup (checkout + Python + uv sync + Playwright restore + migrations)
+# before any real work. Running funding-news and descriptions as two separate
+# workflows 10x/day would pay that overhead 20x/day (~1,200 min/mo — more than
+# half the 2,000-min private-repo quota) before scraping a single page. One
+# workflow halves it.
+#
+# Why 10x/day is affordable: every stage is idempotent and resumes where the
+# last run stopped (per-company commits + write-once timestamps + the
+# `processed` flag), so repeated runs re-pay almost nothing —
+#   * ingest-news only LLM-identifies *new* TechCrunch articles (already-stored
+#     URLs are skipped before the LLM call) and rotates the per-company Google
+#     News sweep least-recently-checked-first;
+#   * extract-funding only touches unprocessed articles;
+#   * enrich-companies is write-once per company.
+# The initial backlog (~2.3k homepages to scrape) drains in ~2-3 days thanks to
+# the concurrent fetch in resolve/scrape (--concurrency), after which steady-
+# state runs no-op in a few minutes and only touch newly discovered companies.
+#
+# Quota math (private repo: 2,000 free Actions min/month at 1x linux rate):
+#   fixed setup        ~2 min/run x 10/day x 30 ≈ 600 min/mo
+#   steady-state work  ~3-5 min/run (most stages find nothing to do)
+#   backlog-drain      first ~2-3 days run nearer the per-stage caps
+#   discovery.yml      ~260 min/mo (weekly, unchanged)
+#   → projected ~1,500-1,800 min/mo at steady state. This is deliberately
+#     conservative (small --limits) to stay inside the free tier. DIAL-BACK
+#     LEVERS if usage runs hot: (1) reduce the cron frequency below, or (2)
+#     lower the per-run --limits. Both are one-line changes. Actual minutes are
+#     visible in the repo's Actions usage; DeepSeek spend is in each run's
+#     db-stats / telemetry step summary.
+on:
+  schedule:
+    # 10x/day, ~every 2.4h. Serialized against discovery.yml (weekly Mon 02:00)
+    # via the shared `concurrency` group; on Mondays the early run queues behind
+    # discovery (cancel-in-progress: false → it waits, never drops). The hours
+    # deliberately skip 02:00 so the daily cadence and the weekly discovery run
+    # don't start in the same minute.
+    - cron: "0 0,3,5,7,9,12,14,16,19,21 * * *"
+  workflow_dispatch:
+    inputs:
+      skip_news:
+        description: "Skip the Ingest news stage."
+        required: false
+        type: boolean
+        default: false
+      skip_funding:
+        description: "Skip the Extract funding (news + website) stages."
+        required: false
+        type: boolean
+        default: false
+      skip_resolve:
+        description: "Skip the Resolve homepages stage."
+        required: false
+        type: boolean
+        default: false
+      skip_scrape:
+        description: "Skip the Scrape homepages stage."
+        required: false
+        type: boolean
+        default: false
+      skip_enrich:
+        description: "Skip the Enrich companies stage."
+        required: false
+        type: boolean
+        default: false
+      news_limit:
+        description: "Ingest news: max companies for the per-company RSS rotation. Default: 40."
+        required: false
+        type: string
+      news_lookback_days:
+        description: "Ingest news: lookback window in days. Default: 7."
+        required: false
+        type: string
+      funding_limit:
+        description: "Extract funding: max unprocessed articles per run. Default: 80."
+        required: false
+        type: string
+      website_funding_limit:
+        description: "Website funding gap-fill: max companies per run. Default: 15."
+        required: false
+        type: string
+      resolve_limit:
+        description: "Resolve: max companies to attempt. Default: 100."
+        required: false
+        type: string
+      scrape_limit:
+        description: "Scrape: max companies to scrape. Default: 80."
+        required: false
+        type: string
+      enrich_limit:
+        description: "Enrich: max companies to enrich (caps LLM spend). Default: 30."
+        required: false
+        type: string
+
+# Serialize against every other workflow that mutates the companies table (see
+# discovery.yml). resolve / enrich UPDATE company rows and ingest-news /
+# extract-funding INSERT them, all of which race the dedup DELETEs in
+# discovery.yml. cancel-in-progress: false so a queued run waits its turn — and
+# so two pipeline runs (10x/day) never overlap each other either.
+concurrency:
+  group: nous-pipeline-db
+  cancel-in-progress: false
+
+jobs:
+  pipeline:
+    runs-on: ubuntu-latest
+    # Hard backstop. The per-stage --limit / --max-runtime budgets keep a
+    # healthy run well under this; hitting it means a stage hung, and the next
+    # run (≤~2.4h later) resumes cleanly. Far below GitHub's 360-min kill, and
+    # much tighter than the old 150 (10x/day runs must stay short).
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: pipeline
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}
+      # All LLM calls run on DeepSeek (see pipeline Settings).
+      DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+
+      - name: Install pipeline dependencies
+        run: uv sync
+
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          # Playwright caches Chromium under ~/.cache/ms-playwright. Pinning by
+          # the lockfile gives a clean cache-busting signal on dep bumps. The
+          # restore-key keeps the cache warm across the 10 daily runs so only
+          # the first run after a bump re-downloads Chromium.
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('pipeline/uv.lock') }}
+          restore-keys: |
+            playwright-${{ runner.os }}-
+
+      - name: Install Playwright Chromium
+        # `--with-deps` would also install OS-level libs (libnss3 etc.) but
+        # GitHub-hosted ubuntu-latest already ships them, so skip the apt step.
+        run: uv run playwright install chromium
+
+      - name: Apply migrations
+        run: uv run alembic upgrade head
+
+      # Every stage below is continue-on-error so one stage failing or hanging
+      # never blocks the later ones — idempotent stages make "skip now, catch up
+      # next run" safe. Stages carry an `id` so the deploy gate at the bottom
+      # (contains(steps.*.outcome, 'success')) can see them; db-stats and the
+      # deploy step are intentionally id-free so they can't affect that gate.
+
+      # ----- Catalog repair (one-time; runs first, no-ops once clean) ---------
+
+      - name: Repair catalog
+        id: repair
+        # One-time data repair: strips Lightspeed fund-badge text from names,
+        # drops/excludes India-only holdings, resets parked-domain enrichments.
+        # Idempotent — selects nothing once the backlog is clean, so it's safe
+        # to leave in the recurring run. First because it must clean data before
+        # the stages below read it (and right after migrations so the exclusion
+        # columns exist).
+        timeout-minutes: 15
+        continue-on-error: true
+        run: uv run nous repair-catalog
+
+      # ----- Funding news (freshness-first) -----------------------------------
+
+      - name: Ingest news
+        id: news
+        if: ${{ inputs.skip_news != true }}
+        # Per-company Google News RSS (rotates least-recently-checked first via
+        # companies.news_checked_at) + the TechCrunch venture-tag broad sweep.
+        # --limit 40 x 10 runs/day ≈ 400 companies/day, covering the ~2.6k table
+        # within a few days while keeping each run's Google News request count
+        # polite. The TC sweep runs every time but only LLM-identifies *new*
+        # articles. continue-on-error: a transient news block shouldn't fail the
+        # run.
+        timeout-minutes: 10
+        continue-on-error: true
+        run: |
+          NEWS_LIMIT="${{ inputs.news_limit }}"
+          if [ -z "$NEWS_LIMIT" ]; then NEWS_LIMIT=40; fi
+          ARGS=(--limit "$NEWS_LIMIT")
+          if [ -n "${{ inputs.news_lookback_days }}" ]; then
+            ARGS+=(--lookback-days "${{ inputs.news_lookback_days }}")
+          fi
+          uv run nous ingest-news "${ARGS[@]}"
+
+      - name: Extract funding
+        id: funding
+        if: ${{ inputs.skip_funding != true }}
+        # Bounded by unprocessed articles, so steady-state cost tracks actual
+        # new-article volume (usually a handful per run at 10x/day). --limit
+        # caps the worst case; continue-on-error per the provider-rate-limit
+        # logic (the next run resumes the remaining unprocessed rows).
+        timeout-minutes: 15
+        continue-on-error: true
+        run: |
+          FUNDING_LIMIT="${{ inputs.funding_limit }}"
+          if [ -z "$FUNDING_LIMIT" ]; then FUNDING_LIMIT=80; fi
+          uv run nous extract-funding --limit "$FUNDING_LIMIT"
+
+      - name: Extract funding (website fallback)
+        id: funding_website
+        if: ${{ inputs.skip_funding != true }}
+        # Gap-fill only: companies that still have no funding rounds after the
+        # news pass. The website_funding_checked_at 180-day back-off (stamped
+        # even on "nothing found") means this drains its eligible set in a couple
+        # of weeks and then no-ops until the window reopens — so a tiny per-run
+        # --limit is enough and keeps LLM spend negligible.
+        timeout-minutes: 8
+        continue-on-error: true
+        run: |
+          WF_LIMIT="${{ inputs.website_funding_limit }}"
+          if [ -z "$WF_LIMIT" ]; then WF_LIMIT=15; fi
+          uv run nous extract-funding-website --limit "$WF_LIMIT"
+
+      # ----- Descriptions (backlog drain + new companies) ---------------------
+
+      - name: Resolve homepages
+        id: resolve
+        if: ${{ inputs.skip_resolve != true }}
+        # Concurrent network resolve (--concurrency 8) drains the small
+        # website-less backlog fast, then no-ops. --max-runtime-minutes is a
+        # clean-exit budget on top of --limit.
+        timeout-minutes: 6
+        continue-on-error: true
+        run: |
+          RESOLVE_LIMIT="${{ inputs.resolve_limit }}"
+          if [ -z "$RESOLVE_LIMIT" ]; then RESOLVE_LIMIT=100; fi
+          uv run nous resolve-homepages --limit "$RESOLVE_LIMIT" --max-runtime-minutes 2 --concurrency 8
+
+      - name: Scrape homepages
+        id: scrape
+        if: ${{ inputs.skip_scrape != true }}
+        # The heaviest network stage; concurrent fetch (--concurrency 6) is what
+        # makes the ~2.3k-page backlog drain in days rather than weeks. Bounded
+        # by both --limit and --max-runtime-minutes.
+        timeout-minutes: 8
+        continue-on-error: true
+        run: |
+          SCRAPE_LIMIT="${{ inputs.scrape_limit }}"
+          if [ -z "$SCRAPE_LIMIT" ]; then SCRAPE_LIMIT=80; fi
+          uv run nous scrape-homepages --limit "$SCRAPE_LIMIT" --max-runtime-minutes 3 --concurrency 6
+
+      - name: Enrich companies
+        id: enrich
+        if: ${{ inputs.skip_enrich != true }}
+        # Write-once per company and LLM-bound (sequential ~5-15s/company), so
+        # the small --limit is the spend + wall-clock governor. At 10x/day this
+        # keeps pace with the day's scrape yield; the backlog drains over days.
+        timeout-minutes: 10
+        continue-on-error: true
+        run: |
+          ENRICH_LIMIT="${{ inputs.enrich_limit }}"
+          if [ -z "$ENRICH_LIMIT" ]; then ENRICH_LIMIT=30; fi
+          uv run nous enrich-companies --limit "$ENRICH_LIMIT"
+
+      - name: Judge eligibility
+        id: judge
+        # Backfills the is-this-a-startup / non-US judgment onto companies
+        # enriched before that judgment existed (~1,600 one-time DeepSeek calls).
+        # Each judged row is stamped, so this drains in a couple of weeks at 10x/
+        # day and then no-ops. Runs after enrich so freshly described rows are
+        # already stamped by enrich itself and skipped here.
+        timeout-minutes: 10
+        continue-on-error: true
+        run: uv run nous judge-eligibility --limit 30
+
+      - name: Database stats
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        run: uv run nous db-stats
+
+      - name: Trigger Vercel deploy
+        # Fires when at least one id'd pipeline stage above succeeded. Only the
+        # pipeline stages carry ids in this file — keep it that way or scope this
+        # back to an explicit list.
+        if: ${{ !cancelled() && contains(steps.*.outcome, 'success') }}
+        env:
+          VERCEL_DEPLOY_HOOK_URL: ${{ secrets.VERCEL_DEPLOY_HOOK_URL }}
+        run: |
+          if [ -z "$VERCEL_DEPLOY_HOOK_URL" ]; then
+            echo "VERCEL_DEPLOY_HOOK_URL not set — skipping deploy hook."
+            exit 0
+          fi
+          curl -fsS -m 30 --retry 3 -o /dev/null -X POST "$VERCEL_DEPLOY_HOOK_URL" \
+            && echo "Vercel deploy hook triggered." \
+            || echo "::warning::Vercel deploy hook POST failed (non-fatal)"

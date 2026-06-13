@@ -65,8 +65,7 @@ Open <http://localhost:3000>. Each company page renders description, key facts, 
 3. **GitHub Actions secrets.** Add `DATABASE_URL`, `SEC_USER_AGENT`, and `DEEPSEEK_API_KEY` so the scheduled crons can run all stages (homepage + enrich + news + funding).
 4. **First backfill.** Trigger the `backfill-discovery` workflow manually (`workflow_dispatch`) to seed companies from VC portfolios + TechCrunch.
 
-Three scheduled workflows then keep the data fresh on their own, serialized via a shared `concurrency` group so they never write the `companies` table at the same time:
+Two scheduled workflows then keep the data fresh on their own, serialized via a shared `concurrency` group so they never write the `companies` table at the same time:
 
-- **`discovery.yml`** (weekly, Mon 02:00 UTC) — `refresh-vc-portfolios` → `dedup-companies` → `analyze-competitors`.
-- **`descriptions.yml`** (weekly, Mon 06:00 UTC) — `resolve-homepages` → `scrape-homepages` → `enrich-companies`.
-- **`funding-news.yml`** (daily, 14:00 UTC) — `ingest-news` → `extract-funding` → `extract-funding-website`.
+- **`pipeline.yml`** (10x/day, ~every 2.4h) — the consolidated funding-news + descriptions pipeline: `ingest-news` → `extract-funding` → `extract-funding-website` → `resolve-homepages` → `scrape-homepages` → `enrich-companies`. Every stage is idempotent and bounded by a small `--limit` / `--max-runtime-minutes`, so repeated runs re-pay almost nothing and steady-state runs no-op in minutes. Consolidated (vs. two workflows) to halve the fixed per-run setup overhead and stay inside the free Actions tier.
+- **`discovery.yml`** (weekly, Mon 02:00 UTC) — `refresh-vc-portfolios` → `dedup-companies` → `analyze-competitors` → `estimate-employees` (the expensive, least-time-sensitive stages).

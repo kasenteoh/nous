@@ -17,6 +17,7 @@ from nous.sources.news import (
     NewsClient,
     RobotsBlockedError,
     _extract_article_text,
+    _is_robots_exempt,
     _matches_funding_keyword,
 )
 from nous.sources.techcrunch import TC_FUNDING_FEED, fetch_techcrunch_funding_articles
@@ -282,8 +283,14 @@ async def test_google_news_rss_deduplicates_by_canonical_url() -> None:
     assert results[0].url == "https://example.com/acme"
 
 
-async def test_google_news_rss_robots_block_returns_empty() -> None:
-    """robots.txt disallowing /rss/search must produce an empty result, not raise."""
+async def test_google_news_rss_bypasses_robots_for_feed_surface() -> None:
+    """Google News publishes /rss/search as a syndication feed (HTTP 200) while
+    its robots.txt ``Disallow: /`` targets the *interactive* crawl surface. The
+    RSS endpoint is an exempt feed surface (see ``_ROBOTS_EXEMPT_PREFIXES``): it
+    IS fetched despite a disallow-all robots.txt — the throttle + User-Agent
+    still apply. Honoring robots literally here returned nothing for every
+    per-company query, silently dark-starting funding-news discovery.
+    """
     transport = _MockTransport(
         [
             _Route("news.google.com/robots.txt", status=200, body=ROBOTS_DISALLOW_ALL),
@@ -294,14 +301,25 @@ async def test_google_news_rss_robots_block_returns_empty() -> None:
     client = NewsClient(user_agent=USER_AGENT)
     async with client:
         _inject(client, transport)
-        results = await client.google_news_rss("anything", lookback_days=-1)
+        results = await client.google_news_rss('"OpenAI" funding', lookback_days=-1)
 
-    assert results == []
-    # Critically: the RSS endpoint must NOT have been hit when robots blocks.
-    rss_route = next(
-        r for r in transport._routes if "rss/search" in r.substring
-    )
-    assert rss_route.call_count == 0
+    assert len(results) > 0, "RSS feed surface must be fetched despite robots disallow-all"
+    rss_route = next(r for r in transport._routes if "rss/search" in r.substring)
+    assert rss_route.call_count == 1
+    # The feed host's robots.txt should not even be consulted for an exempt URL.
+    robots_route = next(r for r in transport._routes if "robots.txt" in r.substring)
+    assert robots_route.call_count == 0
+
+
+def test_robots_exempt_matches_only_google_news_rss() -> None:
+    """The robots exemption is deliberately narrow — Google News RSS only."""
+    assert _is_robots_exempt("https://news.google.com/rss/search?q=x")
+    assert _is_robots_exempt("https://news.google.com/rss/topics/abc")
+    # Non-feed Google News paths and every other host stay under the robots gate.
+    assert not _is_robots_exempt("https://news.google.com/search?q=x")
+    assert not _is_robots_exempt("https://news.google.com/")
+    assert not _is_robots_exempt("https://techcrunch.com/rss/")
+    assert not _is_robots_exempt("https://example.com/article")
 
 
 async def test_google_news_rss_applies_lookback_window() -> None:

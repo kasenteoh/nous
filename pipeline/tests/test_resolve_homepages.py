@@ -15,6 +15,7 @@ from datetime import UTC, datetime, timedelta
 
 import httpx
 import pytest
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from nous.db.models import Company
@@ -344,3 +345,40 @@ async def test_excluded_companies_not_selected_for_resolve(db: AsyncSession) -> 
 
     summary = await run_resolve_homepages(db, MockHomepageClient({}))
     assert summary.companies_seen == 0
+
+
+async def test_concurrent_batches_resolve_all_companies(db: AsyncSession) -> None:
+    """concurrency=2 over 5 eligible companies (3 batches) resolves every one.
+
+    Guards the batched concurrent-fetch / sequential-write path against dropping
+    the tail or skipping companies that fall on a batch boundary.
+    """
+    names = ["Alphaco", "Bravoco", "Charlieco", "Deltaco", "Echoco"]
+    for n in names:
+        db.add(
+            _make_company(
+                name=n,
+                slug=f"{n.lower()}-batch-resolve",
+                website=None,
+                website_resolved_at=None,
+            )
+        )
+    await db.flush()
+    await db.commit()
+
+    resolve_map = {n.lower(): f"https://{n.lower()}.com/" for n in names}
+    client = MockHomepageClient(resolve_map)
+    summary = await run_resolve_homepages(db, client, concurrency=2)
+
+    assert summary.companies_seen == 5
+    assert summary.websites_resolved == 5
+    assert summary.stopped_early is False
+
+    result = await db.execute(
+        select(Company).where(Company.slug.like("%-batch-resolve"))
+    )
+    companies = result.scalars().all()
+    assert len(companies) == 5
+    for c in companies:
+        assert c.website == f"https://{c.name.lower()}.com/"
+        assert c.website_resolved_at is not None
