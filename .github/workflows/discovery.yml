@@ -117,6 +117,26 @@ jobs:
           if [ -z "$LIMIT" ]; then LIMIT=500; fi
           uv run nous analyze-competitors --limit "$LIMIT"
 
+      - name: Link competitors
+        id: link_competitors
+        # Zero-LLM: trigram-resolve the dangling competitor FKs analyze-competitors
+        # left name-only, densifying the relationship graph. --limit bounds the
+        # per-row similarity scan; the NULL-FK-only selection makes it idempotent
+        # so the backlog drains over a few weekly runs.
+        timeout-minutes: 15
+        continue-on-error: true
+        run: uv run nous link-competitors --limit 1000
+
+      - name: Derive relationships
+        id: derive_relationships
+        # Zero-LLM, replace-style: projects resolved competitor edges + computes
+        # industry/tag 'similar' edges into company_relationships (the graph the
+        # /c/[slug] "Related companies" section reads). Runs after link-competitors
+        # so it picks up the freshly resolved FKs.
+        timeout-minutes: 15
+        continue-on-error: true
+        run: uv run nous derive-relationships
+
       - name: Estimate employees
         id: estimate
         if: ${{ inputs.skip_estimate != true }}
