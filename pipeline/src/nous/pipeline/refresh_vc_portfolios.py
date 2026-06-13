@@ -122,6 +122,11 @@ async def run_refresh_vc_portfolios(
                 # the company and is safe to re-run.
                 display_name = FIRM_DISPLAY_NAMES.get(entry.firm, entry.firm)
                 investor, _ = await upsert_investor(session, name=display_name)
+                # Known VC portfolio firms are always institutional investors.
+                # Set the type on insert AND on re-run (idempotent update).
+                if investor.type != "institutional":
+                    investor.type = "institutional"
+                    session.add(investor)
                 await link_company_investor(
                     session,
                     company_id=company.id,

@@ -576,6 +576,40 @@ def refresh_investor_counts_cmd() -> None:
     asyncio.run(_run())
 
 
+@cli.command("dedup-investors")
+def dedup_investors_cmd() -> None:
+    """Collapse duplicate investor rows by canonical name (alias-applied).
+
+    Groups investors by their post-alias canonical name, picks the survivor
+    (most links → oldest created_at), merges losers via merge_investors (which
+    repoints company_investors + funding_round_investors and calls
+    refresh-investor-counts). Also sets type='institutional' for known VC firms.
+
+    Idempotent: a second run finds no duplicates and is a no-op.
+    """
+    import asyncio
+    from datetime import UTC, datetime
+
+    from nous.db.session import AsyncSessionLocal
+    from nous.observability import record_pipeline_run
+    from nous.pipeline.dedup_investors import run_dedup_investors
+
+    async def _run() -> None:
+        started = datetime.now(UTC)
+        async with AsyncSessionLocal() as session:
+            summary = await run_dedup_investors(session)
+            click.echo(summary.model_dump_json(indent=2))
+        await record_pipeline_run(
+            "dedup-investors",
+            started_at=started,
+            inputs_seen=summary.investors_seen,
+            rows_written=summary.investors_merged + summary.type_classifications,
+            summary=summary,
+        )
+
+    asyncio.run(_run())
+
+
 @cli.command("dedup-companies")
 @click.option(
     "--llm-limit",
