@@ -71,7 +71,11 @@ class Company(Base):
     # Location
     hq_city: Mapped[str | None]
     hq_state: Mapped[str | None]
-    hq_country: Mapped[str | None] = mapped_column(default="US")
+    # hq_country: NULL until evidenced. Do NOT set a Python-level default here;
+    # the old default="US" caused every auto-created company to read as US even
+    # when the company is foreign. Country is inferred from the website ccTLD or
+    # an explicit LLM statement during enrich-companies / judge-eligibility.
+    hq_country: Mapped[str | None]
 
     # Company metadata
     year_incorporated: Mapped[int | None]

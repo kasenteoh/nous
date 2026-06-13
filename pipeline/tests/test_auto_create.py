@@ -129,7 +129,9 @@ async def test_auto_create_inserts_new_row(db: AsyncSession) -> None:
     assert company.website == "https://brandnewco.example/"
     assert company.discovered_via == "vc_portfolio"
     assert company.description_short is None  # M2 enrichment will fill later
-    assert company.hq_country == "US"
+    # hq_country stays NULL on insert — set by enrich-companies / ccTLD inference,
+    # not by the discovery stage (Task 2.3: stop masking non-US companies as US).
+    assert company.hq_country is None
 
 
 async def test_auto_create_returns_existing_on_exact_match(
