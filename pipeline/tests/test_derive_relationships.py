@@ -172,3 +172,49 @@ async def test_derive_respects_max_similar_per_company(db: AsyncSession) -> None
         per_company[r.company_id] = per_company.get(r.company_id, 0) + 1
     assert per_company  # at least some edges
     assert all(count <= 1 for count in per_company.values())
+
+
+async def test_derive_projects_multiple_competitor_edges(db: AsyncSession) -> None:
+    """Each projected competitor edge must get its OWN id.
+
+    INSERT...FROM SELECT can't apply the model's per-row uuid4 default, so a
+    naive projection reused one id for every row and the 2nd edge violated the
+    PK — which rolled back the whole derive and left the competitor graph empty
+    in prod (995 resolved competitors). The happy-path test only seeded ONE
+    competitor, so it passed; this seeds several to guard the regression.
+    """
+    a = _company("MultiA", "der-multi-a", industry_group="x")
+    b = _company("MultiB", "der-multi-b", industry_group="x")
+    c = _company("MultiC", "der-multi-c", industry_group="x")
+    db.add_all([a, b, c])
+    await db.flush()
+    db.add_all(
+        [
+            Competitor(
+                company_id=a.id, competitor_company_id=b.id,
+                competitor_name="MultiB", rank=1, source="llm_inferred",
+            ),
+            Competitor(
+                company_id=a.id, competitor_company_id=c.id,
+                competitor_name="MultiC", rank=2, source="llm_inferred",
+            ),
+            Competitor(
+                company_id=b.id, competitor_company_id=a.id,
+                competitor_name="MultiA", rank=1, source="llm_inferred",
+            ),
+        ]
+    )
+    await db.commit()
+
+    summary = await run_derive_relationships(db)
+    assert summary.competitor_edges == 3
+
+    edges = [
+        r
+        for r in (await db.execute(select(CompanyRelationship))).scalars().all()
+        if r.relationship_type == "competitor"
+        and r.company_id in {a.id, b.id, c.id}
+    ]
+    pairs = {(e.company_id, e.related_company_id) for e in edges}
+    assert pairs == {(a.id, b.id), (a.id, c.id), (b.id, a.id)}
+    assert len({e.id for e in edges}) == 3  # distinct PKs — the actual regression
