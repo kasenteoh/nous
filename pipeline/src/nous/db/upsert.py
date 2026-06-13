@@ -832,3 +832,118 @@ async def merge_companies(
     await session.flush()
     await session.delete(loser)
     await session.flush()
+
+
+# ---------------------------------------------------------------------------
+# Investor de-duplication: merge primitive (used by dedup-investors)
+# ---------------------------------------------------------------------------
+
+
+async def merge_investors(
+    session: AsyncSession, *, survivor_id: UUID, loser_id: UUID
+) -> None:
+    """Fold the ``loser`` investor into ``survivor``, then delete the loser.
+
+    Every child row that references ``loser_id`` is repointed to ``survivor_id``,
+    handling each table's unique constraints so no IntegrityError can occur:
+
+    - **company_investors** — unique (company_id, investor_id): OR-promote
+      ``is_lead`` on shared links, delete loser duplicates, then repoint
+      remaining loser links to the survivor.
+    - **funding_round_investors** — unique (funding_round_id, investor_id):
+      same pattern as company_investors — promote is_lead, delete overlaps,
+      repoint the rest.
+
+    After repointing, ``refresh_investor_counts`` is called so
+    ``investors.portfolio_count`` reflects the merged state.  The caller is
+    responsible for committing; this function does NOT commit.  It is
+    one-way: after it runs ``loser_id`` no longer exists, so a re-run
+    cannot double-apply.
+    """
+    if survivor_id == loser_id:
+        raise ValueError("merge_investors: survivor_id and loser_id are identical")
+
+    # Import here to avoid a circular import (refresh_investor_counts imports
+    # from db.models, not from db.upsert, so this is a one-way dependency).
+    from nous.pipeline.refresh_investor_counts import refresh_investor_counts
+
+    # --- company_investors: unique (company_id, investor_id) ---------------
+    # Collect company_ids the survivor already links to.
+    survivor_company_ids_subq = select(CompanyInvestor.company_id).where(
+        CompanyInvestor.investor_id == survivor_id
+    )
+    # Promote is_lead: if the loser's link for a shared company is lead,
+    # ensure the survivor's link is also marked lead before we drop the loser's.
+    loser_ci_lead_companies_subq = select(CompanyInvestor.company_id).where(
+        CompanyInvestor.investor_id == loser_id,
+        CompanyInvestor.is_lead.is_(True),
+    )
+    await session.execute(
+        update(CompanyInvestor)
+        .where(
+            CompanyInvestor.investor_id == survivor_id,
+            CompanyInvestor.company_id.in_(loser_ci_lead_companies_subq),
+        )
+        .values(is_lead=True)
+    )
+    # Delete loser's links for companies the survivor already covers.
+    await session.execute(
+        delete(CompanyInvestor).where(
+            CompanyInvestor.investor_id == loser_id,
+            CompanyInvestor.company_id.in_(survivor_company_ids_subq),
+        )
+    )
+    # Repoint remaining loser links to the survivor.
+    await session.execute(
+        update(CompanyInvestor)
+        .where(CompanyInvestor.investor_id == loser_id)
+        .values(investor_id=survivor_id)
+    )
+
+    # --- funding_round_investors: unique (funding_round_id, investor_id) ---
+    # Collect round_ids the survivor already links to.
+    survivor_round_ids_subq = select(FundingRoundInvestor.funding_round_id).where(
+        FundingRoundInvestor.investor_id == survivor_id
+    )
+    # Promote is_lead on shared rounds.
+    loser_fri_lead_rounds_subq = select(FundingRoundInvestor.funding_round_id).where(
+        FundingRoundInvestor.investor_id == loser_id,
+        FundingRoundInvestor.is_lead.is_(True),
+    )
+    await session.execute(
+        update(FundingRoundInvestor)
+        .where(
+            FundingRoundInvestor.investor_id == survivor_id,
+            FundingRoundInvestor.funding_round_id.in_(loser_fri_lead_rounds_subq),
+        )
+        .values(is_lead=True)
+    )
+    # Delete loser's links for rounds the survivor already covers.
+    await session.execute(
+        delete(FundingRoundInvestor).where(
+            FundingRoundInvestor.investor_id == loser_id,
+            FundingRoundInvestor.funding_round_id.in_(survivor_round_ids_subq),
+        )
+    )
+    # Repoint remaining loser FRI links to the survivor.
+    await session.execute(
+        update(FundingRoundInvestor)
+        .where(FundingRoundInvestor.investor_id == loser_id)
+        .values(investor_id=survivor_id)
+    )
+
+    # --- delete the loser ---------------------------------------------------
+    # Flush first so FK repoints are visible to the delete; the loser now has
+    # no children pointing at it.
+    await session.flush()
+    loser_row = await session.get(Investor, loser_id)
+    if loser_row is None:
+        raise ValueError(f"merge_investors: loser {loser_id} not found")
+    await session.delete(loser_row)
+    await session.flush()
+
+    # --- recompute portfolio_count for survivor ----------------------------
+    # Full recompute (resets ALL investors to 0 then sets non-zero); since
+    # this is called inside a savepoint-aware test session and after the
+    # merge, it produces correct post-merge counts.
+    await refresh_investor_counts(session)

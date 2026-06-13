@@ -118,6 +118,18 @@ jobs:
           fi
           uv run nous refresh-vc-portfolios "${ARGS[@]}"
 
+      - name: Deduplicate investors
+        id: dedup_investors
+        # Merges investor rows whose canonical name (after alias mapping, e.g.
+        # "a16z" ↔ "Andreessen Horowitz") is identical. Runs after VC refresh
+        # so any newly-inserted investors are included. Also sets
+        # type='institutional' for known VC portfolio firms.
+        # Must run BEFORE refresh-investor-counts so counts reflect the
+        # post-merge investor set (fewer rows, correct totals).
+        timeout-minutes: 10
+        continue-on-error: true
+        run: uv run nous dedup-investors
+
       - name: Refresh investor counts
         id: refresh_investor_counts
         # Recomputes investors.portfolio_count from both company_investors and
@@ -126,7 +138,8 @@ jobs:
         # stay correct even when VC refresh is skipped, e.g. on manual dispatch.
         # Also called inside refresh-vc-portfolios and extract-funding, but an
         # explicit step here ensures it runs even when those pipeline stages
-        # are not in this workflow.
+        # are not in this workflow. Runs AFTER dedup-investors so counts
+        # reflect the merged (deduplicated) investor rows.
         timeout-minutes: 10
         continue-on-error: true
         run: uv run nous refresh-investor-counts
