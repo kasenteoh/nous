@@ -1,8 +1,13 @@
 """Catalog quality filtering: soft exclusion + content-bar columns.
 
-Revision ID: 0022
-Revises: 0021
+Revision ID: 0023
+Revises: 0022
 Create Date: 2026-06-12 00:00:00.000000
+
+Renumbered 0022 → 0023 when PR #57 (company_relationships) landed its own 0022
+on main; this migration now chains after it. The two are independent (different
+columns), so the order between them doesn't matter — only that the chain is
+linear with a single head.
 
 Per docs/superpowers/specs/2026-06-12-catalog-quality-filtering-design.md:
 
@@ -27,8 +32,8 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects import postgresql
 
-revision: str = "0022"
-down_revision: str | None = "0021"
+revision: str = "0023"
+down_revision: str | None = "0022"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
