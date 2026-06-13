@@ -24,8 +24,9 @@ Four detection passes (spec 2026-06-13 Task 2.2):
     "...a culinary content platform ... based on a site that is currently for
     sale", while the scraped page begins "foodology.com is for sale").  Pass (d)
     re-judges the stored RawPage.content — the extracted text IS still on record
-    — with the same hardened nous.sources.parked detector the resolver uses, and
-    resets live (non-excluded) rows exactly as (a)/(b) do.
+    — with nous.sources.parked.page_is_for_sale_lander (a STRICTER detector than
+    the resolver's, since scanning a real company's full page text false-positives
+    on the looser signals), and resets live (non-excluded) rows as (a)/(b) do.
 
 Repair action for (a)/(b)/(d):
     - Append bad URL to rejected_urls (so the hardened resolver never re-picks it)
@@ -60,7 +61,7 @@ from sqlalchemy import delete, exists, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from nous.db.models import Company, RawPage
-from nous.sources.parked import text_looks_parked
+from nous.sources.parked import page_is_for_sale_lander
 from nous.sources.reject_hosts import is_aggregator_url
 from nous.util.url import canonical_domain
 
@@ -110,22 +111,21 @@ _PARKED_DESC_RE: re.Pattern[str] = re.compile(
 # domain-sale wording at all even when the page is a lander (Foodology: "...a
 # culinary content platform ... based on a site that is currently for sale" —
 # "site that is" misses pass (b)'s "site is for sale" regex). Pass (d) re-judges
-# the stored RawPage.content (ground truth) with the same hardened detector the
-# resolver uses (nous.sources.parked.text_looks_parked). These SQL ILIKE tokens
-# are a coarse pre-filter — every page that could trip text_looks_parked contains
-# one, so over-selection is harmless (Python re-confirms), but the set MUST stay a
-# superset of every parked.py trigger (the <host>-for-sale regex, the sale
-# phrases, and the marketplace-brand sale-intent words).
+# the stored RawPage.content (ground truth) with the STRICT backfill detector
+# page_is_for_sale_lander. These SQL ILIKE tokens are a coarse pre-filter — every
+# page that could trip that detector contains one, so over-selection is harmless
+# (Python re-confirms), but the set MUST stay a superset of its triggers (the
+# <host>-for-sale regex + the self-referential lander phrases). NOTE: this is the
+# strict detector's trigger set, NOT the resolver's looser one — "available for
+# purchase" / bare marketplace-brand intent are deliberately absent (they
+# false-positive on real pages, e.g. At-Bay's "available for purchase").
 _PAGE_CONTENT_SQL_TOKENS: tuple[str, ...] = (
     "for sale",
+    "buy this domain",
+    "purchase this domain",
+    "inquire about this domain",
     "parked",
-    "parking",
-    "marketplace",
-    "this domain",
-    "available for purchase",
-    "buy now",
-    "make an offer",
-    "make offer",
+    "domain parking",
 )
 
 # ── (c) false-exclusion detail patterns ────────────────────────────────────
@@ -298,8 +298,8 @@ async def run_repair_wrong_websites(
 
     for company in page_candidates:
         page = await _homepage_page(session, company)
-        if page is None or not text_looks_parked(page.content):
-            # SQL token pre-filter was too broad; the precise detector doesn't
+        if page is None or not page_is_for_sale_lander(page.content):
+            # SQL token pre-filter was too broad; the strict detector doesn't
             # confirm the company's own homepage is a lander — skip.
             continue
         logger.info(

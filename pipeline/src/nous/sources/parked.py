@@ -89,9 +89,11 @@ def looks_parked(html: str) -> bool:
 def text_looks_parked(text: str) -> bool:
     """True when already-extracted visible *text* reads as a parked/for-sale page.
 
-    Split out from :func:`looks_parked` so the repair backfill can re-judge a
-    stored RawPage — whose ``content`` is extraction output, with the <title>
-    already prepended — without re-fetching the raw HTML.
+    The resolver's text-level detector — deliberately lenient (a false positive
+    just rejects a candidate homepage, which is cheap). Split out from
+    :func:`looks_parked` so it can run on extracted text. The repair backfill uses
+    the stricter :func:`page_is_for_sale_lander` instead, because scanning a real
+    company's full page text makes these looser signals false-positive.
     """
     lowered = text.lower()
     if _DOMAIN_FOR_SALE.search(lowered):
@@ -101,3 +103,41 @@ def text_looks_parked(text: str) -> bool:
     return any(brand in lowered for brand in _MARKETPLACE_BRANDS) and any(
         intent in lowered for intent in _SALE_INTENT
     )
+
+
+# Lander phrases for the repair backfill (page_is_for_sale_lander). A STRICT
+# subset of _SALE_PHRASES: only self-referential domain-sale language a real
+# company homepage never uses about itself. Excludes the looser resolver phrases
+# ("available for purchase", "this site/website is for sale", "domain
+# marketplace", "domain for sale") that real pages legitimately carry — a
+# cyber-insurer whose product is "available for purchase", a domain-marketplace
+# startup, etc. — because the backfill scans full real-page text, not a sparse
+# candidate lander.
+_STRICT_LANDER_PHRASES: tuple[str, ...] = (
+    "this domain is for sale",
+    "this domain name is for sale",
+    "domain may be for sale",
+    "buy this domain",
+    "purchase this domain",
+    "inquire about this domain",
+    "is parked free",
+    "parked domain",
+    "domain parking",
+)
+
+
+def page_is_for_sale_lander(text: str) -> bool:
+    """True when *text* (a stored page's extracted content) announces the page's
+    OWN domain is for sale — the strict detector for the repair backfill.
+
+    Stricter than :func:`text_looks_parked` (the resolver's detector) on purpose:
+    the backfill re-judges a real company's FULL page text, where the resolver's
+    looser signals false-positive (e.g. At-Bay, a cyber-insurer whose product is
+    "available for purchase").  A false positive here resets an already-resolved
+    real company, so this keys only on a self-referential ``<host> is for sale``
+    or an unambiguous lander phrase.
+    """
+    lowered = text.lower()
+    if _DOMAIN_FOR_SALE.search(lowered):
+        return True
+    return any(phrase in lowered for phrase in _STRICT_LANDER_PHRASES)
