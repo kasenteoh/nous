@@ -366,6 +366,13 @@ async def reconcile_funding_round(
     - announced_date matches when both sides are non-None and within the
       window. Both None also matches. Mismatched null-ness does not match
       (one side knows the date, the other doesn't — too uncertain to merge).
+    - **None+None guard**: when BOTH round_type and announced_date are null we
+      require at least one non-null discriminator before attempting to merge.
+      Two vague headlines ("Company X raises funding") for the same company
+      carry zero identity signal beyond the company itself and should each
+      produce their own row rather than collapsing into one — otherwise a
+      second article silently swallows the first (the count stays at 1 instead
+      of growing to 2). We always INSERT in this case.
 
     Merge behavior on match:
     - Fill nulls: amount_raised, valuation_post_money, valuation_source,
@@ -376,6 +383,26 @@ async def reconcile_funding_round(
 
     Returns ``(row, created)`` where ``created`` is True on insert.
     """
+    # None+None guard: without at least one discriminator (round_type OR
+    # announced_date) every "unknown round" for the same company collapses into
+    # a single row, silently losing coverage data.  Skip the query entirely and
+    # fall through to the INSERT path.
+    if extraction.round_type is None and extraction.announced_date is None:
+        new_round = FundingRound(
+            company_id=company_id,
+            round_type=None,
+            amount_raised=extraction.amount_raised_usd,
+            valuation_post_money=extraction.valuation_post_money_usd,
+            valuation_source=extraction.valuation_source,
+            announced_date=None,
+            primary_news_url=primary_news_url,
+            extraction_confidence=extraction.confidence,
+        )
+        session.add(new_round)
+        await session.flush()
+        await refresh_funding_round_count(session, company_id)
+        return new_round, True
+
     candidates_stmt = select(FundingRound).where(FundingRound.company_id == company_id)
 
     if extraction.round_type is not None:
