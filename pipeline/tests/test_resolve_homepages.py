@@ -331,3 +331,16 @@ async def test_resolver_rejects_parked_page_and_rejected_domains(
     assert any(u.startswith("https://ninegag.com") for u in fetched)
     # ...the rejected .ai domain was skipped before any fetch.
     assert not any("ninegag.ai" in u for u in fetched)
+
+
+async def test_excluded_companies_not_selected_for_resolve(db: AsyncSession) -> None:
+    """An excluded company is never picked up by the resolve selection, even
+    when it is otherwise eligible (no website, never attempted)."""
+    excluded = _make_company(name="Excluded Co", slug="excluded-co-resolve")
+    excluded.exclusion_reason = "not_a_startup"
+    db.add(excluded)
+    await db.flush()
+    await db.commit()
+
+    summary = await run_resolve_homepages(db, MockHomepageClient({}))
+    assert summary.companies_seen == 0

@@ -71,10 +71,11 @@ async def run_estimate_employees(
     cutoff = datetime.now(tz=UTC) - timedelta(days=refetch_after_days)
 
     stmt = select(Company).where(
+        Company.exclusion_reason.is_(None),
         or_(
             Company.employee_count_checked_at.is_(None),
             Company.employee_count_checked_at < cutoff,
-        )
+        ),
     )
     if limit is not None:
         stmt = stmt.limit(limit)

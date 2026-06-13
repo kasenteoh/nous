@@ -483,3 +483,23 @@ async def test_two_all_symbol_names_yield_distinct_slugs(db: AsyncSession) -> No
         "Two all-symbol companies must get distinct slugs — "
         "the counter-loop in _build_slug should break the collision"
     )
+
+
+async def test_rediscovery_never_clears_exclusion(db: AsyncSession) -> None:
+    excluded = Company(
+        name="Acko",
+        slug="acko-excluded",
+        normalized_name=normalize_name("Acko"),
+        hq_country="US",
+        exclusion_reason="non_us",
+        exclusion_detail="Lightspeed India portfolio entry",
+    )
+    db.add(excluded)
+    await db.commit()
+
+    company, created = await auto_create_company(
+        db, name="Acko", website=None, discovered_via="vc_portfolio"
+    )
+    assert created is False
+    assert company.id == excluded.id
+    assert company.exclusion_reason == "non_us"  # re-listing is not new evidence

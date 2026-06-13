@@ -72,6 +72,7 @@ async def run_resolve_homepages(
 
     stmt = select(Company).where(
         Company.website.is_(None),
+        Company.exclusion_reason.is_(None),
         or_(
             Company.website_resolved_at.is_(None),
             Company.website_resolved_at < cutoff,

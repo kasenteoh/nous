@@ -467,6 +467,7 @@ async def run_extract_funding_website(
                 Company.website_funding_checked_at < recheck_cutoff,
             )
         )
+        .where(Company.exclusion_reason.is_(None))
         .order_by(
             Company.website_funding_checked_at.asc().nulls_first(),
             Company.name.asc(),

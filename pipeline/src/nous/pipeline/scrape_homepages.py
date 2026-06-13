@@ -323,6 +323,7 @@ async def run_scrape_homepages(
             Company.id == latest_fetch_subq.c.company_id,
         )
         .where(Company.website.is_not(None))
+        .where(Company.exclusion_reason.is_(None))
         .where(
             (latest_fetch_subq.c.latest_fetched_at.is_(None))
             | (latest_fetch_subq.c.latest_fetched_at < cutoff)

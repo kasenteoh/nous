@@ -98,6 +98,7 @@ async def fetch_eligible_companies(
         .outerjoin(last_analyzed, Company.id == last_analyzed.c.company_id)
         .where(Company.description_long.is_not(None))
         .where(Company.industry_group.is_not(None))
+        .where(Company.exclusion_reason.is_(None))
         .where(
             (last_analyzed.c.last_analyzed_at.is_(None))
             | (last_analyzed.c.last_analyzed_at < cutoff)

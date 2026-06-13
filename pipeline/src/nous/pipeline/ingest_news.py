@@ -122,8 +122,10 @@ async def run_ingest_news(
     """
     summary = IngestNewsSummary()
 
-    company_stmt = select(Company).order_by(
-        Company.news_checked_at.asc().nulls_first()
+    company_stmt = (
+        select(Company)
+        .where(Company.exclusion_reason.is_(None))
+        .order_by(Company.news_checked_at.asc().nulls_first())
     )
     if max_companies is not None:
         company_stmt = company_stmt.limit(max_companies)
