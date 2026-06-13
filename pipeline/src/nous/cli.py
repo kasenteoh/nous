@@ -942,6 +942,54 @@ def judge_eligibility(limit: int | None) -> None:
     asyncio.run(_run())
 
 
+@cli.command("pipeline-health")
+@click.option(
+    "--strict",
+    is_flag=True,
+    default=False,
+    help=(
+        "Exit non-zero when any stage logged status='empty' or status='error'. "
+        "Default: always exit 0 (annotate only), matching continue-on-error semantics."
+    ),
+)
+def pipeline_health(strict: bool) -> None:
+    """Inspect pipeline_runs for empty/error stages and emit CI annotations.
+
+    Queries the most-recent pipeline_runs row for every stage and prints a
+    GitHub Actions ``::warning::`` / ``::error::`` annotation for each non-green
+    stage.  Appends a markdown table to the step summary when GITHUB_STEP_SUMMARY
+    is set.  Exits 0 by default so it never blocks the pipeline; pass --strict
+    to exit non-zero on any non-green stage.
+    """
+    import asyncio
+    import sys
+
+    from nous.db.session import AsyncSessionLocal
+    from nous.pipeline.pipeline_health import (
+        HealthReport,
+        emit_health_annotations,
+        run_pipeline_health,
+    )
+
+    async def _run() -> HealthReport:
+        async with AsyncSessionLocal() as session:
+            return await run_pipeline_health(session)
+
+    report = asyncio.run(_run())
+    emit_health_annotations(report)
+
+    if report.stages:
+        click.echo(
+            f"pipeline-health: checked {len(report.stages)} stage(s), "
+            f"{len(report.bad)} non-green"
+        )
+    else:
+        click.echo("pipeline-health: no pipeline_runs rows found (table is empty)")
+
+    if strict and not report.all_green:
+        sys.exit(1)
+
+
 @cli.command("repair-catalog")
 @click.option(
     "--dry-run",

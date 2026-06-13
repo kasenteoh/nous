@@ -217,6 +217,15 @@ jobs:
         continue-on-error: true
         run: uv run nous db-stats
 
+      - name: Pipeline health
+        # Always runs (even if earlier stages failed) so every discovery run gets
+        # a health annotation in the Actions UI.  Exits 0 — never blocks the
+        # pipeline.  Emits ::warning:: / ::error:: annotations and a step-summary
+        # markdown table for any stage that logged status='empty' or 'error'.
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        run: uv run nous pipeline-health
+
       - name: Trigger Vercel deploy
         # contains(steps.*.outcome, ...) covers every id'd step; only pipeline
         # stages carry ids in this file — keep it that way or scope this back
