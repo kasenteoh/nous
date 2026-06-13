@@ -8,7 +8,7 @@ and run-twice idempotency. Requires DATABASE_URL.
 from __future__ import annotations
 
 import os
-from datetime import date
+from datetime import UTC, date, datetime
 
 import pytest
 from sqlalchemy import select
@@ -139,6 +139,90 @@ async def test_parked_description_reset(db: AsyncSession) -> None:
     await db.refresh(sellraze)
     assert sellraze.description_short is not None
     assert sellraze.website == "https://sellraze.com"
+
+
+async def test_for_sale_lander_reset_by_page_content(db: AsyncSession) -> None:
+    # Foodology shape: the LLM narrated a for-sale lander as a real "culinary
+    # content platform". Its prose never says "domain", so Pass 2's description
+    # patterns miss it — but the scraped page literally says "<host> is for sale".
+    # Pass 3 re-judges the page content (ground truth) and resets the row.
+    lander = _co(
+        "Foodology",
+        "foodology-repair",
+        website="https://foodology.com",
+        website_resolved_at=datetime(2026, 6, 11, tzinfo=UTC),
+        description_short=(
+            "Foodology is a culinary content platform exploring global "
+            "traditions, based on a site that is currently for sale."
+        ),
+        description_long="A culinary content platform.",
+        primary_category="content",
+        last_enriched_at=datetime(2026, 6, 12, tzinfo=UTC),
+    )
+    # Real company whose homepage copy mentions selling — must NOT be touched.
+    real = _co(
+        "SellRaze",
+        "sellraze-repair3",
+        website="https://sellraze.com",
+        description_short="SellRaze lists your items for sale across marketplaces.",
+    )
+    db.add_all([lander, real])
+    await db.flush()
+    db.add(
+        RawPage(
+            company_id=lander.id,
+            url="https://foodology.com/",
+            content=(
+                "foodology.com is for sale.\n\nExploring Culinary Delights with "
+                "Foodology\n\nDiscovering Global Culinary Traditions."
+            ),
+        )
+    )
+    db.add(
+        RawPage(
+            company_id=real.id,
+            url="https://sellraze.com/",
+            content=(
+                "SellRaze | The fastest way to sell your stuff\n"
+                "List items for sale across every marketplace."
+            ),
+        )
+    )
+    await db.commit()
+
+    summary = await run_repair_catalog(db)
+
+    await db.refresh(lander)
+    assert lander.website is None
+    assert lander.website_resolved_at is None
+    assert lander.description_short is None
+    assert lander.description_long is None
+    assert lander.primary_category is None
+    assert lander.last_enriched_at is None
+    assert lander.rejected_urls == ["https://foodology.com"]
+    assert (
+        (await db.execute(select(RawPage).where(RawPage.company_id == lander.id)))
+        .scalars()
+        .all()
+        == []
+    )
+    assert summary.for_sale_reset == 1
+
+    # The real company is left entirely alone.
+    await db.refresh(real)
+    assert real.website == "https://sellraze.com"
+    assert real.description_short is not None
+    assert (
+        (await db.execute(select(RawPage).where(RawPage.company_id == real.id)))
+        .scalars()
+        .first()
+        is not None
+    )
+
+    # Idempotent: the reset cleared the website + dropped the page, so a second
+    # run re-selects nothing.
+    second = await run_repair_catalog(db)
+    assert second.for_sale_reset == 0
 
 
 async def test_repair_is_idempotent(db: AsyncSession) -> None:

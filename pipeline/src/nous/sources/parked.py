@@ -15,7 +15,20 @@ trip it, and product copy like "list items for sale" has no domain wording).
 
 from __future__ import annotations
 
+import re
+
 from selectolax.parser import HTMLParser
+
+# "<host> is for sale" — a registrar/marketplace lander announcing its own
+# domain is for sale ("foodology.com is for sale", "The domain Pinecone.com is
+# for sale!"). The _SALE_PHRASES below all require the literal word "domain", so
+# these slipped through and got attached to real companies (a D3 wrong-company
+# match). Requires a dotted host ending in an alphabetic TLD immediately before
+# "is for sale", so product copy ("list items for sale") and version strings
+# ("v1.0 is for sale") never trip it.
+_DOMAIN_FOR_SALE: re.Pattern[str] = re.compile(
+    r"\b[a-z0-9][a-z0-9-]*(?:\.[a-z0-9-]+)*\.[a-z]{2,}\s+is\s+for\s+sale\b"
+)
 
 # Phrases that on their own mark a domain-sale/parking page (lowercase).
 _SALE_PHRASES: tuple[str, ...] = (
@@ -59,14 +72,26 @@ _SALE_INTENT: tuple[str, ...] = ("for sale", "buy now", "make an offer", "make o
 def looks_parked(html: str) -> bool:
     """True when *html* looks like a parked / for-sale / placeholder page."""
     tree = HTMLParser(html)
-    text = " ".join(tree.text(separator=" ").split()).lower()
+    text = " ".join(tree.text(separator=" ").split())
     title_node = tree.css_first("title")
     if title_node is not None:
-        title = " ".join(title_node.text(separator=" ").split()).lower()
+        title = " ".join(title_node.text(separator=" ").split())
         text = f"{title} {text}"
+    return text_looks_parked(text)
 
-    if any(phrase in text for phrase in _SALE_PHRASES):
+
+def text_looks_parked(text: str) -> bool:
+    """True when already-extracted visible *text* reads as a parked/for-sale page.
+
+    Split out from :func:`looks_parked` so the repair backfill can re-judge a
+    stored RawPage — whose ``content`` is extraction output, with the <title>
+    already prepended — without re-fetching the raw HTML.
+    """
+    lowered = text.lower()
+    if _DOMAIN_FOR_SALE.search(lowered):
         return True
-    return any(brand in text for brand in _MARKETPLACE_BRANDS) and any(
-        intent in text for intent in _SALE_INTENT
+    if any(phrase in lowered for phrase in _SALE_PHRASES):
+        return True
+    return any(brand in lowered for brand in _MARKETPLACE_BRANDS) and any(
+        intent in lowered for intent in _SALE_INTENT
     )

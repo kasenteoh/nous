@@ -7,7 +7,7 @@ detector is therefore deliberately conservative.
 
 from __future__ import annotations
 
-from nous.sources.parked import looks_parked
+from nous.sources.parked import looks_parked, text_looks_parked
 
 SPACESHIP_PARKED = """
 <html><head><title>9gag.ai is for sale</title></head><body>
@@ -100,3 +100,44 @@ STYLED_DOMAIN_PARKED = """
 
 def test_element_boundary_and_nbsp_normalized() -> None:
     assert looks_parked(STYLED_DOMAIN_PARKED) is True
+
+
+# A registrar lander whose ONLY sale signal is "<host> is for sale" — no literal
+# word "domain", no marketplace brand. This is the Foodology shape: a namesake
+# for-sale page ("foodology.com is for sale") the resolver accepted because the
+# body also carries real-looking prose that mentions the company name. Every
+# pre-existing _SALE_PHRASE requires the word "domain", so this slipped through.
+HOST_FOR_SALE_LANDER = """
+<html><head><title>Exploring Culinary Delights with Foodology</title></head><body>
+<p>foodology.com is for sale.</p>
+<h1>Exploring Culinary Delights with Foodology</h1>
+<p>Discovering global culinary traditions, techniques, and sustainable sourcing.</p>
+</body></html>
+"""
+
+
+def test_detects_bare_host_for_sale() -> None:
+    # "<host> is for sale" with no "domain" wording and no marketplace brand.
+    assert looks_parked(HOST_FOR_SALE_LANDER) is True
+
+
+def test_text_looks_parked_matches_extracted_content() -> None:
+    # The repair backfill re-judges RawPage.content — already-extracted visible
+    # text (with the <title> prepended), not raw HTML — so the detector must work
+    # on plain text too. This is exactly what prod scraped for foodology.com.
+    content = (
+        "foodology.com is for sale.\n\nExploring Culinary Delights with Foodology\n\n"
+        "Discovering Global Culinary Traditions. The world of food is as diverse "
+        "and fascinating as the cultures it represents."
+    )
+    assert text_looks_parked(content) is True
+
+
+def test_text_looks_parked_ignores_product_for_sale_copy() -> None:
+    # Real product copy: the subject of "for sale" is "items", not a domain, and
+    # there is no marketplace brand. Must NOT trip (the SellRaze false positive).
+    content = (
+        "SellRaze | The fastest way to sell your stuff\n"
+        "List items for sale across every marketplace using image recognition."
+    )
+    assert text_looks_parked(content) is False
