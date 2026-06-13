@@ -860,15 +860,16 @@ def judge_eligibility(limit: int | None) -> None:
     """Backfill the is-this-a-startup judgment for already-enriched companies."""
     import asyncio
 
-    from nous.db.session import AsyncSessionLocal
+    from nous.db.session import get_session_factory
     from nous.observability import emit_run_telemetry
     from nous.pipeline.judge_eligibility import run_judge_eligibility
 
     async def _run() -> None:
+        # The stage manages its own per-company sessions from the factory, so a
+        # wedged free-tier connection skips one company instead of hanging.
         try:
-            async with AsyncSessionLocal() as session:
-                summary = await run_judge_eligibility(session, limit=limit)
-                click.echo(summary.model_dump_json(indent=2))
+            summary = await run_judge_eligibility(get_session_factory(), limit=limit)
+            click.echo(summary.model_dump_json(indent=2))
         finally:
             emit_run_telemetry("judge-eligibility")
 
