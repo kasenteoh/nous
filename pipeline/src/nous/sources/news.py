@@ -91,6 +91,27 @@ _WHITESPACE_RE = re.compile(r"\s+")
 
 GOOGLE_NEWS_RSS_BASE = "https://news.google.com/rss/search"
 
+# Feed-syndication surfaces: endpoints a site *publishes* for programmatic
+# readers (RSS/Atom) and serves with HTTP 200 to identified clients, even
+# though the site's robots.txt ``Disallow: /`` blocks its *interactive* crawl
+# surface. Google News is the canonical case — news.google.com/robots.txt
+# disallows ``/`` for ``*`` with an allow-list that omits ``/rss``, yet
+# /rss/search returns a valid 200 feed and the spec (nous-technical-spec.md
+# §5.5) sanctions this exact URL for funding discovery. Honoring robots.txt
+# literally here means *every* per-company Google News query silently returns
+# nothing — the feed is unreachable despite being designed for exactly this.
+#
+# We treat these prefixes as exempt from the robots gate ONLY: the per-domain
+# 1 req/sec throttle and our identifying User-Agent still apply on every fetch.
+# Keep this list as narrow as possible — it is a deliberate, audited exception
+# to the project's robots discipline, not a general bypass.
+_ROBOTS_EXEMPT_PREFIXES: tuple[str, ...] = ("https://news.google.com/rss/",)
+
+
+def _is_robots_exempt(url: str) -> bool:
+    """True if ``url`` is a published feed surface exempt from the robots gate."""
+    return url.startswith(_ROBOTS_EXEMPT_PREFIXES)
+
 
 class NewsArticleResult(BaseModel):
     """Shallow news article record from an RSS feed.
@@ -252,11 +273,17 @@ class NewsClient:
         return await self._throttled_get(url)
 
     async def fetch_text(self, url: str) -> str:
-        """Robots-checked, throttled, retried GET. Returns response body text."""
+        """Robots-checked, throttled, retried GET. Returns response body text.
+
+        Published feed surfaces (``_ROBOTS_EXEMPT_PREFIXES``, e.g. Google News
+        RSS) skip the robots gate — see that constant's docstring — but still
+        pay the per-domain throttle and carry our identifying User-Agent.
+        """
         _, robots = self._assert_open()
-        allowed = await robots.is_allowed(url)
-        if not allowed:
-            raise RobotsBlockedError(f"robots.txt disallows: {url}")
+        if not _is_robots_exempt(url):
+            allowed = await robots.is_allowed(url)
+            if not allowed:
+                raise RobotsBlockedError(f"robots.txt disallows: {url}")
         resp = await self._get_with_retry(url)
         return resp.text
 
