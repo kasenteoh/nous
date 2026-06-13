@@ -507,3 +507,74 @@ class CompanySnapshot(Base):
     news_count_30d: Mapped[int] = mapped_column(
         Integer, nullable=False, server_default="0"
     )
+
+
+class CompanyRelationship(Base):
+    """A typed, directed edge in the startup relationship graph.
+
+    The unified company<->company edge table behind the "Related companies"
+    surface. Unlike ``competitors`` (which keeps name-only, unresolved entries
+    for its ranked-list UI), every row here has *both* endpoints resolved to
+    companies in our DB — it is a clean internal graph.
+
+    Populated set-based, replace-style, with zero LLM cost by the
+    ``derive-relationships`` stage:
+    - ``competitor`` edges are projected from resolved ``competitors`` rows;
+    - ``similar`` edges come from shared ``industry_group`` + ``tags`` overlap.
+
+    The ``supplier``/``customer``/``partner`` types are reserved in the CHECK so
+    the schema is ready for a future (human-reviewed) LLM supply-chain pass; they
+    are not populated today. "Also backed by" (shared-investor) edges are
+    deliberately NOT stored here — a mega-investor would make them O(N^2); they
+    are derived at read time in the web layer, capped.
+
+    Directed storage (one row per ``company_id -> related_company_id``) keeps the
+    dominant read — "everything related to company X" — a trivial
+    ``WHERE company_id = X``. The derive stage writes both directions for
+    symmetric types (``similar``).
+    """
+
+    __tablename__ = "company_relationships"
+
+    company_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("companies.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    related_company_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("companies.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    relationship_type: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    # Strength / ordering signal: tag-overlap score for 'similar', 1/rank for
+    # 'competitor'. Higher = stronger; the UI orders by this descending.
+    score: Mapped[Decimal] = mapped_column(Numeric(6, 3), nullable=False)
+    # Provenance (every rendered fact needs a source): 'competitors' |
+    # 'industry_tags' | (reserved: 'llm_inferred').
+    source: Mapped[str] = mapped_column(String, nullable=False)
+    # Short human-readable justification shown as the edge's caption, e.g.
+    # "Both in developer-tools; 4 shared tags".
+    evidence: Mapped[str | None] = mapped_column(String, nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "company_id",
+            "related_company_id",
+            "relationship_type",
+            name="uq_company_relationships_pair_type",
+        ),
+        # A company can never be related to itself (mirrors
+        # ck_competitors_no_self_reference).
+        CheckConstraint(
+            "related_company_id <> company_id",
+            name="ck_company_relationships_no_self",
+        ),
+        CheckConstraint(
+            "relationship_type IN "
+            "('competitor', 'similar', 'supplier', 'customer', 'partner')",
+            name="ck_company_relationships_type",
+        ),
+    )

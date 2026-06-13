@@ -647,6 +647,98 @@ def snapshot_companies(week: str | None) -> None:
     asyncio.run(_run())
 
 
+@cli.command("link-competitors")
+@click.option(
+    "--limit",
+    type=int,
+    default=None,
+    help="Max dangling competitor rows to attempt (for testing / partial runs).",
+)
+@click.option(
+    "--threshold",
+    type=float,
+    default=0.45,
+    show_default=True,
+    help="Minimum pg_trgm similarity to accept a fuzzy company match.",
+)
+@click.option(
+    "--tie-margin",
+    type=float,
+    default=0.08,
+    show_default=True,
+    help="Skip a match when the runner-up is within this similarity of the best.",
+)
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    default=False,
+    help="Report what would be linked without writing.",
+)
+def link_competitors(
+    limit: int | None, threshold: float, tie_margin: float, dry_run: bool
+) -> None:
+    """Fuzzy-resolve dangling competitors.competitor_company_id FKs (zero LLM).
+
+    analyze-competitors only links competitor names that match a company's
+    normalized_name exactly; this densifies the graph by trigram-matching the
+    rest, best-match-only with a tie guard. Idempotent (only touches NULL FKs).
+    """
+    import asyncio
+
+    from nous.db.session import AsyncSessionLocal
+    from nous.pipeline.link_competitors import run_link_competitors
+
+    async def _run() -> None:
+        async with AsyncSessionLocal() as session:
+            summary = await run_link_competitors(
+                session,
+                limit=limit,
+                threshold=threshold,
+                tie_margin=tie_margin,
+                dry_run=dry_run,
+            )
+            click.echo(summary.model_dump_json(indent=2))
+
+    asyncio.run(_run())
+
+
+@cli.command("derive-relationships")
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    default=False,
+    help="Compute and report edge counts without writing.",
+)
+@click.option(
+    "--max-similar-per-company",
+    type=int,
+    default=8,
+    show_default=True,
+    help="Cap on 'similar' edges derived per company.",
+)
+def derive_relationships(dry_run: bool, max_similar_per_company: int) -> None:
+    """Rebuild the company_relationships graph from competitors + industry/tags.
+
+    Replace-style and idempotent, zero LLM. Run after link-competitors so the
+    competitor projection picks up freshly resolved FKs.
+    """
+    import asyncio
+
+    from nous.db.session import AsyncSessionLocal
+    from nous.pipeline.derive_relationships import run_derive_relationships
+
+    async def _run() -> None:
+        async with AsyncSessionLocal() as session:
+            summary = await run_derive_relationships(
+                session,
+                dry_run=dry_run,
+                max_similar_per_company=max_similar_per_company,
+            )
+            click.echo(summary.model_dump_json(indent=2))
+
+    asyncio.run(_run())
+
+
 @cli.command("db-stats")
 @click.option(
     "--cap-mb",

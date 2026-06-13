@@ -4,6 +4,7 @@
 
 import { createSupabaseServerClient } from "@/lib/db";
 import type {
+  AlsoBackedByCompany,
   CompanyDetail,
   CompanyInvestorRow,
   CompanyListRow,
@@ -18,6 +19,7 @@ import type {
   InvestorSlugRow,
   NewsArticleRow,
   PersonRow,
+  RelatedCompany,
 } from "@/lib/types";
 
 // Shape returned by the nested Supabase select on `funding_rounds`. We narrow
@@ -55,6 +57,22 @@ type CompanyInvestorJoin = {
   is_lead: boolean | null;
   source: string | null;
   investors: NestedInvestorFull | NestedInvestorFull[] | null;
+};
+
+// Nested shape from company_relationships → related company. Same object-or-
+// single-element-array ambiguity PostgREST gives every embed; narrowed here.
+interface NestedRelatedCompany {
+  slug: string | null;
+  name: string | null;
+  description_short: string | null;
+  status: string | null;
+  industry_group: string | null;
+}
+
+type CompanyRelationshipJoin = {
+  score: number | null;
+  evidence: string | null;
+  related_company: NestedRelatedCompany | NestedRelatedCompany[] | null;
 };
 
 /** Sort options exposed by the index page. */
@@ -877,6 +895,267 @@ export async function getCompanyBySlug(
     investors,
     news,
   };
+}
+
+// ─── Relationship graph (similar / also-backed-by) ────────────────────────────
+
+/**
+ * "Similar" companies for the relationship-graph section on /c/[slug]: the
+ * directed `company_relationships` edges (company_id → related_company_id) of
+ * type 'similar', joined with the related company's display fields, ranked by
+ * score desc and capped at 12.
+ *
+ * The embedded company is narrowed through {@link NestedRelatedCompany} (never
+ * `any`); PostgREST may hand the embed back as an object or a single-element
+ * array, so both shapes are normalized — same idiom as the competitors join.
+ * Rows whose related company didn't resolve (missing slug/name) are dropped.
+ * Returns [] on missing env (build-time prerender / local dev without
+ * .env.local), like every other helper here.
+ */
+export async function getRelatedCompanies(
+  companyId: string,
+): Promise<RelatedCompany[]> {
+  let supabase: ReturnType<typeof createSupabaseServerClient>;
+  try {
+    supabase = createSupabaseServerClient();
+  } catch (err) {
+    console.warn(
+      "[getRelatedCompanies] Supabase not configured:",
+      (err as Error).message,
+    );
+    return [];
+  }
+
+  const { data, error } = await supabase
+    .from("company_relationships")
+    .select(
+      "score, evidence, related_company:companies!related_company_id(slug, name, description_short, status, industry_group)",
+    )
+    .eq("company_id", companyId)
+    .eq("relationship_type", "similar")
+    .order("score", { ascending: false })
+    .limit(12);
+
+  if (error) {
+    console.error("[getRelatedCompanies] query failed:", error.message);
+    return [];
+  }
+
+  return ((data ?? []) as CompanyRelationshipJoin[]).flatMap((row) => {
+    const c = Array.isArray(row.related_company)
+      ? row.related_company[0]
+      : row.related_company;
+    if (!c?.slug || !c.name) return [];
+    return [
+      {
+        slug: c.slug,
+        name: c.name,
+        descriptionShort: c.description_short ?? null,
+        status: c.status ?? "active",
+        industryGroup: c.industry_group ?? null,
+        score: row.score != null ? Number(row.score) : 0,
+        evidence: row.evidence ?? null,
+      },
+    ];
+  });
+}
+
+// An investor backing more than this many companies is treated as too
+// high-degree to imply a meaningful relationship — a mega-fund like YC backs
+// thousands, so including it would relate half the catalog. Such investors are
+// dropped from the "also backed by" computation entirely.
+const ALSO_BACKED_BY_MAX_INVESTOR_DEGREE = 30;
+// Cap on the "also backed by" companies surfaced, ranked by shared-investor count.
+const ALSO_BACKED_BY_LIMIT = 8;
+
+/**
+ * "Also backed by" companies for the relationship-graph section on /c/[slug]:
+ * a two-hop shared-investor walk computed read-time, EXCLUDING high-degree
+ * (mega-fund) investors so the result stays meaningful.
+ *
+ * Four small round-trips + in-memory aggregation (the codebase already does
+ * keyset scans + JS processing for similar shapes):
+ *   1. This company's investor_ids from `company_investors`.
+ *   2. Each investor's total holding count via head-count queries; drop any
+ *      investor with > {@link ALSO_BACKED_BY_MAX_INVESTOR_DEGREE} holdings.
+ *      Keep the names of the remaining (low-degree) investors.
+ *   3. Other companies (company_id != this) backed by any remaining investor,
+ *      tallied by number of shared low-degree investors; ranked desc; top
+ *      {@link ALSO_BACKED_BY_LIMIT}.
+ *   4. companies(slug, name) for those ids → {slug, name, sharedInvestors}.
+ *
+ * Returns [] on missing env or any error, and whenever the company has no
+ * low-degree investors (every result set is capped).
+ */
+export async function getAlsoBackedBy(
+  companyId: string,
+): Promise<AlsoBackedByCompany[]> {
+  let supabase: ReturnType<typeof createSupabaseServerClient>;
+  try {
+    supabase = createSupabaseServerClient();
+  } catch (err) {
+    console.warn(
+      "[getAlsoBackedBy] Supabase not configured:",
+      (err as Error).message,
+    );
+    return [];
+  }
+
+  // Step 1: this company's investor ids.
+  const { data: ownRows, error: ownError } = await supabase
+    .from("company_investors")
+    .select("investor_id")
+    .eq("company_id", companyId);
+
+  if (ownError) {
+    console.error(
+      "[getAlsoBackedBy] own investors query failed:",
+      ownError.message,
+    );
+    return [];
+  }
+
+  const ownInvestorIds = ((ownRows ?? []) as { investor_id: string | null }[])
+    .map((r) => r.investor_id)
+    .filter((id): id is string => id != null);
+
+  if (ownInvestorIds.length === 0) return [];
+
+  // Step 2: keep only low-degree investors. A head-count per investor avoids
+  // pulling their whole (possibly huge) holdings list. Run in parallel, then
+  // fetch the names of the survivors.
+  const degreeResults = await Promise.all(
+    ownInvestorIds.map(async (id) => {
+      const { count, error } = await supabase
+        .from("company_investors")
+        .select("*", { count: "exact", head: true })
+        .eq("investor_id", id);
+      if (error) {
+        console.error(
+          "[getAlsoBackedBy] investor degree count failed:",
+          error.message,
+        );
+        // Treat an unknown degree as high-degree (exclude) — safer than
+        // accidentally relating half the catalog on a transient error.
+        return { id, count: Number.POSITIVE_INFINITY };
+      }
+      return { id, count: count ?? 0 };
+    }),
+  );
+
+  const lowDegreeIds = degreeResults
+    .filter((r) => r.count <= ALSO_BACKED_BY_MAX_INVESTOR_DEGREE)
+    .map((r) => r.id);
+
+  if (lowDegreeIds.length === 0) return [];
+
+  // Names of the surviving low-degree investors, for the attribution caption.
+  const { data: investorRows, error: investorError } = await supabase
+    .from("investors")
+    .select("id, name")
+    .in("id", lowDegreeIds);
+
+  if (investorError) {
+    console.error(
+      "[getAlsoBackedBy] investor names query failed:",
+      investorError.message,
+    );
+    return [];
+  }
+
+  const investorName = new Map<string, string>();
+  for (const r of (investorRows ?? []) as {
+    id: string | null;
+    name: string | null;
+  }[]) {
+    if (r.id && r.name) investorName.set(r.id, r.name);
+  }
+
+  // Step 3: other companies backed by any low-degree investor, tallied by the
+  // count of shared low-degree investors. Order by investor_id so a transient
+  // PostgREST 1000-row cap (this edge table can be large) truncates
+  // deterministically rather than arbitrarily.
+  const { data: sharedRows, error: sharedError } = await supabase
+    .from("company_investors")
+    .select("company_id, investor_id")
+    .in("investor_id", lowDegreeIds)
+    .neq("company_id", companyId)
+    .order("investor_id", { ascending: true });
+
+  if (sharedError) {
+    console.error(
+      "[getAlsoBackedBy] shared-investor query failed:",
+      sharedError.message,
+    );
+    return [];
+  }
+
+  // company_id → set of shared low-degree investor names (a set so a duplicate
+  // (company, investor) edge can't double-count).
+  const sharedByCompany = new Map<string, Set<string>>();
+  for (const r of (sharedRows ?? []) as {
+    company_id: string | null;
+    investor_id: string | null;
+  }[]) {
+    if (!r.company_id || !r.investor_id) continue;
+    const name = investorName.get(r.investor_id);
+    if (!name) continue;
+    let names = sharedByCompany.get(r.company_id);
+    if (!names) {
+      names = new Set<string>();
+      sharedByCompany.set(r.company_id, names);
+    }
+    names.add(name);
+  }
+
+  if (sharedByCompany.size === 0) return [];
+
+  // Rank by shared-investor count desc; company_id as a deterministic tiebreak.
+  const ranked = [...sharedByCompany.entries()]
+    .sort((a, b) => b[1].size - a[1].size || a[0].localeCompare(b[0]))
+    .slice(0, ALSO_BACKED_BY_LIMIT);
+
+  // Step 4: resolve those company ids to slug + name. Drop unresolved joins
+  // (every surfaced company must link somewhere), then re-apply the ranking
+  // order the `.in()` result does not preserve.
+  const topIds = ranked.map(([id]) => id);
+  const { data: companyRows, error: companyError } = await supabase
+    .from("companies")
+    .select("id, slug, name")
+    .in("id", topIds);
+
+  if (companyError) {
+    console.error(
+      "[getAlsoBackedBy] companies query failed:",
+      companyError.message,
+    );
+    return [];
+  }
+
+  const companyById = new Map<string, { slug: string; name: string }>();
+  for (const r of (companyRows ?? []) as {
+    id: string | null;
+    slug: string | null;
+    name: string | null;
+  }[]) {
+    if (r.id && r.slug && r.name) {
+      companyById.set(r.id, { slug: r.slug, name: r.name });
+    }
+  }
+
+  return ranked.flatMap(([id, names]) => {
+    const c = companyById.get(id);
+    if (!c) return [];
+    return [
+      {
+        slug: c.slug,
+        name: c.name,
+        sharedInvestors: [...names].sort((a, b) =>
+          a.localeCompare(b, "en-US", { sensitivity: "base" }),
+        ),
+      },
+    ];
+  });
 }
 
 // ─── Tag / location SEO queries ───────────────────────────────────────────────
