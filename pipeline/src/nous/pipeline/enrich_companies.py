@@ -16,7 +16,7 @@ import re
 from datetime import UTC, datetime, timedelta
 
 from pydantic import BaseModel
-from sqlalchemy import ColumnElement, exists, func, or_, select
+from sqlalchemy import ColumnElement, delete, exists, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.exc import StaleDataError
@@ -48,9 +48,14 @@ def _normalize_tag(tag: str) -> str:
 class EnrichSummary(BaseModel):
     companies_seen: int = 0
     companies_enriched: int = 0
+    # NOT disjoint from companies_enriched: a not_a_startup/non_us row still has
+    # its description written (then hidden by exclusion_reason), so it counts in
+    # both buckets. companies_seen is the only true total.
+    companies_excluded: int = 0
     people_written: int = 0
     llm_failures: int = 0
     skipped_no_text: int = 0
+    skipped_bad_website: int = 0
     skipped_rate_limited: int = 0
 
 
@@ -97,6 +102,7 @@ async def run_enrich_companies(
             )
         )
         .where(or_(*conditions))
+        .where(Company.exclusion_reason.is_(None))
     )
     if max_companies is not None:
         stmt = stmt.limit(max_companies)
@@ -156,10 +162,46 @@ async def run_enrich_companies(
             summary.llm_failures += 1
             continue
 
+        now = datetime.now(tz=UTC)
+
+        if description.website_state != "ok":
+            # The scraped site is parked/for-sale, unrelated, or contentless —
+            # the URL is wrong or worthless, which says nothing about the
+            # company itself. Reject the URL, clear the website, and drop the
+            # junk pages so the selection stops re-picking this company until
+            # a new site is resolved + scraped. Junk prose is never published.
+            logger.info(
+                "Company %s website_state=%s — clearing website %s",
+                company.name,
+                description.website_state,
+                company.website,
+            )
+            if company.website:
+                company.rejected_urls = [
+                    *(company.rejected_urls or []),
+                    company.website,
+                ]
+            company.website = None
+            company.website_resolved_at = None
+            await session.execute(
+                delete(RawPage).where(RawPage.company_id == company.id)
+            )
+            session.add(company)
+            try:
+                await session.commit()
+            except (StaleDataError, IntegrityError):
+                await session.rollback()
+                logger.warning(
+                    "Company %s disappeared mid-enrich (likely a concurrent"
+                    " merge) — skipping.",
+                    company.id,
+                )
+            summary.skipped_bad_website += 1
+            continue
+
         # Normalize tags: lowercase + hyphenated.
         normalized_tags = [_normalize_tag(t) for t in description.tags if t.strip()]
 
-        now = datetime.now(tz=UTC)
         company.description_short = description.description_short
         company.description_long = description.description_long
         company.primary_category = description.primary_category
@@ -178,6 +220,27 @@ async def run_enrich_companies(
             company.industry_group = description.industry
         if (company.hq_city or company.hq_state) and not company.hq_country:
             company.hq_country = "US"
+
+        # Eligibility judgment (spec 2026-06-12). Runs only on website_state
+        # == "ok" — a parked/unrelated page supports no judgment. Unknown
+        # (None) keeps the company. The judgment stamp prevents the
+        # judge-eligibility backfill from re-visiting this row.
+        company.eligibility_checked_at = now
+        if description.founded_year and not company.year_incorporated:
+            company.year_incorporated = description.founded_year
+        llm_country = (description.hq_country or "").strip().upper() or None
+        if llm_country:
+            company.hq_country = llm_country
+        if description.is_startup is False:
+            company.exclusion_reason = "not_a_startup"
+            company.exclusion_detail = description.not_startup_reason
+            company.excluded_at = now
+            summary.companies_excluded += 1
+        elif llm_country is not None and llm_country != "US":
+            company.exclusion_reason = "non_us"
+            company.exclusion_detail = f"website states HQ country {llm_country}"
+            company.excluded_at = now
+            summary.companies_excluded += 1
 
         session.add(company)
 

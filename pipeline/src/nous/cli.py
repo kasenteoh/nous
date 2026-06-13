@@ -787,6 +787,87 @@ def db_stats(cap_mb: int | None, warn_pct: int | None) -> None:
     asyncio.run(_run())
 
 
+@cli.command("judge-eligibility")
+@click.option(
+    "--limit",
+    type=int,
+    default=None,
+    help="Maximum number of companies to judge (caps LLM spend per run).",
+)
+def judge_eligibility(limit: int | None) -> None:
+    """Backfill the is-this-a-startup judgment for already-enriched companies."""
+    import asyncio
+
+    from nous.db.session import AsyncSessionLocal
+    from nous.observability import emit_run_telemetry
+    from nous.pipeline.judge_eligibility import run_judge_eligibility
+
+    async def _run() -> None:
+        try:
+            async with AsyncSessionLocal() as session:
+                summary = await run_judge_eligibility(session, limit=limit)
+                click.echo(summary.model_dump_json(indent=2))
+        finally:
+            emit_run_telemetry("judge-eligibility")
+
+    asyncio.run(_run())
+
+
+@cli.command("repair-catalog")
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    default=False,
+    help="Log intended repairs without writing.",
+)
+def repair_catalog(dry_run: bool) -> None:
+    """One-time catalog repair: Lightspeed badge-suffix names + parked-domain rows."""
+    import asyncio
+
+    from nous.db.session import AsyncSessionLocal
+    from nous.pipeline.repair_catalog import run_repair_catalog
+
+    async def _run() -> None:
+        async with AsyncSessionLocal() as session:
+            summary = await run_repair_catalog(session, dry_run=dry_run)
+            click.echo(summary.model_dump_json(indent=2))
+
+    asyncio.run(_run())
+
+
+@cli.command("exclude-company")
+@click.argument("slug")
+@click.option(
+    "--reason",
+    type=click.Choice(["parse_artifact", "non_us", "not_a_startup", "manual"]),
+    default="manual",
+    show_default=True,
+    help="Recorded exclusion reason.",
+)
+@click.option("--detail", type=str, default=None, help="Free-form audit note.")
+@click.option(
+    "--clear",
+    is_flag=True,
+    default=False,
+    help="Re-include the company (clears the exclusion).",
+)
+def exclude_company(slug: str, reason: str, detail: str | None, clear: bool) -> None:
+    """Manually exclude (or --clear) a company from the catalog by slug."""
+    import asyncio
+
+    from nous.db.session import AsyncSessionLocal
+    from nous.pipeline.exclude_company import run_exclude_company
+
+    async def _run() -> None:
+        async with AsyncSessionLocal() as session:
+            result = await run_exclude_company(
+                session, slug=slug, reason=reason, detail=detail, clear=clear
+            )
+            click.echo(result.model_dump_json(indent=2))
+
+    asyncio.run(_run())
+
+
 def main() -> None:
     cli()
 

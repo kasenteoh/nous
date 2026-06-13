@@ -10,14 +10,21 @@ environments without a Postgres instance (e.g., CI without the service container
 from __future__ import annotations
 
 import os
+from datetime import date
 
 import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from nous.db.models import Company, Person, RawPage
-from nous.db.upsert import replace_people, upsert_raw_page
+from nous.db.models import Company, FundingRound, Person, RawPage
+from nous.db.upsert import (
+    merge_companies,
+    reconcile_funding_round,
+    replace_people,
+    upsert_raw_page,
+)
 from nous.llm.prompts.company_description import PersonExtraction
+from nous.llm.prompts.funding_extraction import FundingExtraction
 
 # ---------------------------------------------------------------------------
 # Skip guard
@@ -199,3 +206,76 @@ async def test_replace_people_empty_clears(db: AsyncSession) -> None:
     assert n == 0
     rows = await _people_for(db, company.id)
     assert rows == []
+
+
+# ---------------------------------------------------------------------------
+# funding_round_count maintenance
+# ---------------------------------------------------------------------------
+
+
+def _make_quality_company(name: str, slug: str) -> Company:
+    return Company(
+        name=name, slug=slug, normalized_name=slug.replace("-", " "), hq_country="US"
+    )
+
+
+async def test_reconcile_funding_round_maintains_count(db: AsyncSession) -> None:
+    company = _make_quality_company("Counted Co", "counted-co")
+    db.add(company)
+    await db.flush()
+
+    extraction = FundingExtraction(
+        is_funding_announcement=True,
+        round_type="Seed",
+        amount_raised_usd=1_000_000,
+        announced_date=date(2026, 5, 1),
+        confidence="high",
+    )
+    _, created = await reconcile_funding_round(
+        db,
+        company_id=company.id,
+        extraction=extraction,
+        primary_news_url="https://example.com/a",
+    )
+    assert created is True
+    await db.refresh(company)
+    assert company.funding_round_count == 1
+
+    # Re-running the same extraction merges (created=False) and count stays 1.
+    _, created = await reconcile_funding_round(
+        db,
+        company_id=company.id,
+        extraction=extraction,
+        primary_news_url="https://example.com/b",
+    )
+    assert created is False
+    await db.refresh(company)
+    assert company.funding_round_count == 1
+
+
+async def test_merge_companies_refreshes_survivor_count(db: AsyncSession) -> None:
+    survivor = _make_quality_company("Survivor Co", "survivor-co")
+    loser = _make_quality_company("Loser Co", "loser-co")
+    db.add_all([survivor, loser])
+    await db.flush()
+    # Seed BOTH sides so the assertion proves the count is recomputed from the
+    # table (1 own + 1 inherited = 2), not transferred from the loser.
+    db.add_all(
+        [
+            FundingRound(
+                company_id=survivor.id,
+                round_type="Series A",
+                announced_date=date(2025, 6, 1),
+            ),
+            FundingRound(
+                company_id=loser.id,
+                round_type="Seed",
+                announced_date=date(2026, 1, 1),
+            ),
+        ]
+    )
+    await db.flush()
+
+    await merge_companies(db, survivor_id=survivor.id, loser_id=loser.id)
+    await db.refresh(survivor)
+    assert survivor.funding_round_count == 2

@@ -43,6 +43,7 @@ _CANNED_DESCRIPTION = CompanyDescription(
     description_long="A longer description with multiple paragraphs.",
     primary_category="developer tools",
     tags=["open source", "API first", "cloud native"],
+    website_state="ok",
 )
 
 
@@ -126,6 +127,7 @@ async def test_enrich_writes_people(
         description_long="Long.",
         primary_category="developer tools",
         tags=[],
+        website_state="ok",
         people=[
             PersonExtraction(name="Ada Lovelace", role="CEO"),
             PersonExtraction(name="Alan Turing", role="CTO"),
@@ -168,6 +170,7 @@ async def test_tags_are_normalized(
         description_long="Long.",
         primary_category="fintech",
         tags=["Open Source", "API First", "Cloud Native"],
+        website_state="ok",
     )
     monkeypatch.setattr(
         "nous.pipeline.enrich_companies.complete_json",
@@ -450,3 +453,131 @@ async def test_markup_heavy_page_skipped_in_loop(
     mock_complete_json.assert_not_called()
     assert summary.companies_seen == 1
     assert summary.skipped_no_text >= 1
+
+
+async def test_parked_site_clears_website_and_pages(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    company = _make_company(name="Ninegag", slug="ninegag-parked")
+    company.website = "https://ninegag.ai"
+    db.add(company)
+    await db.flush()
+    db.add(_make_raw_page(company.id, url="https://ninegag.ai/"))
+    await db.commit()
+
+    canned = CompanyDescription(
+        description_short="The domain ninegag.ai is listed for sale.",
+        description_long="Parked page; no product information.",
+        primary_category="unknown",
+        website_state="parked_or_for_sale",
+    )
+    monkeypatch.setattr(
+        "nous.pipeline.enrich_companies.complete_json",
+        AsyncMock(return_value=canned),
+    )
+
+    summary = await run_enrich_companies(db)
+    assert summary.skipped_bad_website == 1
+    assert summary.companies_enriched == 0
+
+    await db.refresh(company)
+    assert company.website is None
+    assert company.website_resolved_at is None
+    assert company.rejected_urls == ["https://ninegag.ai"]
+    assert company.description_short is None  # junk prose NOT published
+    pages = (
+        await db.execute(select(RawPage).where(RawPage.company_id == company.id))
+    ).scalars().all()
+    assert pages == []  # junk pages dropped so the selection stops re-picking
+
+
+async def test_not_startup_judgment_excludes(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    company = _make_company(name="Old Enterprise", slug="old-enterprise")
+    db.add(company)
+    await db.flush()
+    db.add(_make_raw_page(company.id, url="https://old.example/"))
+    await db.commit()
+
+    canned = CompanyDescription(
+        description_short="A 26-year-old customer-service software vendor.",
+        description_long="Long text.",
+        primary_category="vertical SaaS",
+        website_state="ok",
+        is_startup=False,
+        not_startup_reason="Founded in 2000; publicly traded.",
+        founded_year=2000,
+    )
+    monkeypatch.setattr(
+        "nous.pipeline.enrich_companies.complete_json",
+        AsyncMock(return_value=canned),
+    )
+
+    summary = await run_enrich_companies(db)
+    assert summary.companies_enriched == 1
+    assert summary.companies_excluded == 1
+
+    await db.refresh(company)
+    assert company.exclusion_reason == "not_a_startup"
+    assert company.exclusion_detail == "Founded in 2000; publicly traded."
+    assert company.excluded_at is not None
+    assert company.eligibility_checked_at is not None
+    assert company.year_incorporated == 2000
+    # Description IS stored (audit), exclusion just hides it from the catalog.
+    assert company.description_short is not None
+
+
+async def test_non_us_judgment_excludes(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    company = _make_company(name="Bangalore Co", slug="bangalore-co")
+    db.add(company)
+    await db.flush()
+    db.add(_make_raw_page(company.id, url="https://bangalore.example/"))
+    await db.commit()
+
+    canned = CompanyDescription(
+        description_short="An Indian HR software company.",
+        description_long="Long text.",
+        primary_category="vertical SaaS",
+        website_state="ok",
+        is_startup=True,
+        hq_country="IN",
+    )
+    monkeypatch.setattr(
+        "nous.pipeline.enrich_companies.complete_json",
+        AsyncMock(return_value=canned),
+    )
+
+    await run_enrich_companies(db)
+    await db.refresh(company)
+    assert company.exclusion_reason == "non_us"
+    assert company.hq_country == "IN"
+
+
+async def test_ok_startup_sets_stamp_without_exclusion(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    company = _make_company(name="Fine Startup", slug="fine-startup")
+    db.add(company)
+    await db.flush()
+    db.add(_make_raw_page(company.id, url="https://fine.example/"))
+    await db.commit()
+
+    canned = CompanyDescription(
+        description_short="A developer tools startup.",
+        description_long="Long text.",
+        primary_category="developer tools",
+        website_state="ok",
+        is_startup=None,  # unknown → keep
+    )
+    monkeypatch.setattr(
+        "nous.pipeline.enrich_companies.complete_json",
+        AsyncMock(return_value=canned),
+    )
+
+    await run_enrich_companies(db)
+    await db.refresh(company)
+    assert company.exclusion_reason is None
+    assert company.eligibility_checked_at is not None

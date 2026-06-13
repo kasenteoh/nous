@@ -285,6 +285,68 @@ async def test_limit_caps_companies_processed(db: AsyncSession) -> None:
     assert summary.companies_seen == 1
 
 
+class _ParkedAwareClient(MockHomepageClient):
+    """Serves a parked page for chosen hosts; records every fetched URL."""
+
+    def __init__(self, parked_hosts: set[str], fetched: list[str]) -> None:
+        super().__init__({})
+        self._parked_hosts = parked_hosts
+        self._fetched = fetched
+
+    async def fetch(self, url: str) -> FetchResult:
+        self._fetched.append(url)
+        host = url.removeprefix("https://").removeprefix("http://").split("/")[0]
+        if host in self._parked_hosts:
+            return FetchResult(
+                url=url,
+                status_code=200,
+                content=(
+                    "<html><body>ninegag.com — this domain is for sale."
+                    " Buy this domain on Spaceship.</body></html>"
+                ),
+                content_type="text/html",
+            )
+        raise httpx.RequestError(f"no route for {url}", request=None)  # type: ignore[arg-type]
+
+
+async def test_resolver_rejects_parked_page_and_rejected_domains(
+    db: AsyncSession,
+) -> None:
+    """Parked candidates are rejected even though they mention the name, and
+    domains in rejected_urls are never fetched at all."""
+    company = _make_company(name="Ninegag", slug="ninegag-parked-resolve")
+    company.rejected_urls = ["https://ninegag.ai"]
+    db.add(company)
+    await db.flush()
+    await db.commit()
+
+    fetched: list[str] = []
+    client = _ParkedAwareClient({"ninegag.com"}, fetched)
+    summary = await run_resolve_homepages(db, client)
+
+    await db.refresh(company)
+    assert company.website is None  # parked page mentioning the name ≠ a match
+    assert company.website_resolved_at is not None  # attempt is still stamped
+    assert summary.no_match == 1
+    # The parked .com was fetched and rejected by content...
+    assert any(u.startswith("https://ninegag.com") for u in fetched)
+    # ...the rejected .ai domain was skipped before any fetch.
+    assert not any("ninegag.ai" in u for u in fetched)
+
+
+async def test_excluded_companies_not_selected_for_resolve(db: AsyncSession) -> None:
+    """An excluded company is never picked up by the resolve selection, even
+    when it is otherwise eligible (no website, never attempted)."""
+    excluded = _make_company(name="Excluded Co", slug="excluded-co-resolve")
+    excluded.exclusion_reason = "not_a_startup"
+    db.add(excluded)
+    await db.flush()
+    await db.commit()
+
+    summary = await run_resolve_homepages(db, MockHomepageClient({}))
+    assert summary.companies_seen == 0
+
+
 async def test_concurrent_batches_resolve_all_companies(db: AsyncSession) -> None:
     """concurrency=2 over 5 eligible companies (3 batches) resolves every one.
 

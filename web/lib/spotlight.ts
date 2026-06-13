@@ -403,7 +403,8 @@ export async function buildSpotlightPool(
       .not("description_short", "is", null)
       // A shut-down/acquired company must never be "Today's spotlight" —
       // exits can still score (their acquisition coverage counts as news).
-      .eq("status", "active");
+      .eq("status", "active")
+      .is("exclusion_reason", null);
     if (error) {
       console.error(
         "[buildSpotlightPool] candidate fetch failed:",
@@ -444,6 +445,7 @@ export async function buildSpotlightPool(
       // Same active-only rule as the candidate fetch — the fill path feeds
       // the identical spotlight deck.
       .eq("status", "active")
+      .is("exclusion_reason", null)
       .order("created_at", { ascending: false })
       .limit(POOL_SIZE * 4);
     if (error) {

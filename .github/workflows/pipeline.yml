@@ -161,6 +161,20 @@ jobs:
       # (contains(steps.*.outcome, 'success')) can see them; db-stats and the
       # deploy step are intentionally id-free so they can't affect that gate.
 
+      # ----- Catalog repair (one-time; runs first, no-ops once clean) ---------
+
+      - name: Repair catalog
+        id: repair
+        # One-time data repair: strips Lightspeed fund-badge text from names,
+        # drops/excludes India-only holdings, resets parked-domain enrichments.
+        # Idempotent — selects nothing once the backlog is clean, so it's safe
+        # to leave in the recurring run. First because it must clean data before
+        # the stages below read it (and right after migrations so the exclusion
+        # columns exist).
+        timeout-minutes: 15
+        continue-on-error: true
+        run: uv run nous repair-catalog
+
       # ----- Funding news (freshness-first) -----------------------------------
 
       - name: Ingest news
@@ -253,6 +267,17 @@ jobs:
           ENRICH_LIMIT="${{ inputs.enrich_limit }}"
           if [ -z "$ENRICH_LIMIT" ]; then ENRICH_LIMIT=30; fi
           uv run nous enrich-companies --limit "$ENRICH_LIMIT"
+
+      - name: Judge eligibility
+        id: judge
+        # Backfills the is-this-a-startup / non-US judgment onto companies
+        # enriched before that judgment existed (~1,600 one-time DeepSeek calls).
+        # Each judged row is stamped, so this drains in a couple of weeks at 10x/
+        # day and then no-ops. Runs after enrich so freshly described rows are
+        # already stamped by enrich itself and skipped here.
+        timeout-minutes: 10
+        continue-on-error: true
+        run: uv run nous judge-eligibility --limit 30
 
       - name: Database stats
         if: ${{ !cancelled() }}

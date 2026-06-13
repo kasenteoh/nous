@@ -45,6 +45,14 @@ export interface CompanyRow {
   // "possibly inactive" signal, surfaced as muted text (not a badge) on the
   // detail page. See INACTIVE_FAILURE_THRESHOLD.
   consecutive_scrape_failures: number;
+  // Catalog-quality soft exclusion (migration 0022). NULL/undefined = included.
+  // Optional (`?`), not just nullable: prod rows lack the column until the
+  // migration runs there; select("*") omits unknown columns. Treat undefined
+  // as null. A non-null value means the company page must 404.
+  exclusion_reason?: string | null;
+  // Denormalized count(funding_rounds) (migration 0022) backing the catalog
+  // bar. Same optionality caveat as above.
+  funding_round_count?: number | null;
   created_at: string;
   updated_at: string;
 }
