@@ -529,3 +529,40 @@ async def test_idempotent_page_content(db: AsyncSession) -> None:
     assert second.page_content_reset == 0
     assert second.aggregator_url_reset == 0
     assert second.parked_desc_reset == 0
+
+
+async def test_for_sale_page_content_ignores_available_for_purchase(
+    db: AsyncSession,
+) -> None:
+    """At-Bay regression: a real company whose page says 'available for purchase'
+    (a resolver-detector phrase) must NOT be reset by pass (d).
+
+    The page-content backfill scans a real company's full homepage text, so it
+    uses the stricter page_is_for_sale_lander (self-referential domain-sale
+    language only), not the resolver's looser text_looks_parked."""
+    real = _co(
+        "At-Bay",
+        "at-bay-rww-d",
+        website="https://www.at-bay.com/",
+        description_short="At-Bay is a cyber insurance and security platform.",
+    )
+    db.add(real)
+    await db.flush()
+    db.add(
+        RawPage(
+            company_id=real.id,
+            url="https://www.at-bay.com/",
+            content=(
+                "At-Bay: Cyber Insurance & MDR Security Platform | Proactive "
+                "Protection\nAt-Bay's cyber insurance is available for purchase "
+                "through licensed brokers."
+            ),
+        )
+    )
+    await db.commit()
+
+    summary = await run_repair_wrong_websites(db)
+    assert summary.page_content_reset == 0
+    await db.refresh(real)
+    assert real.website == "https://www.at-bay.com/"
+    assert real.description_short is not None

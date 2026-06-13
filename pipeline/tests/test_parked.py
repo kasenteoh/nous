@@ -7,7 +7,11 @@ detector is therefore deliberately conservative.
 
 from __future__ import annotations
 
-from nous.sources.parked import looks_parked, text_looks_parked
+from nous.sources.parked import (
+    looks_parked,
+    page_is_for_sale_lander,
+    text_looks_parked,
+)
 
 SPACESHIP_PARKED = """
 <html><head><title>9gag.ai is for sale</title></head><body>
@@ -142,3 +146,49 @@ def test_text_looks_parked_ignores_product_for_sale_copy() -> None:
         "List items for sale across every marketplace using image recognition."
     )
     assert text_looks_parked(content) is False
+
+
+# ── Strict backfill detector (page_is_for_sale_lander) ───────────────────────
+# The repair backfill scans a real company's FULL page text, where the resolver's
+# looser signals false-positive. page_is_for_sale_lander keys ONLY on
+# self-referential domain-sale language a real homepage never uses about itself.
+
+# At-Bay (real cyber-insurer) — its product is "available for purchase". The
+# resolver detector trips on that Task-2.1 phrase; the strict backfill must not.
+AVAILABLE_FOR_PURCHASE_REAL = (
+    "At-Bay: Cyber Insurance & MDR Security Platform | Proactive Protection\n"
+    "At-Bay's cyber insurance is available for purchase through licensed brokers."
+)
+
+
+def test_strict_lander_ignores_available_for_purchase() -> None:
+    assert page_is_for_sale_lander(AVAILABLE_FOR_PURCHASE_REAL) is False
+    # Documents the divergence the backfill relies on: the resolver detector is
+    # deliberately looser (cheap to reject a candidate) and DOES flag this phrase.
+    assert text_looks_parked(AVAILABLE_FOR_PURCHASE_REAL) is True
+
+
+def test_strict_lander_detects_host_for_sale() -> None:
+    # The Foodology / Spaceship shape — "<host> is for sale".
+    assert page_is_for_sale_lander(
+        "foodology.com is for sale.\nExploring Culinary Delights with Foodology"
+    ) is True
+
+
+def test_strict_lander_detects_this_domain_phrase() -> None:
+    # allset shape: "This Domain is for Sale" with no host token.
+    assert page_is_for_sale_lander(
+        "ALL SET\nThis Domain is for Sale. Contact us to purchase it."
+    ) is True
+
+
+def test_strict_lander_ignores_domain_marketplace_product_copy() -> None:
+    # A real domain-marketplace STARTUP legitimately says "domain marketplace" /
+    # "domains for sale" in homepage copy — the strict backfill must not reset it
+    # (only a self-referential "<host> is for sale" / "this domain is for sale"
+    # signal should).
+    content = (
+        "Dan.com — the easiest way to buy and sell domains\n"
+        "The leading domain marketplace with thousands of domains for sale."
+    )
+    assert page_is_for_sale_lander(content) is False
