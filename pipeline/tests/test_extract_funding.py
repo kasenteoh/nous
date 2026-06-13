@@ -1427,3 +1427,121 @@ async def test_requery_totals_respects_limit(
     summary = await run_extract_funding(db, limit=2, requery_totals=True)
     assert len(calls) == 2
     assert summary.totals_recorded == 2
+
+
+# ---------------------------------------------------------------------------
+# Task 2.7.1 — funding-source quality: reject junk/image hosts
+# ---------------------------------------------------------------------------
+
+
+async def test_website_fallback_skips_imgur_source(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A company whose website URL resolves to an image host (e.g. imgur.com)
+    must NOT have a funding round persisted — the source is junk."""
+    company = _make_company("ImgurCo")
+    # Set the website to an image-host URL — the extraction would otherwise
+    # attribute the round to this junk source.
+    company.website = "https://imgur.com/gallery/some-funding-chart"
+    db.add(company)
+    await db.flush()
+    body_text = "We raised $20M Series A led by Acme Capital. " * 10
+    db.add(
+        RawPage(
+            company_id=company.id,
+            url="https://imgur.com/gallery/some-funding-chart",
+            content=f"<html><body><p>{body_text}</p></body></html>",
+        )
+    )
+    await db.flush()
+    await db.commit()
+
+    async def _fake(prompt: str, schema: type) -> FundingExtraction:
+        return _make_extraction(
+            round_type="Series A",
+            amount=Decimal("20000000.00"),
+            confidence="medium",
+            leads=["Acme Capital"],
+            others=[],
+        )
+
+    monkeypatch.setattr(
+        "nous.pipeline.extract_funding.complete_json", _fake
+    )
+
+    summary = await run_extract_funding_website(db, limit=10)
+    assert summary.companies_seen == 1
+    assert summary.skipped_junk_source == 1
+    assert summary.companies_with_funding == 0
+    assert summary.funding_rounds_created == 0
+
+    rounds = (await db.execute(select(FundingRound))).scalars().all()
+    assert len(rounds) == 0
+
+
+async def test_website_fallback_skips_aggregator_source(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A company whose website URL is a known aggregator (crunchbase.com) must
+    not have a round persisted — reuses is_aggregator_url."""
+    company = _make_company("CrunchCo")
+    company.website = "https://www.crunchbase.com/organization/crunchco"
+    db.add(company)
+    await db.flush()
+    body_text = "CrunchCo raised $50M Series B led by Big VC. " * 10
+    db.add(
+        RawPage(
+            company_id=company.id,
+            url="https://www.crunchbase.com/organization/crunchco",
+            content=f"<html><body><p>{body_text}</p></body></html>",
+        )
+    )
+    await db.flush()
+    await db.commit()
+
+    async def _fake(prompt: str, schema: type) -> FundingExtraction:
+        return _make_extraction(
+            amount=Decimal("50000000.00"),
+            confidence="medium",
+            leads=[],
+            others=[],
+        )
+
+    monkeypatch.setattr(
+        "nous.pipeline.extract_funding.complete_json", _fake
+    )
+
+    summary = await run_extract_funding_website(db, limit=10)
+    assert summary.skipped_junk_source == 1
+    assert summary.funding_rounds_created == 0
+
+
+async def test_website_fallback_accepts_own_domain(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A company's own domain is NOT rejected — only third-party junk hosts are."""
+    company = _make_company("LegitCo")
+    company.website = "https://legitco.example/"
+    db.add(company)
+    await db.flush()
+    db.add(_add_raw_page(company.id, "https://legitco.example/about"))
+    await db.flush()
+    await db.commit()
+
+    async def _fake(prompt: str, schema: type) -> FundingExtraction:
+        return _make_extraction(
+            round_type="Series A",
+            amount=Decimal("15000000.00"),
+            confidence="medium",
+            leads=["Good Capital"],
+            others=[],
+        )
+
+    monkeypatch.setattr(
+        "nous.pipeline.extract_funding.complete_json", _fake
+    )
+
+    summary = await run_extract_funding_website(db, limit=10)
+    assert summary.skipped_junk_source == 0
+    assert summary.companies_with_funding == 1
+    assert summary.funding_rounds_created == 1
