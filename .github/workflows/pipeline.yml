@@ -1,46 +1,33 @@
 name: pipeline
 
 # Consolidated scraping pipeline — funding news + company descriptions — run
-# 10x/day. Replaces the separate daily descriptions.yml + funding-news.yml.
+# 8x/day (every 3h). Replaces the separate daily descriptions.yml + funding-news.yml.
 #
-# Why one workflow instead of two: each GitHub Actions run pays a fixed ~2 min
-# of setup (checkout + Python + uv sync + Playwright restore + migrations)
-# before any real work. Running funding-news and descriptions as two separate
-# workflows 10x/day would pay that overhead 20x/day (~1,200 min/mo — more than
-# half the 2,000-min private-repo quota) before scraping a single page. One
-# workflow halves it.
+# One workflow (not two) keeps the cadence to a single cron + a single deploy
+# gate and shares the Playwright cache across runs.
 #
-# Why 10x/day is affordable: every stage is idempotent and resumes where the
-# last run stopped (per-company commits + write-once timestamps + the
+# The repo is PUBLIC, so GitHub-hosted Actions minutes are FREE and unlimited —
+# the old private-repo 2,000-min/mo quota no longer binds. The remaining bounds
+# are per-run wall clock, DeepSeek $ (each LLM stage is --limit-capped; cost
+# shows in the telemetry step summary), and scraping politeness (1 req/sec per
+# domain). The conservative per-run --limits below were sized for the old quota
+# and can now be raised to drain backlogs faster.
+#
+# Why frequent runs stay cheap regardless: every stage is idempotent and resumes
+# where the last run stopped (per-company commits + write-once timestamps + the
 # `processed` flag), so repeated runs re-pay almost nothing —
-#   * ingest-news only LLM-identifies *new* TechCrunch articles (already-stored
-#     URLs are skipped before the LLM call) and rotates the per-company Google
-#     News sweep least-recently-checked-first;
+#   * ingest-news only LLM-identifies *new* TechCrunch articles and stores Google
+#     News headlines for the per-company rotation (least-recently-checked first);
 #   * extract-funding only touches unprocessed articles;
 #   * enrich-companies is write-once per company.
-# The initial backlog (~2.3k homepages to scrape) drains in ~2-3 days thanks to
-# the concurrent fetch in resolve/scrape (--concurrency), after which steady-
-# state runs no-op in a few minutes and only touch newly discovered companies.
-#
-# Quota math (private repo: 2,000 free Actions min/month at 1x linux rate):
-#   fixed setup        ~2 min/run x 10/day x 30 ≈ 600 min/mo
-#   steady-state work  ~3-5 min/run (most stages find nothing to do)
-#   backlog-drain      first ~2-3 days run nearer the per-stage caps
-#   discovery.yml      ~260 min/mo (weekly, unchanged)
-#   → projected ~1,500-1,800 min/mo at steady state. This is deliberately
-#     conservative (small --limits) to stay inside the free tier. DIAL-BACK
-#     LEVERS if usage runs hot: (1) reduce the cron frequency below, or (2)
-#     lower the per-run --limits. Both are one-line changes. Actual minutes are
-#     visible in the repo's Actions usage; DeepSeek spend is in each run's
-#     db-stats / telemetry step summary.
+# The initial backlog drains in a few days thanks to the concurrent fetch in
+# resolve/scrape (--concurrency); steady-state runs then no-op in minutes.
 on:
   schedule:
-    # 10x/day, ~every 2.4h. Serialized against discovery.yml (weekly Mon 02:00)
-    # via the shared `concurrency` group; on Mondays the early run queues behind
-    # discovery (cancel-in-progress: false → it waits, never drops). The hours
-    # deliberately skip 02:00 so the daily cadence and the weekly discovery run
-    # don't start in the same minute.
-    - cron: "0 0,3,5,7,9,12,14,16,19,21 * * *"
+    # 8x/day, every 3h. Serialized against discovery.yml (weekly Mon 02:00) via
+    # the shared `concurrency` group; on Mondays the 00:00/03:00 runs queue
+    # behind discovery (cancel-in-progress: false → they wait, never drop).
+    - cron: "0 0,3,6,9,12,15,18,21 * * *"
   workflow_dispatch:
     inputs:
       skip_news:
