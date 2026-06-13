@@ -308,9 +308,13 @@ async def run_analyze_competitors(
                     summary.competitors_from_llm += 1
             continue
 
-        # Replace-style write: delete then insert in one transaction. The outer
-        # session manages the transaction; we use a SAVEPOINT via begin_nested()
-        # so the eligibility loop's prior writes stay intact if this one fails.
+        # Replace-style write, committed PER COMPANY. The SAVEPOINT via
+        # begin_nested() isolates a single company's write failure; the commit
+        # then persists it incrementally — crash-safe + resumable, and a later
+        # rate-limit break keeps everything written so far. (A previous version
+        # only flushed here and never committed; since the CLI opens a plain
+        # AsyncSessionLocal() with no auto-commit, every run was rolled back on
+        # close and the competitors table stayed empty.)
         async with session.begin_nested():
             await session.execute(
                 delete(Competitor).where(Competitor.company_id == company.id)
@@ -339,6 +343,6 @@ async def run_analyze_competitors(
                     summary.competitors_from_techcrunch += 1
                 else:
                     summary.competitors_from_llm += 1
-        await session.flush()
+        await session.commit()
 
     return summary

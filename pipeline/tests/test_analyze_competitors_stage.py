@@ -271,6 +271,45 @@ async def test_happy_path_writes_competitors_and_resolves_links(
     assert rows[1].competitor_company_id is None
 
 
+async def test_stage_commits_writes_not_just_flushes(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression guard: the stage must COMMIT, not just flush.
+
+    The CLI opens a plain AsyncSessionLocal() with no auto-commit, so a
+    flush-only stage had every run rolled back on session close — the
+    competitors table stayed empty in prod even when the LLM returned
+    competitors. (The shared-session test fixture hid this: a flush is visible
+    within the same session, so the happy-path assertions passed regardless.)
+    """
+    target = _make_company("CommitTarget", industry_group="SaaS")
+    rival = _make_company("CommitRival", industry_group="SaaS", description_long=None)
+    db.add_all([target, rival])
+    await db.flush()
+
+    async def _fake_complete_json(prompt: str, schema: type) -> CompetitorAnalysis:
+        return _fixture_extraction(["CommitRival"])
+
+    monkeypatch.setattr(
+        "nous.pipeline.analyze_competitors.complete_json", _fake_complete_json
+    )
+
+    commits = 0
+    original_commit = db.commit
+
+    async def _counting_commit() -> None:
+        nonlocal commits
+        commits += 1
+        await original_commit()
+
+    monkeypatch.setattr(db, "commit", _counting_commit)
+
+    summary = await run_analyze_competitors(db, limit=10, ttl_days=25)
+
+    assert summary.competitors_written >= 1
+    assert commits >= 1, "stage must commit its writes, not just flush them"
+
+
 async def test_llm_only_competitors_tagged_llm_inferred(
     db: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
