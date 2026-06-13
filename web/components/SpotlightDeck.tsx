@@ -78,8 +78,12 @@ export function SpotlightDeck({ spotlights }: Props) {
       </p>
 
       {/* Stable polite live region; the keyed child remounts per spotlight so
-          the enter animation replays (motion-safe only). */}
-      <div aria-live="polite">
+          the enter animation replays (motion-safe only).
+          min-h-[20rem] (320px) fixes the control-row jump: the tallest
+          realistic one-liner (~4 lines of text-lg/leading-relaxed on mobile)
+          plus name, facts, and link totals ≈ 285px, so 20rem holds even the
+          longest entries without shifting the ‹ › row below. */}
+      <div aria-live="polite" className="min-h-[20rem]">
         <div
           key={current.slug}
           className="motion-safe:animate-[spotlight-in_240ms_ease-out]"

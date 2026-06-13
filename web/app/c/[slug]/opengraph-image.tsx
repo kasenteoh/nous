@@ -2,6 +2,11 @@
 // when known, small wordmark. Unknown slug (or missing Supabase env) falls
 // back to the generic site card — this route must never throw.
 // Rendered by Satori via next/og; see lib/og.tsx for the styling constraints.
+//
+// Data-leak guarantee: getCompanyOgData returns null for any company whose
+// exclusion_reason is non-null (see lib/queries.ts). When null is returned,
+// this file renders SiteOgCard (no company-specific fields) so excluded
+// companies never expose their name, industry, or raised total via this route.
 
 import { ImageResponse } from "next/og";
 import { CompanyOgCard, OG_SIZE, SiteOgCard } from "@/lib/og";
