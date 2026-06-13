@@ -30,6 +30,12 @@ _SALE_PHRASES: tuple[str, ...] = (
     "parked domain",
     "domain parking",
     "domain marketplace",
+    # Softer "site / website for sale" language used on custom landers that
+    # don't rely on a registrar template (e.g. Foodology-style pages).
+    "this site is for sale",
+    "this website is for sale",
+    "available for purchase",
+    "inquire about this domain",
 )
 
 # Registrar / domain-marketplace brands: only parked when a sale-intent
