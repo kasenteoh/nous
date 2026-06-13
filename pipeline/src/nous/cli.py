@@ -364,6 +364,11 @@ def ingest_news(
                 inputs_seen=summary.articles_seen,
                 rows_written=summary.articles_inserted + summary.auto_created_companies,
                 summary=summary,
+                # flag_empty=True: a run that queried companies but wrote nothing
+                # is classified status='empty' so pipeline-health surfaces it as
+                # a regression signal (this silent-failure mode hid the news
+                # coverage bug for months — see Task 4.1 diagnosis).
+                flag_empty=True,
             )
         finally:
             emit_run_telemetry("ingest-news")
@@ -466,12 +471,14 @@ def extract_funding_website(
     so the news/TechCrunch path always stays the primary source.
     """
     import asyncio
+    from datetime import UTC, datetime
 
     from nous.db.session import AsyncSessionLocal
-    from nous.observability import emit_run_telemetry
+    from nous.observability import emit_run_telemetry, record_pipeline_run
     from nous.pipeline.extract_funding import run_extract_funding_website
 
     async def _run() -> None:
+        started = datetime.now(UTC)
         try:
             async with AsyncSessionLocal() as session:
                 summary = await run_extract_funding_website(
@@ -481,6 +488,21 @@ def extract_funding_website(
                     recheck_after_days=recheck_after_days,
                 )
                 click.echo(summary.model_dump_json(indent=2))
+            await record_pipeline_run(
+                "extract-funding-website",
+                started_at=started,
+                inputs_seen=summary.companies_seen,
+                rows_written=summary.funding_rounds_created
+                + summary.funding_rounds_merged,
+                summary=summary,
+                # flag_empty=True: a run that inspected companies but wrote 0
+                # funding rows is classified status='empty' so pipeline-health
+                # surfaces it — the same silent-failure mode that masked the
+                # news coverage gap for months (Task 4.1 diagnosis). Without
+                # record_pipeline_run here, a zero-output website run was
+                # entirely invisible to the observability layer.
+                flag_empty=True,
+            )
         finally:
             emit_run_telemetry("extract-funding-website")
 
