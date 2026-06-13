@@ -105,11 +105,9 @@ nous/
 │   └── tailwind.config.ts
 ├── .github/
 │   └── workflows/
-│       ├── discovery.yml        # weekly: VC portfolios + dedup + competitors
-│       ├── descriptions.yml     # weekly: resolve + scrape + enrich
-│       ├── funding-news.yml     # daily: news ingest + funding extraction
-│       ├── backfill-discovery.yml  # manual on-demand discovery
-│       └── deploy-web.yml
+│       ├── discovery.yml        # weekly: VC portfolios + dedup + competitors + employees
+│       ├── pipeline.yml         # 10x/day: news + funding + resolve + scrape + enrich
+│       └── backfill-discovery.yml  # manual on-demand discovery
 └── README.md
 ```
 
@@ -647,18 +645,22 @@ rows; a concurrent writer would crash with a `StaleDataError`).
 - Cron: weekly, Monday 02:00 UTC
 - Stages: `refresh-vc-portfolios` → `dedup-companies` → `analyze-competitors`
 
-**Workflow: `descriptions.yml`** — homepage scrape + LLM enrichment
-- Cron: weekly, Monday 06:00 UTC (after `discovery.yml`)
-- Stages: `resolve-homepages` → `scrape-homepages` → `enrich-companies`
+**Workflow: `pipeline.yml`** — funding news + descriptions (consolidated)
+- Cron: 10x/day (~every 2.4h)
+- Stages: `ingest-news` → `extract-funding` → `extract-funding-website` →
+  `resolve-homepages` → `scrape-homepages` → `enrich-companies`
 - Includes the Playwright/Chromium setup (scraping needs a headless browser).
-
-**Workflow: `funding-news.yml`** — funding + news refresh
-- Cron: daily, 14:00 UTC
-- Stages: `ingest-news` → `extract-funding` → `extract-funding-website`
-- No browser setup (RSS fetch + LLM over already-scraped `raw_pages`).
+- Funding-news and descriptions were merged into one workflow so the fixed
+  per-run setup overhead is paid 10x/day, not 20x/day — the difference between
+  fitting and busting the 2,000-min/mo free Actions tier. Every stage carries a
+  small `--limit` / `--max-runtime-minutes` budget; idempotent stages + write-
+  once timestamps mean repeated runs re-pay almost nothing, and `resolve` /
+  `scrape` fetch concurrently (`--concurrency`) so the initial backlog drains in
+  days. Dial-back levers if usage runs hot: lower the cron frequency or the
+  per-run `--limit`s.
 
 Each workflow checks out, installs Python + `uv` + deps, runs migrations, then
-runs its stages in order. (Vercel deploy-hook POST is deferred to M6 per §9.)
+runs its stages in order, and POSTs the Vercel deploy hook on success.
 
 **Workflow: `backfill-discovery.yml`** — manual on-demand discovery
 - Trigger: `workflow_dispatch` only; runs `refresh-vc-portfolios` + `ingest-news`
