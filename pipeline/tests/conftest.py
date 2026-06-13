@@ -157,3 +157,37 @@ async def db(engine: AsyncEngine) -> AsyncIterator[AsyncSession]:
         finally:
             if outer_tx.is_active:
                 await outer_tx.rollback()
+
+
+@pytest_asyncio.fixture()
+async def committed_session_factory(
+    engine: AsyncEngine,
+) -> AsyncIterator[async_sessionmaker[AsyncSession]]:
+    """A session FACTORY on a single isolated connection, for testing that a
+    stage's writes PERSIST ACROSS sessions (i.e. it commits, not just flushes).
+
+    All sessions built from this factory share one connection whose outer
+    transaction is rolled back at teardown. With join_transaction_mode=
+    "create_savepoint", a session's commit() RELEASES its savepoint into that
+    shared transaction (so a later, separate session on this connection sees the
+    data), while a session that only flush()es has its savepoint ROLLED BACK
+    when it closes (so a later session does NOT see it). That difference is
+    exactly what the single-shared-session `db` fixture cannot detect — it makes
+    a flush visible to its own assertions and so passes even when prod would
+    roll the write back.
+
+    Usage: open one session to set up + commit fixtures, a SECOND to run the
+    stage (like the CLI does), and a THIRD to verify the writes are visible.
+    """
+    async with engine.connect() as connection:
+        outer_tx = await connection.begin()
+        factory = async_sessionmaker(
+            bind=connection,
+            expire_on_commit=False,
+            join_transaction_mode="create_savepoint",
+        )
+        try:
+            yield factory
+        finally:
+            if outer_tx.is_active:
+                await outer_tx.rollback()
