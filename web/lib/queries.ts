@@ -38,6 +38,7 @@ type FundingRoundJoin = FundingRound & {
 interface NestedResolvedCompany {
   slug: string | null;
   name: string | null;
+  exclusion_reason?: string | null;
 }
 
 type CompetitorJoin = CompetitorRow & {
@@ -89,6 +90,24 @@ function sanitizeIlikeTerm(term: string): string {
 }
 
 /**
+ * Catalog bar (spec 2026-06-12): a company is publicly listed iff it is not
+ * excluded AND (it has a description OR ≥1 recorded funding round). Companies
+ * failing the bar stay in the DB and reappear once the pipeline learns
+ * something about them. Apply via:
+ *   query.is("exclusion_reason", null).or(CATALOG_BAR_OR)
+ * PostgREST ANDs the .or() group with every other filter (including a second
+ * .or() such as the listCompanies search — repeated `or=` params AND-combine).
+ *
+ * Applied inline at each call site rather than via an applyCatalogBar(query)
+ * helper on purpose: postgrest-js's PostgrestFilterBuilder generics aren't
+ * publicly nameable (GenericSchema isn't exported), so a typed wrapper would
+ * force an `any` — which CLAUDE.md forbids. A shared constant is the cleanest
+ * fully-typed option.
+ */
+const CATALOG_BAR_OR =
+  "description_short.not.is.null,funding_round_count.gt.0";
+
+/**
  * Return a filtered, sorted, paginated page of companies plus the total count
  * matching the filters (for pagination). Search matches `name` or
  * `description_short` (case-insensitive substring). Backed by the GIN trigram
@@ -118,7 +137,9 @@ export async function listCompanies(
     .select(
       "slug, name, hq_city, hq_state, industry_group, description_short, status",
       { count: "exact" },
-    );
+    )
+    .is("exclusion_reason", null)
+    .or(CATALOG_BAR_OR);
 
   const search = opts.search ? sanitizeIlikeTerm(opts.search) : "";
   if (search) {
@@ -188,6 +209,7 @@ export async function listIndustryGroups(): Promise<string[]> {
     "listIndustryGroups",
     "slug, industry_group",
     "industry_group",
+    true,
   );
   if (rows === null) return [];
 
@@ -237,7 +259,8 @@ export async function listRecentFundings(
 
   const { data, error } = await supabase
     .from("funding_rounds")
-    .select("round_type, amount_raised, announced_date, companies(name, slug)")
+    .select("round_type, amount_raised, announced_date, companies!inner(name, slug)")
+    .is("companies.exclusion_reason", null)
     .not("announced_date", "is", null)
     .order("announced_date", { ascending: false })
     .limit(limit);
@@ -298,6 +321,8 @@ export async function listNewestCompanies(limit = 4): Promise<NewCompanyRow[]> {
   const { data, error } = await supabase
     .from("companies")
     .select("slug, name, description_short")
+    .is("exclusion_reason", null)
+    .or(CATALOG_BAR_OR)
     .order("created_at", { ascending: false })
     .limit(limit * 3);
 
@@ -330,6 +355,7 @@ export async function getIndustrySummary(topN = 6): Promise<IndustrySummary> {
     "getIndustrySummary",
     "slug, industry_group",
     "industry_group",
+    true,
   );
   if (rows === null) return { top: [], moreCount: 0 };
 
@@ -362,7 +388,9 @@ export async function countCompanies(): Promise<number> {
 
   const { count, error } = await supabase
     .from("companies")
-    .select("id", { count: "exact", head: true });
+    .select("id", { count: "exact", head: true })
+    .is("exclusion_reason", null)
+    .or(CATALOG_BAR_OR);
 
   if (error) {
     console.error("[countCompanies] query failed:", error.message);
@@ -390,7 +418,9 @@ export async function getRandomCompanySlug(): Promise<string | null> {
 
   const { count, error: countError } = await supabase
     .from("companies")
-    .select("id", { count: "exact", head: true });
+    .select("id", { count: "exact", head: true })
+    .is("exclusion_reason", null)
+    .or(CATALOG_BAR_OR);
 
   if (countError || !count) {
     if (countError) {
@@ -406,6 +436,8 @@ export async function getRandomCompanySlug(): Promise<string | null> {
   const { data, error } = await supabase
     .from("companies")
     .select("slug")
+    .is("exclusion_reason", null)
+    .or(CATALOG_BAR_OR)
     .order("id", { ascending: true })
     .range(offset, offset);
 
@@ -460,6 +492,7 @@ async function scanTable(
   label: string,
   select: string,
   notNullColumn?: string,
+  catalogOnly = false,
 ): Promise<TableScanResult> {
   let supabase: ReturnType<typeof createSupabaseServerClient>;
   try {
@@ -482,6 +515,9 @@ async function scanTable(
       .limit(pageSize);
     if (notNullColumn !== undefined) {
       query = query.not(notNullColumn, "is", null);
+    }
+    if (catalogOnly) {
+      query = query.is("exclusion_reason", null).or(CATALOG_BAR_OR);
     }
     if (lastSlug !== null) {
       query = query.gt("slug", lastSlug);
@@ -523,8 +559,15 @@ async function scanCompanies(
   label: string,
   select: string,
   notNullColumn?: string,
+  catalogOnly = false,
 ): Promise<Record<string, unknown>[] | null> {
-  const { rows, ok } = await scanTable("companies", label, select, notNullColumn);
+  const { rows, ok } = await scanTable(
+    "companies",
+    label,
+    select,
+    notNullColumn,
+    catalogOnly,
+  );
   return ok ? rows : null;
 }
 
@@ -535,7 +578,12 @@ async function scanCompanies(
  * the sitemap must still build with just its static entries.
  */
 export async function listAllCompanySlugs(): Promise<CompanySlugRow[]> {
-  const rows = await scanCompanies("listAllCompanySlugs", "slug, updated_at");
+  const rows = await scanCompanies(
+    "listAllCompanySlugs",
+    "slug, updated_at",
+    undefined,
+    true,
+  );
   if (rows === null) return [];
   return rows.map((r) => ({
     slug: r.slug as string,
@@ -584,7 +632,7 @@ export async function getCompanyOgData(
   const { data: company, error: companyError } = await supabase
     .from("companies")
     .select(
-      "name, industry_group, total_raised_usd, funding_rounds(amount_raised)",
+      "name, industry_group, exclusion_reason, total_raised_usd, funding_rounds(amount_raised)",
     )
     .eq("slug", slug)
     .single();
@@ -596,6 +644,10 @@ export async function getCompanyOgData(
         companyError?.message,
       );
     }
+    return null;
+  }
+
+  if ((company as { exclusion_reason?: string | null }).exclusion_reason) {
     return null;
   }
 
@@ -672,6 +724,12 @@ export async function getCompanyBySlug(
     return null;
   }
 
+  // Excluded companies 404 (spec 2026-06-12) — junk pages must not render
+  // even by direct URL. Hidden-but-legit husks (no exclusion) still render.
+  if ((company as { exclusion_reason?: string | null }).exclusion_reason) {
+    return null;
+  }
+
   const companyId = company.id as string;
 
   // 2, 3 & 4: fetch people, funding rounds (with nested investor joins), and
@@ -691,7 +749,7 @@ export async function getCompanyBySlug(
 
       supabase
         .from("competitors")
-        .select("*, competitor_company:companies!competitor_company_id(slug, name)")
+        .select("*, competitor_company:companies!competitor_company_id(slug, name, exclusion_reason)")
         .eq("company_id", companyId)
         .order("rank", { ascending: true }),
 
@@ -786,7 +844,7 @@ export async function getCompanyBySlug(
       ? row.competitor_company[0]
       : row.competitor_company;
     const resolved =
-      nested && nested.slug && nested.name
+      nested && nested.slug && nested.name && !nested.exclusion_reason
         ? { slug: nested.slug, name: nested.name }
         : null;
     const { competitor_company: _competitor_company, ...rest } = row;
@@ -831,7 +889,7 @@ export async function getCompanyBySlug(
  * then flatten + deduplicate the `tags` arrays in-process.
  */
 export async function listAllTags(): Promise<string[]> {
-  const rows = await scanCompanies("listAllTags", "slug, tags", "tags");
+  const rows = await scanCompanies("listAllTags", "slug, tags", "tags", true);
   if (rows === null) return [];
 
   const seen = new Set<string>();
@@ -852,7 +910,12 @@ export async function listAllTags(): Promise<string[]> {
  * response cap means anything short of paging the whole table drops rows.
  */
 export async function listAllStates(): Promise<string[]> {
-  const rows = await scanCompanies("listAllStates", "slug, hq_state", "hq_state");
+  const rows = await scanCompanies(
+    "listAllStates",
+    "slug, hq_state",
+    "hq_state",
+    true,
+  );
   if (rows === null) return [];
 
   const seen = new Set<string>();
@@ -911,6 +974,8 @@ export async function listNewThisWeekCompanies(
   const { data, error } = await supabase
     .from("companies")
     .select("slug, name, description_short, industry_group, created_at")
+    .is("exclusion_reason", null)
+    .or(CATALOG_BAR_OR)
     .gte("created_at", cutoff)
     .order("created_at", { ascending: false })
     .limit(cap);
@@ -955,8 +1020,9 @@ export async function listNewThisWeekFundingRounds(
   const { data, error } = await supabase
     .from("funding_rounds")
     .select(
-      "round_type, amount_raised, announced_date, created_at, companies(slug, name)",
+      "round_type, amount_raised, announced_date, created_at, companies!inner(slug, name)",
     )
+    .is("companies.exclusion_reason", null)
     .gte("created_at", cutoff)
     .order("created_at", { ascending: false })
     .limit(cap);
@@ -1016,6 +1082,8 @@ export async function countNewThisWeek(days = 7): Promise<NewThisWeekCounts> {
     supabase
       .from("companies")
       .select("id", { count: "exact", head: true })
+      .is("exclusion_reason", null)
+      .or(CATALOG_BAR_OR)
       .gte("created_at", cutoff),
     supabase
       .from("funding_rounds")
@@ -1160,14 +1228,14 @@ export async function getInvestorBySlug(
     supabase
       .from("company_investors")
       .select(
-        "companies(slug, name, hq_city, hq_state, industry_group, description_short, status)",
+        "companies(slug, name, hq_city, hq_state, industry_group, description_short, status, exclusion_reason)",
       )
       .eq("investor_id", investorId),
 
     supabase
       .from("funding_round_investors")
       .select(
-        "is_lead, funding_rounds(id, round_type, amount_raised, announced_date, primary_news_url, companies(slug, name))",
+        "is_lead, funding_rounds(id, round_type, amount_raised, announced_date, primary_news_url, companies(slug, name, exclusion_reason))",
       )
       .eq("investor_id", investorId),
   ]);
@@ -1196,6 +1264,7 @@ export async function getInvestorBySlug(
           industry_group: string | null;
           description_short: string | null;
           status: string | null;
+          exclusion_reason?: string | null;
         }
       | {
           slug: string | null;
@@ -1205,6 +1274,7 @@ export async function getInvestorBySlug(
           industry_group: string | null;
           description_short: string | null;
           status: string | null;
+          exclusion_reason?: string | null;
         }[]
       | null;
   };
@@ -1212,7 +1282,7 @@ export async function getInvestorBySlug(
   const portfolio: CompanyListRow[] = ((portfolioResult.data ?? []) as PortfolioJoin[])
     .flatMap((row) => {
       const c = Array.isArray(row.companies) ? row.companies[0] : row.companies;
-      if (!c?.slug || !c.name) return [];
+      if (!c?.slug || !c.name || c.exclusion_reason) return [];
       return [
         {
           slug: c.slug,
@@ -1238,8 +1308,8 @@ export async function getInvestorBySlug(
           announced_date: string | null;
           primary_news_url: string | null;
           companies:
-            | { slug: string | null; name: string | null }
-            | { slug: string | null; name: string | null }[]
+            | { slug: string | null; name: string | null; exclusion_reason?: string | null }
+            | { slug: string | null; name: string | null; exclusion_reason?: string | null }[]
             | null;
         }
       | {
@@ -1249,8 +1319,8 @@ export async function getInvestorBySlug(
           announced_date: string | null;
           primary_news_url: string | null;
           companies:
-            | { slug: string | null; name: string | null }
-            | { slug: string | null; name: string | null }[]
+            | { slug: string | null; name: string | null; exclusion_reason?: string | null }
+            | { slug: string | null; name: string | null; exclusion_reason?: string | null }[]
             | null;
         }[]
       | null;
@@ -1263,7 +1333,7 @@ export async function getInvestorBySlug(
         : row.funding_rounds;
       if (!fr) return [];
       const c = Array.isArray(fr.companies) ? fr.companies[0] : fr.companies;
-      if (!c?.slug || !c.name) return [];
+      if (!c?.slug || !c.name || c.exclusion_reason) return [];
       return [
         {
           roundId: fr.id,
