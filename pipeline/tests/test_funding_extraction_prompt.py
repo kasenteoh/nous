@@ -303,6 +303,62 @@ def test_website_prompt_contains_total_raised_rule() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Task 2.6 — announced_date: no fabricated Jan-1 placeholder
+# ---------------------------------------------------------------------------
+
+
+def test_news_prompt_instructs_specific_day_only_for_announced_date() -> None:
+    """The news template must tell the model to return null when only a month
+    or year is known — not fabricate the 1st as a placeholder."""
+    prompt = build_prompt(company_name="Acme", article_text="x")
+    assert "SPECIFIC day" in prompt
+    # The template wraps at column width; check the key instruction words are
+    # all present regardless of line breaks.
+    assert "do NOT" in prompt
+    assert "default to the 1st" in prompt
+    assert "month or year is known" in prompt
+
+
+def test_website_prompt_instructs_specific_day_only_for_announced_date() -> None:
+    """The website template carries the same no-fabricated-date rule."""
+    prompt = build_website_prompt(company_name="Acme", page_text="x")
+    assert "SPECIFIC day" in prompt
+    assert "do NOT" in prompt
+    assert "default to the 1st" in prompt
+    assert "month or year is known" in prompt
+
+
+def test_announced_date_field_description_instructs_specific_day() -> None:
+    """The field description (embedded in JSON schema for the model) must also
+    carry the no-fabrication instruction — not just the prompt template."""
+    schema = FundingExtraction.model_json_schema()
+    desc = schema["properties"]["announced_date"]["description"]
+    assert "SPECIFIC day" in desc
+    assert "do NOT guess or default to the 1st" in desc
+
+
+def test_year_only_article_yields_null_announced_date_via_schema() -> None:
+    """Simulates the LLM returning null for announced_date when an article says
+    only 'in 2024'.  The model should return null; this asserts the Pydantic
+    schema accepts null (i.e. won't reject a compliant LLM response)."""
+    payload = {
+        "is_funding_announcement": True,
+        "round_type": "Seed",
+        "amount_raised_usd": 5000000,
+        "valuation_post_money_usd": None,
+        "announced_date": None,  # only "in 2024" stated — model returns null
+        "lead_investors": [],
+        "other_investors": [],
+        "confidence": "medium",
+    }
+    obj = FundingExtraction.model_validate_json(json.dumps(payload))
+    assert obj.announced_date is None, (
+        "When an article says only 'in 2024', the model should return null "
+        "for announced_date, not a fabricated Jan-1 placeholder."
+    )
+
+
+# ---------------------------------------------------------------------------
 # Snapshot test against the real article fixture
 # ---------------------------------------------------------------------------
 
