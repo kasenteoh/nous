@@ -33,12 +33,26 @@ def cli() -> None:
     type=float,
     default=None,
     help=(
-        "Wall-clock budget: stop cleanly at the next company boundary once "
+        "Wall-clock budget: stop cleanly at the next batch boundary once "
         "exceeded. Remaining companies are picked up by the next run."
     ),
 )
+@click.option(
+    "--concurrency",
+    type=int,
+    default=8,
+    show_default=True,
+    help=(
+        "How many companies to resolve over the network at once. Only HTTP is "
+        "parallelized; DB writes stay sequential. Distinct companies use "
+        "distinct domains, so the 1 req/sec/domain budget is preserved."
+    ),
+)
 def resolve_homepages(
-    limit: int | None, refetch_after_days: int, max_runtime_minutes: float | None
+    limit: int | None,
+    refetch_after_days: int,
+    max_runtime_minutes: float | None,
+    concurrency: int,
 ) -> None:
     """Attempt to resolve a homepage URL for companies that lack one."""
     import asyncio
@@ -64,6 +78,7 @@ def resolve_homepages(
                 refetch_after_days=refetch_after_days,
                 limit=limit,
                 max_runtime_minutes=max_runtime_minutes,
+                concurrency=concurrency,
             )
             click.echo(summary.model_dump_json(indent=2))
 
@@ -95,8 +110,19 @@ def resolve_homepages(
     type=float,
     default=None,
     help=(
-        "Wall-clock budget: stop cleanly at the next company boundary once "
+        "Wall-clock budget: stop cleanly at the next batch boundary once "
         "exceeded. Remaining companies are picked up by the next run."
+    ),
+)
+@click.option(
+    "--concurrency",
+    type=int,
+    default=6,
+    show_default=True,
+    help=(
+        "How many companies to scrape over the network at once. Only HTTP is "
+        "parallelized; page persistence stays sequential on one session. A "
+        "single company's own pages stay serial (same host)."
     ),
 )
 def scrape_homepages(
@@ -104,6 +130,7 @@ def scrape_homepages(
     refetch_after_days: int,
     no_browser_fallback: bool,
     max_runtime_minutes: float | None,
+    concurrency: int,
 ) -> None:
     """Fetch each company's homepage and store raw HTML in raw_pages."""
     import asyncio
@@ -136,6 +163,7 @@ def scrape_homepages(
                     limit=limit,
                     browser_client=browser_client,
                     max_runtime_minutes=max_runtime_minutes,
+                    concurrency=concurrency,
                 )
                 click.echo(summary.model_dump_json(indent=2))
             finally:

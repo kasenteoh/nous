@@ -484,3 +484,37 @@ async def test_persisted_content_is_capped(db: AsyncSession) -> None:
     )
     assert len(pages) >= 1
     assert all(len(page.content) <= _MAX_STORED_CHARS for page in pages)
+
+
+async def test_concurrent_batches_scrape_all_companies(db: AsyncSession) -> None:
+    """concurrency=2 over 5 eligible companies (3 batches) scrapes every one.
+
+    Guards the batched concurrent-fetch / sequential-persist path against
+    dropping the tail and confirms each company's homepage is committed.
+    """
+    for i in range(5):
+        db.add(
+            _make_company(
+                name=f"ScrapeBatch {i} Inc.",
+                slug=f"scrape-batch-{i}",
+                website=f"https://scrapebatch{i}.com",
+            )
+        )
+    await db.flush()
+    await db.commit()
+
+    client = MockHomepageClient()
+    summary = await run_scrape_homepages(db, client, concurrency=2)
+
+    assert summary.companies_seen == 5
+    assert summary.pages_fetched == 5  # one homepage each; mock HTML has no links
+    assert summary.companies_with_no_pages == 0
+    assert summary.stopped_early is False
+
+    rows = await db.execute(
+        select(RawPage.company_id)
+        .join(Company, Company.id == RawPage.company_id)
+        .where(Company.slug.like("scrape-batch-%"))
+    )
+    company_ids_with_pages = {row[0] for row in rows.all()}
+    assert len(company_ids_with_pages) == 5

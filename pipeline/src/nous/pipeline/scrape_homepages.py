@@ -43,10 +43,12 @@ company boundary — the next run's selection resumes via last_scrape_attempt_at
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 import time
 from datetime import UTC, datetime, timedelta
+from typing import NamedTuple
 from urllib.parse import urljoin, urlparse
 
 import httpx
@@ -70,6 +72,14 @@ _BROWSER_FALLBACK_TEXT_THRESHOLD: int = 200
 # concatenation to 32k chars anyway; 50k per page is generous headroom while
 # bounding pathological pages (infinite-scroll blogs, generated content).
 _MAX_STORED_CHARS: int = 50_000
+
+# How many companies to scrape over the network at once. Scraping is
+# network-bound (homepage + up to 3 internal pages per company, plus an
+# optional headless-Chromium render for JS-only shells). Distinct companies
+# live on distinct domains, so a batch fetches concurrently while the clients'
+# per-domain locks still serialize same-domain requests at 1 req/sec — within a
+# single company its own pages are same-host and therefore stay serial.
+_DEFAULT_CONCURRENCY: int = 6
 
 logger = logging.getLogger(__name__)
 
@@ -268,6 +278,86 @@ async def _resolve_content_with_fallback(
     return rendered, True
 
 
+class _ScrapeOutcome(NamedTuple):
+    """HTTP-only result of scraping one company (no DB access).
+
+    ``homepage_status`` is one of:
+      - "robots": homepage disallowed by robots.txt (site alive, not a failure)
+      - "dead":   homepage fetch failed entirely (the dead-site signal)
+      - "ok":     homepage fetched; ``pages`` holds (url, content) to persist
+    ``pages`` lists the homepage first, then any discovered sub-pages, in fetch
+    order. The counters cover sub-pages only; homepage-level robots/dead are
+    conveyed via ``homepage_status``.
+    """
+
+    homepage_status: str
+    pages: list[tuple[str, str]]
+    sub_skipped_robots: int
+    sub_failed: int
+    pages_via_browser_fallback: int
+
+
+async def _scrape_one(
+    client: HomepageClient,
+    browser_client: HeadlessBrowserClient | None,
+    website: str,
+    *,
+    max_extra_pages: int,
+) -> _ScrapeOutcome:
+    """Fetch a company's homepage + relevant sub-pages over the network.
+
+    No DB access, so a batch of companies can run concurrently against the
+    shared clients — their per-domain locks keep 1 req/sec/domain, and a single
+    company's own (same-host) pages stay serial within this coroutine.
+    """
+    homepage_url = urljoin(website, "/")
+    homepage = await _fetch_one(client, homepage_url)
+    if homepage == "robots":
+        return _ScrapeOutcome("robots", [], 0, 0, 0)
+    if homepage is None:
+        return _ScrapeOutcome("dead", [], 0, 0, 0)
+    assert isinstance(homepage, FetchResult)
+
+    pages: list[tuple[str, str]] = []
+    browser_fallbacks = 0
+    sub_skipped_robots = 0
+    sub_failed = 0
+
+    homepage_content, used_browser = await _resolve_content_with_fallback(
+        homepage, browser_client
+    )
+    if used_browser:
+        browser_fallbacks += 1
+    pages.append((homepage.url, homepage_content))
+
+    # Discover relevant subpages from whichever HTML we ended up storing (the
+    # JS-rendered version contains the real <a> tags too).
+    discovered = _extract_relevant_links(
+        homepage_content,
+        base_url=homepage.url,
+        max_links=max_extra_pages,
+    )
+    # Sub-pages are same-host as the homepage, so the per-domain lock serializes
+    # them within this coroutine — intentional (don't hammer one site).
+    for sub_url in discovered:
+        sub = await _fetch_one(client, sub_url)
+        if sub == "robots":
+            sub_skipped_robots += 1
+            continue
+        if sub is None:
+            sub_failed += 1
+            continue
+        assert isinstance(sub, FetchResult)
+        sub_content, sub_used_browser = await _resolve_content_with_fallback(
+            sub, browser_client
+        )
+        if sub_used_browser:
+            browser_fallbacks += 1
+        pages.append((sub.url, sub_content))
+
+    return _ScrapeOutcome("ok", pages, sub_skipped_robots, sub_failed, browser_fallbacks)
+
+
 async def run_scrape_homepages(
     session: AsyncSession,
     client: HomepageClient,
@@ -278,6 +368,7 @@ async def run_scrape_homepages(
     max_extra_pages: int = 3,
     browser_client: HeadlessBrowserClient | None = None,
     max_runtime_minutes: float | None = None,
+    concurrency: int = _DEFAULT_CONCURRENCY,
 ) -> ScrapeSummary:
     """For each company with website set AND no recent raw_pages:
     1. Fetch the homepage via the static httpx client.
@@ -297,11 +388,20 @@ async def run_scrape_homepages(
       (now - ``refetch_after_days``).
 
     ``max_runtime_minutes`` is a clean-exit wall-clock budget: the loop stops
-    at the next company boundary once exceeded. Combined with per-company
+    at the next *batch* boundary once exceeded. Combined with per-company
     commits this makes the stage resumable across bounded CI runs.
+
+    ``concurrency`` controls how many companies are fetched over the network at
+    once. Only the HTTP work is parallelized; persistence stays strictly
+    sequential on the single passed-in session (one connection, one commit per
+    company), so there is no added DB concurrency and the existing
+    crash-safety/idempotency is unchanged.
     """
     summary = ScrapeSummary()
     started = time.monotonic()
+    deadline = (
+        started + max_runtime_minutes * 60 if max_runtime_minutes is not None else None
+    )
 
     cutoff = datetime.now(tz=UTC) - timedelta(days=refetch_after_days)
     failure_cutoff = datetime.now(tz=UTC) - timedelta(days=failure_backoff_days)
@@ -341,13 +441,11 @@ async def run_scrape_homepages(
         stmt = stmt.limit(limit)
 
     result = await session.execute(stmt)
-    companies = result.scalars().all()
+    companies = list(result.scalars().all())
 
-    for company in companies:
-        if (
-            max_runtime_minutes is not None
-            and time.monotonic() - started >= max_runtime_minutes * 60
-        ):
+    batch_size = max(1, concurrency)
+    for start in range(0, len(companies), batch_size):
+        if deadline is not None and time.monotonic() >= deadline:
             summary.stopped_early = True
             logger.info(
                 "scrape: %.0f-minute budget reached after %d companies — "
@@ -358,84 +456,78 @@ async def run_scrape_homepages(
             )
             break
 
-        summary.companies_seen += 1
-
-        website: str = company.website  # type: ignore[assignment]  # already checked IS NOT NULL
-        homepage_url = urljoin(website, "/")
-
-        try:
-            # Step 1: fetch the homepage.
-            homepage = await _fetch_one(client, homepage_url)
-            if homepage == "robots":
-                # robots.txt block ⇒ the site is alive, just disallowing us.
-                # Leave consecutive_scrape_failures untouched (not a dead site).
-                summary.pages_skipped_robots += 1
-                summary.companies_with_no_pages += 1
-                continue
-            if homepage is None:
-                # Total fetch failure (network/HTTP error → no usable content):
-                # this is the dead-site signal. Bump the counter; it rides the
-                # finally-block commit below. Re-runs add one per failed cycle.
-                company.consecutive_scrape_failures += 1
-                summary.pages_failed += 1
-                summary.companies_with_no_pages += 1
-                continue
-            assert isinstance(homepage, FetchResult)
-            # Homepage fetched successfully ⇒ the site is reachable. Reset the
-            # dead-site counter (persisted by the finally-block commit).
-            company.consecutive_scrape_failures = 0
-
-            homepage_content, used_browser = await _resolve_content_with_fallback(
-                homepage, browser_client
-            )
-            if used_browser:
-                summary.pages_via_browser_fallback += 1
-            await _persist_fetched_page(
-                session, company.id, url=homepage.url, content=homepage_content
-            )
-            summary.pages_fetched += 1
-
-            # Step 2: discover relevant subpages from whichever HTML we ended
-            # up storing (JS-rendered version contains the real <a> tags too).
-            discovered = _extract_relevant_links(
-                homepage_content,
-                base_url=homepage.url,
-                max_links=max_extra_pages,
-            )
-
-            # Step 3: fetch each discovered link. Browser fallback applies the
-            # same way for sub-pages — many SPAs render every route via JS.
-            for sub_url in discovered:
-                sub = await _fetch_one(client, sub_url)
-                if sub == "robots":
-                    summary.pages_skipped_robots += 1
-                    continue
-                if sub is None:
-                    summary.pages_failed += 1
-                    continue
-                assert isinstance(sub, FetchResult)
-                sub_content, sub_used_browser = await _resolve_content_with_fallback(
-                    sub, browser_client
+        batch = companies[start : start + batch_size]
+        # Phase 1: fetch every company's pages concurrently (network only).
+        # return_exceptions keeps one freak error from sinking the whole batch.
+        outcomes = await asyncio.gather(
+            *(
+                _scrape_one(
+                    client,
+                    browser_client,
+                    c.website,  # type: ignore[arg-type]  # query guarantees IS NOT NULL
+                    max_extra_pages=max_extra_pages,
                 )
-                if sub_used_browser:
-                    summary.pages_via_browser_fallback += 1
-                await _persist_fetched_page(
-                    session, company.id, url=sub.url, content=sub_content
+                for c in batch
+            ),
+            return_exceptions=True,
+        )
+
+        # Phase 2: apply results sequentially on the single session — one commit
+        # per company, stamping last_scrape_attempt_at in a finally so the
+        # back-off window applies even when persistence fails.
+        for company, raw_outcome in zip(batch, outcomes, strict=True):
+            summary.companies_seen += 1
+
+            if isinstance(raw_outcome, BaseException):
+                # Unexpected fetch error — treat as a dead homepage for this run
+                # (stamp + back-off below); never crash the whole batch.
+                logger.error(
+                    "scrape: unexpected error scraping %s: %r",
+                    company.website,
+                    raw_outcome,
                 )
-                summary.pages_fetched += 1
-        finally:
-            # Stamp the attempt timestamp on every iteration so the back-off
-            # window applies even when the body raised (e.g. a DB hiccup in
-            # _persist_fetched_page). If the in-flight transaction is
-            # poisoned, roll back, then commit just the timestamp update.
+                outcome = _ScrapeOutcome("dead", [], 0, 0, 0)
+            else:
+                outcome = raw_outcome
+
             try:
-                company.last_scrape_attempt_at = datetime.now(tz=UTC)
-                await session.commit()
-            except Exception:
-                await session.rollback()
-                fresh = await session.get(Company, company.id)
-                if fresh is not None:
-                    fresh.last_scrape_attempt_at = datetime.now(tz=UTC)
+                if outcome.homepage_status == "robots":
+                    # robots.txt block ⇒ the site is alive, just disallowing us.
+                    # Leave consecutive_scrape_failures untouched (not dead).
+                    summary.pages_skipped_robots += 1
+                    summary.companies_with_no_pages += 1
+                elif outcome.homepage_status == "dead":
+                    # Total fetch failure ⇒ the dead-site signal. Re-runs add one
+                    # per failed cycle; persisted by the finally-block commit.
+                    company.consecutive_scrape_failures += 1
+                    summary.pages_failed += 1
+                    summary.companies_with_no_pages += 1
+                else:  # "ok"
+                    # Homepage reachable ⇒ reset the dead-site counter.
+                    company.consecutive_scrape_failures = 0
+                    summary.pages_skipped_robots += outcome.sub_skipped_robots
+                    summary.pages_failed += outcome.sub_failed
+                    summary.pages_via_browser_fallback += (
+                        outcome.pages_via_browser_fallback
+                    )
+                    for url, content in outcome.pages:
+                        await _persist_fetched_page(
+                            session, company.id, url=url, content=content
+                        )
+                        summary.pages_fetched += 1
+            finally:
+                # Stamp the attempt timestamp on every iteration so the back-off
+                # window applies even when a persist raised (e.g. a DB hiccup).
+                # If the in-flight transaction is poisoned, roll back, then
+                # commit just the timestamp update.
+                try:
+                    company.last_scrape_attempt_at = datetime.now(tz=UTC)
                     await session.commit()
+                except Exception:
+                    await session.rollback()
+                    fresh = await session.get(Company, company.id)
+                    if fresh is not None:
+                        fresh.last_scrape_attempt_at = datetime.now(tz=UTC)
+                        await session.commit()
 
     return summary
