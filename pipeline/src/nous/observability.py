@@ -6,16 +6,21 @@ observability SDKs — we keep it cheap and simple.
 Public API:
     emit_run_telemetry(stage)   — log ledger + optional GH step summary block
     write_step_summary(markdown) — append markdown to GITHUB_STEP_SUMMARY if set
+    record_pipeline_run(...)     — persist a stage run to pipeline_runs + alert
 """
 
 from __future__ import annotations
 
 import logging
 import os
+from datetime import UTC, datetime
 
-# nous.llm.client is intentionally imported lazily inside emit_run_telemetry
-# so that importing observability.py (e.g. for write_step_summary in db-stats)
-# does not transitively pull in httpx / tenacity.
+from pydantic import BaseModel
+
+# nous.llm.client / nous.db are intentionally imported lazily inside the
+# functions that need them so that importing observability.py (e.g. for
+# write_step_summary in db-stats) does not transitively pull in httpx / tenacity
+# or build the DB engine.
 
 logger = logging.getLogger(__name__)
 
@@ -73,3 +78,81 @@ def emit_run_telemetry(stage: str) -> None:
         f"| est. cost (USD) | ${ledger.estimated_cost_usd:.4f} |\n\n"
     )
     write_step_summary(md)
+
+
+def _run_status(
+    *, inputs_seen: int, rows_written: int, error: str | None, flag_empty: bool
+) -> str:
+    """Classify a pipeline run.
+
+    'error' when the stage raised; 'empty' when ``flag_empty`` and it processed
+    inputs but wrote nothing (a silent-failure signal for stages whose output
+    should track their input, e.g. analyze-competitors / enrich-companies);
+    else 'success'. Pure + side-effect-free so it's trivially unit-testable.
+    """
+    if error is not None:
+        return "error"
+    if flag_empty and inputs_seen > 0 and rows_written == 0:
+        return "empty"
+    return "success"
+
+
+async def record_pipeline_run(
+    stage: str,
+    *,
+    started_at: datetime,
+    inputs_seen: int,
+    rows_written: int,
+    summary: BaseModel | None = None,
+    flag_empty: bool = False,
+    error: str | None = None,
+) -> None:
+    """Persist one stage execution to ``pipeline_runs`` and alert on trouble.
+
+    Writes in its OWN session and commits it (independent of the stage's
+    transaction state), so it records even when the stage rolled back. On a
+    non-'success' status it prints a GitHub Actions ``::warning::`` annotation so
+    the silent failure surfaces in the run UI immediately.
+
+    Best-effort: never raises — observability must not break the pipeline.
+    """
+    status = _run_status(
+        inputs_seen=inputs_seen,
+        rows_written=rows_written,
+        error=error,
+        flag_empty=flag_empty,
+    )
+
+    try:
+        from nous.db.models import PipelineRun
+        from nous.db.session import AsyncSessionLocal
+
+        async with AsyncSessionLocal() as session:
+            session.add(
+                PipelineRun(
+                    stage=stage,
+                    started_at=started_at,
+                    finished_at=datetime.now(UTC),
+                    status=status,
+                    inputs_seen=inputs_seen,
+                    rows_written=rows_written,
+                    error=error,
+                    summary=summary.model_dump(mode="json")
+                    if summary is not None
+                    else None,
+                )
+            )
+            await session.commit()
+    except Exception:
+        # Recording must never sink the run; the stage's real work already ran.
+        logger.exception("failed to record pipeline_run for stage %s", stage)
+
+    if status != "success":
+        detail = f" error={error}" if error else ""
+        msg = (
+            f"pipeline-run {stage}: status={status} "
+            f"inputs_seen={inputs_seen} rows_written={rows_written}{detail}"
+        )
+        # A GitHub Actions annotation (surfaces in the run UI); harmless locally.
+        print(f"::warning::{msg}", flush=True)
+        logger.warning(msg)

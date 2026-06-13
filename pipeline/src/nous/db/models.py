@@ -578,3 +578,44 @@ class CompanyRelationship(Base):
             name="ck_company_relationships_type",
         ),
     )
+
+
+class PipelineRun(Base):
+    """One row per pipeline-stage execution — the observability audit trail.
+
+    Stages run as separate CLI processes under continue-on-error, so a stage can
+    silently produce nothing (a flush-without-commit bug, a validator rejecting
+    all LLM output, a blocked source) while the workflow stays green. This table
+    records each run's input/output counts so a silent-empty-table surfaces
+    immediately (status='empty') instead of waiting to be noticed, and gives a
+    queryable history of what each stage did and when.
+    """
+
+    __tablename__ = "pipeline_runs"
+
+    stage: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    finished_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    # 'success' | 'empty' (processed inputs but wrote 0 rows — a silent-failure
+    # signal for stages whose output should track input) | 'error'.
+    status: Mapped[str] = mapped_column(String, nullable=False)
+    inputs_seen: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default="0"
+    )
+    rows_written: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default="0"
+    )
+    error: Mapped[str | None] = mapped_column(String, nullable=True)
+    # The stage's full summary model (model_dump) for ad-hoc inspection.
+    summary: Mapped[dict | None] = mapped_column(JSONB)  # type: ignore[type-arg]
+
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('success', 'empty', 'error')",
+            name="ck_pipeline_runs_status",
+        ),
+    )

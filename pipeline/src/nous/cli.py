@@ -193,12 +193,14 @@ def scrape_homepages(
 def enrich_companies(limit: int | None, refetch_after_days: int | None) -> None:
     """Call the LLM to generate descriptions + people for companies with raw pages."""
     import asyncio
+    from datetime import UTC, datetime
 
     from nous.db.session import AsyncSessionLocal
-    from nous.observability import emit_run_telemetry
+    from nous.observability import emit_run_telemetry, record_pipeline_run
     from nous.pipeline.enrich_companies import run_enrich_companies
 
     async def _run() -> None:
+        started = datetime.now(UTC)
         try:
             async with AsyncSessionLocal() as session:
                 summary = await run_enrich_companies(
@@ -207,6 +209,14 @@ def enrich_companies(limit: int | None, refetch_after_days: int | None) -> None:
                     refetch_after_days=refetch_after_days,
                 )
                 click.echo(summary.model_dump_json(indent=2))
+            await record_pipeline_run(
+                "enrich-companies",
+                started_at=started,
+                inputs_seen=summary.companies_seen,
+                rows_written=summary.companies_enriched,
+                summary=summary,
+                flag_empty=True,
+            )
         finally:
             emit_run_telemetry("enrich-companies")
 
@@ -314,10 +324,11 @@ def ingest_news(
 ) -> None:
     """Pull funding-keyword news articles into the news_articles table."""
     import asyncio
+    from datetime import UTC, datetime
 
     from nous.config import Settings
     from nous.db.session import AsyncSessionLocal
-    from nous.observability import emit_run_telemetry
+    from nous.observability import emit_run_telemetry, record_pipeline_run
     from nous.pipeline.ingest_news import run_ingest_news
     from nous.sources.news import NewsClient
 
@@ -329,6 +340,7 @@ def ingest_news(
     )
 
     async def _run() -> None:
+        started = datetime.now(UTC)
         try:
             async with (
                 NewsClient(
@@ -346,6 +358,13 @@ def ingest_news(
                     similarity_threshold=threshold,
                 )
                 click.echo(summary.model_dump_json(indent=2))
+            await record_pipeline_run(
+                "ingest-news",
+                started_at=started,
+                inputs_seen=summary.articles_seen,
+                rows_written=summary.articles_inserted + summary.auto_created_companies,
+                summary=summary,
+            )
         finally:
             emit_run_telemetry("ingest-news")
 
@@ -383,12 +402,14 @@ def extract_funding(
 ) -> None:
     """Run the funding-extraction LLM over unprocessed news_articles."""
     import asyncio
+    from datetime import UTC, datetime
 
     from nous.db.session import AsyncSessionLocal
-    from nous.observability import emit_run_telemetry
+    from nous.observability import emit_run_telemetry, record_pipeline_run
     from nous.pipeline.extract_funding import run_extract_funding
 
     async def _run() -> None:
+        started = datetime.now(UTC)
         try:
             async with AsyncSessionLocal() as session:
                 summary = await run_extract_funding(
@@ -398,6 +419,14 @@ def extract_funding(
                     requery_totals=requery_totals,
                 )
                 click.echo(summary.model_dump_json(indent=2))
+            await record_pipeline_run(
+                "extract-funding",
+                started_at=started,
+                inputs_seen=summary.articles_processed,
+                rows_written=summary.funding_rounds_created
+                + summary.funding_rounds_merged,
+                summary=summary,
+            )
         finally:
             emit_run_telemetry("extract-funding")
 
@@ -482,12 +511,14 @@ def extract_funding_website(
 def analyze_competitors(limit: int, ttl_days: int, dry_run: bool) -> None:
     """Run the competitor-analysis LLM over eligible companies."""
     import asyncio
+    from datetime import UTC, datetime
 
     from nous.db.session import AsyncSessionLocal
-    from nous.observability import emit_run_telemetry
+    from nous.observability import emit_run_telemetry, record_pipeline_run
     from nous.pipeline.analyze_competitors import run_analyze_competitors
 
     async def _run() -> None:
+        started = datetime.now(UTC)
         try:
             async with AsyncSessionLocal() as session:
                 summary = await run_analyze_competitors(
@@ -497,6 +528,15 @@ def analyze_competitors(limit: int, ttl_days: int, dry_run: bool) -> None:
                     dry_run=dry_run,
                 )
                 click.echo(summary.model_dump_json(indent=2))
+            if not dry_run:
+                await record_pipeline_run(
+                    "analyze-competitors",
+                    started_at=started,
+                    inputs_seen=summary.companies_analyzed,
+                    rows_written=summary.competitors_written,
+                    summary=summary,
+                    flag_empty=True,
+                )
         finally:
             emit_run_telemetry("analyze-competitors")
 
@@ -684,11 +724,14 @@ def link_competitors(
     rest, best-match-only with a tie guard. Idempotent (only touches NULL FKs).
     """
     import asyncio
+    from datetime import UTC, datetime
 
     from nous.db.session import AsyncSessionLocal
+    from nous.observability import record_pipeline_run
     from nous.pipeline.link_competitors import run_link_competitors
 
     async def _run() -> None:
+        started = datetime.now(UTC)
         async with AsyncSessionLocal() as session:
             summary = await run_link_competitors(
                 session,
@@ -698,6 +741,14 @@ def link_competitors(
                 dry_run=dry_run,
             )
             click.echo(summary.model_dump_json(indent=2))
+        if not dry_run:
+            await record_pipeline_run(
+                "link-competitors",
+                started_at=started,
+                inputs_seen=summary.rows_seen,
+                rows_written=summary.linked,
+                summary=summary,
+            )
 
     asyncio.run(_run())
 
@@ -723,11 +774,14 @@ def derive_relationships(dry_run: bool, max_similar_per_company: int) -> None:
     competitor projection picks up freshly resolved FKs.
     """
     import asyncio
+    from datetime import UTC, datetime
 
     from nous.db.session import AsyncSessionLocal
+    from nous.observability import record_pipeline_run
     from nous.pipeline.derive_relationships import run_derive_relationships
 
     async def _run() -> None:
+        started = datetime.now(UTC)
         async with AsyncSessionLocal() as session:
             summary = await run_derive_relationships(
                 session,
@@ -735,6 +789,14 @@ def derive_relationships(dry_run: bool, max_similar_per_company: int) -> None:
                 max_similar_per_company=max_similar_per_company,
             )
             click.echo(summary.model_dump_json(indent=2))
+        if not dry_run:
+            await record_pipeline_run(
+                "derive-relationships",
+                started_at=started,
+                inputs_seen=summary.competitor_edges + summary.similar_edges,
+                rows_written=summary.competitor_edges + summary.similar_edges,
+                summary=summary,
+            )
 
     asyncio.run(_run())
 
