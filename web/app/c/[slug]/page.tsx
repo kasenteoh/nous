@@ -358,6 +358,23 @@ export default async function CompanyPage({ params }: Props) {
         </dl>
       </header>
 
+      {/* ── Husk placeholder (Task 1.5) ────────────────────────────────────
+          Shown when a company has no description_long — it was discovered by
+          the pipeline but hasn't been enriched yet. Renders as an honest
+          "coming soon" notice so the page doesn't look broken. Only shown
+          when there is also no description_short (no tagline = full husk).
+          Non-husk companies (those with description_long) get the full About
+          section below instead. ──────────────────────────────────────────── */}
+      {!company.description_long && !company.description_short && (
+        <div className="mb-12 rounded-lg border border-dashed border-edge px-8 py-10">
+          <p className="text-sm text-ink-muted">
+            We&apos;ve discovered <span className="text-ink-soft font-medium">{company.name}</span>{" "}
+            via {company.discovered_via.replace(/_/g, " ")} but haven&apos;t built a full
+            profile yet. Check back after the next pipeline run.
+          </p>
+        </div>
+      )}
+
       {/* ── About ──────────────────────────────────────────────────────── */}
       {company.description_long && (
         <section className="mb-12">

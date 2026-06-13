@@ -13,6 +13,7 @@ import type {
   CompetitorWithResolved,
   FundingRound,
   FundingRoundWithInvestors,
+  HuskFallbackRow,
   InvestorDetail,
   InvestorListRow,
   InvestorRoundRow,
@@ -197,8 +198,55 @@ export async function listCompanies(
   );
 
   if (error) {
-    console.error("[listCompanies] companies query failed:", error.message);
-    return { rows: [], total: 0 };
+    // PostgREST returns PGRST103 "Requested range not satisfiable" when the
+    // offset is beyond the last row. In that case the `count` header is still
+    // returned (it reflects the filter set, not the range), but supabase-js
+    // surfaces it as null when `error` is set. Fall back to a head-only count
+    // so the page can clamp the requested page number rather than showing a
+    // false "total=0" cold-start box.
+    if (count != null) {
+      return { rows: [], total: count };
+    }
+
+    // Fetch the count independently — we still have all the filters wired up.
+    // Rebuild the count query from the same options to stay consistent.
+    let countQuery = supabase
+      .from("companies")
+      .select(
+        "slug",
+        { count: "exact", head: true },
+      )
+      .is("exclusion_reason", null)
+      .or(CATALOG_BAR_OR);
+
+    const search2 = opts.search ? sanitizeIlikeTerm(opts.search) : "";
+    if (search2) {
+      countQuery = countQuery.or(
+        `name.ilike.%${search2}%,description_short.ilike.%${search2}%`,
+      );
+    }
+    if (opts.industry_group) {
+      countQuery = countQuery.eq("industry_group", opts.industry_group);
+    }
+    if (opts.discovered_via) {
+      countQuery = countQuery.eq("discovered_via", opts.discovered_via);
+    }
+    if (opts.tag) {
+      countQuery = countQuery.contains("tags", [opts.tag]);
+    }
+    if (opts.state) {
+      countQuery = countQuery.eq("hq_state", opts.state);
+    }
+
+    const { count: fallbackCount, error: countError } = await countQuery;
+    if (countError) {
+      console.error("[listCompanies] companies query failed:", error.message);
+      console.error("[listCompanies] fallback count failed:", countError.message);
+      return { rows: [], total: 0 };
+    }
+
+    // Return 0 rows but the real total — caller can clamp the page.
+    return { rows: [], total: fallbackCount ?? 0 };
   }
 
   const rows = (companies ?? []).map((c) => ({
@@ -237,6 +285,80 @@ export async function listIndustryGroups(): Promise<string[]> {
     if (value) seen.add(value);
   }
   return [...seen].sort((a, b) => a.localeCompare(b));
+}
+
+/**
+ * Distinct `discovered_via` values present in the catalog (excluding excluded
+ * companies), for the source filter dropdown. Returns a sorted list so the
+ * dropdown is deterministic. Falls back to [] when Supabase is unconfigured so
+ * the page still builds during CI.
+ *
+ * Uses the same keyset-scan helper as listIndustryGroups — PostgREST caps
+ * single-shot selects at 1000 rows, and we want the full catalog.
+ */
+export async function listDiscoveredViaValues(): Promise<string[]> {
+  const rows = await scanCompanies(
+    "listDiscoveredViaValues",
+    "slug, discovered_via",
+    "discovered_via",
+    true,
+  );
+  if (rows === null) return [];
+
+  const seen = new Set<string>();
+  for (const row of rows) {
+    const value = row.discovered_via as string | null;
+    if (value) seen.add(value);
+  }
+  return [...seen].sort((a, b) => a.localeCompare(b));
+}
+
+/**
+ * Husk fallback search (Task 1.5): when the main catalog search returns 0
+ * results for a non-empty term, run a second query that includes companies with
+ * no description (husks) that match the name. Used to surface well-known
+ * companies (Anthropic, Vercel, etc.) that haven't been enriched yet.
+ *
+ * Husks are companies where `exclusion_reason IS NULL` but which fail the
+ * catalog bar (`description_short IS NULL AND funding_round_count = 0`). We
+ * can't simply invert CATALOG_BAR_OR because PostgREST doesn't expose NOT (…OR…)
+ * natively via the JS client without raw RPC. Instead we query
+ * `exclusion_reason IS NULL AND name ILIKE %term%` without the catalog bar,
+ * limited to ~10, and return only rows not already in the main results (which is
+ * an empty array in this fallback path).
+ */
+export async function searchHuskFallback(
+  term: string,
+): Promise<HuskFallbackRow[]> {
+  let supabase: ReturnType<typeof createSupabaseServerClient>;
+  try {
+    supabase = createSupabaseServerClient();
+  } catch (err) {
+    console.warn(
+      "[searchHuskFallback] Supabase not configured:",
+      (err as Error).message,
+    );
+    return [];
+  }
+
+  const safe = sanitizeIlikeTerm(term);
+  if (!safe) return [];
+
+  const { data, error } = await supabase
+    .from("companies")
+    .select("slug, name")
+    .is("exclusion_reason", null)
+    .ilike("name", `%${safe}%`)
+    .order("name", { ascending: true })
+    .limit(10);
+
+  if (error) {
+    console.error("[searchHuskFallback] query failed:", error.message);
+    return [];
+  }
+
+  return ((data ?? []) as { slug: string | null; name: string | null }[])
+    .filter((r): r is { slug: string; name: string } => r.slug != null && r.name != null);
 }
 
 // ─── Front-page queries ───────────────────────────────────────────────────────

@@ -249,6 +249,16 @@ export interface AlsoBackedByCompany {
   sharedInvestors: string[];
 }
 
+/**
+ * Minimal row returned by {@link searchHuskFallback}: a company that matched
+ * the search term by name but hasn't been enriched yet (husk). Surfaced below
+ * the main result grid as a muted "we track this but have no full profile" link.
+ */
+export interface HuskFallbackRow {
+  slug: string;
+  name: string;
+}
+
 /** Full company detail assembled from the DB queries. */
 export interface CompanyDetail {
   company: CompanyRow;

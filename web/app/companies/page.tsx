@@ -6,6 +6,8 @@ import Link from "next/link";
 import {
   listCompanies,
   listIndustryGroups,
+  listDiscoveredViaValues,
+  searchHuskFallback,
   type CompanyListSort,
 } from "@/lib/queries";
 import { CompanyCard } from "@/components/CompanyCard";
@@ -28,14 +30,17 @@ const SORT_OPTIONS: { value: CompanyListSort; label: string }[] = [
   { value: "recent", label: "Recently added" },
 ];
 
-// discovered_via is a small fixed enum (see pipeline auto_create_company), so
-// the filter options are hardcoded rather than queried.
-const SOURCE_OPTIONS: { value: string; label: string }[] = [
-  { value: "vc_portfolio", label: "VC portfolio" },
-  { value: "news", label: "News" },
-  { value: "techcrunch", label: "TechCrunch" },
-  { value: "unknown", label: "Unknown" },
-];
+// Human-readable labels for discovered_via values. Unknown keys fall back to
+// the raw value (title-cased) so new pipeline values self-heal in the UI.
+const SOURCE_LABELS: Record<string, string> = {
+  vc_portfolio: "VC portfolio",
+  techcrunch: "TechCrunch",
+  news: "News",
+};
+
+function sourceLabel(value: string): string {
+  return SOURCE_LABELS[value] ?? value.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
 
 type SearchParams = {
   q?: string | string[];
@@ -64,10 +69,16 @@ export default async function CompaniesPage({
   const sort: CompanyListSort = SORT_OPTIONS.some((o) => o.value === sortRaw)
     ? (sortRaw as CompanyListSort)
     : "name_asc";
-  const page = Math.max(1, Number.parseInt(firstStr(sp.page), 10) || 1);
-  const offset = (page - 1) * PAGE_SIZE;
 
-  const [{ rows: companies, total }, industries] = await Promise.all([
+  // Parse requested page (NaN / negative → 1).
+  const parsedPage = Math.max(1, Number.parseInt(firstStr(sp.page), 10) || 1);
+
+  // ── First pass: fetch with requested page to learn the real total ──────────
+  // If the page is out of range, listCompanies returns rows=[] and the real
+  // total via a count fallback. We then clamp and optionally re-fetch.
+  const offset = (parsedPage - 1) * PAGE_SIZE;
+
+  const [firstResult, industries, discoveredViaValues] = await Promise.all([
     listCompanies({
       search: q || undefined,
       industry_group: industry || undefined,
@@ -77,12 +88,42 @@ export default async function CompaniesPage({
       offset,
     }),
     listIndustryGroups(),
+    listDiscoveredViaValues(),
   ]);
 
+  const { total } = firstResult;
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  // Clamp the effective page to [1, totalPages].
+  const page = Math.min(totalPages, Math.max(1, parsedPage));
+
+  // Re-fetch only when the page was clamped (i.e. the user requested an
+  // out-of-range page and rows came back empty because the offset overshot).
+  let companies = firstResult.rows;
+  if (page !== parsedPage && companies.length === 0 && total > 0) {
+    const clampedOffset = (page - 1) * PAGE_SIZE;
+    const refetch = await listCompanies({
+      search: q || undefined,
+      industry_group: industry || undefined,
+      discovered_via: source || undefined,
+      sort,
+      limit: PAGE_SIZE,
+      offset: clampedOffset,
+    });
+    companies = refetch.rows;
+  }
+
   const hasFilters = Boolean(q || industry || source);
-  const firstShown = total === 0 ? 0 : offset + 1;
-  const lastShown = Math.min(offset + companies.length, total);
+  const effectiveOffset = (page - 1) * PAGE_SIZE;
+  const firstShown = total === 0 ? 0 : effectiveOffset + 1;
+  const lastShown = Math.min(effectiveOffset + companies.length, total);
+
+  // Husk fallback: when the main search returns 0 results for a non-empty
+  // query, look for name-matching husks (companies with no description that
+  // passed exclusion but failed the catalog bar).
+  const huskFallback =
+    companies.length === 0 && q
+      ? await searchHuskFallback(q)
+      : [];
 
   // Build a /companies?… href for a target page, preserving the active
   // filters/sort.
@@ -141,6 +182,8 @@ export default async function CompaniesPage({
           ))}
         </select>
 
+        {/* Source filter built from real discovered_via values in the DB —
+            self-heals when new pipeline sources appear. */}
         <select
           name="source"
           defaultValue={source}
@@ -148,9 +191,9 @@ export default async function CompaniesPage({
           className={selectClass}
         >
           <option value="">All sources</option>
-          {SOURCE_OPTIONS.map((o) => (
-            <option key={o.value} value={o.value}>
-              {o.label}
+          {discoveredViaValues.map((value) => (
+            <option key={value} value={value}>
+              {sourceLabel(value)}
             </option>
           ))}
         </select>
@@ -193,23 +236,53 @@ export default async function CompaniesPage({
 
       {/* ── Company grid ──────────────────────────────────────────────────── */}
       {companies.length === 0 ? (
-        <div className="rounded-lg border border-dashed border-edge px-8 py-14 text-center">
-          <p className="text-ink-muted">
-            {hasFilters
-              ? "No companies match these filters."
-              : "No companies indexed yet. Run the discovery pipeline:"}
-          </p>
-          {!hasFilters && (
+        // Task 1.2: only show the pipeline cold-start box when the catalog is
+        // genuinely empty (total===0, no filters, first page). Any other
+        // zero-result state (out-of-range page, filtered search, etc.) shows
+        // a plain "no match" message.
+        total === 0 && !hasFilters && page === 1 ? (
+          <div className="rounded-lg border border-dashed border-edge px-8 py-14 text-center">
+            <p className="text-ink-muted">
+              No companies indexed yet. Run the discovery pipeline:
+            </p>
             <pre className="mt-4 inline-block rounded border border-edge px-4 py-2 text-sm text-ink-soft font-mono">
               <code>nous refresh-vc-portfolios</code>
             </pre>
-          )}
-        </div>
+          </div>
+        ) : (
+          <div className="rounded-lg border border-dashed border-edge px-8 py-14 text-center">
+            <p className="text-ink-muted">No companies match these filters.</p>
+          </div>
+        )
       ) : (
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
           {companies.map((company) => (
             <CompanyCard key={company.slug} company={company} />
           ))}
+        </div>
+      )}
+
+      {/* ── Task 1.5: Husk fallback — name-only suggestions shown below the main
+          grid when the catalog search returned nothing for a non-empty query.
+          Kept out of the ranked grid: these companies have no enriched profile
+          yet and should not be presented as full results. ─────────────────── */}
+      {huskFallback.length > 0 && (
+        <div className="mt-8 rounded-lg border border-edge px-8 py-6">
+          <p className="text-sm text-ink-muted mb-3">
+            We track these but don&apos;t have a full profile yet:
+          </p>
+          <ul className="flex flex-wrap gap-2">
+            {huskFallback.map((h) => (
+              <li key={h.slug}>
+                <Link
+                  href={`/c/${h.slug}`}
+                  className="rounded border border-edge px-3 py-1 text-sm text-ink-soft hover:border-ink-muted hover:text-ink transition-colors"
+                >
+                  {h.name}
+                </Link>
+              </li>
+            ))}
+          </ul>
         </div>
       )}
 
