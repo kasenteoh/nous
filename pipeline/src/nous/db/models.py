@@ -310,6 +310,14 @@ class Investor(Base):
     type: Mapped[str] = mapped_column(String, nullable=False, server_default="unknown")
     description: Mapped[str | None]
     website: Mapped[str | None]
+    # Denormalized count of distinct non-excluded companies this investor backs,
+    # via EITHER company_investors OR funding_round_investors → funding_rounds.
+    # Maintained by refresh-investor-counts (called at the end of
+    # refresh-vc-portfolios and extract-funding) and backfilled in migration
+    # 0025. Indexed so the web investor index can ORDER BY portfolio_count DESC.
+    portfolio_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default="0", index=True
+    )
 
 
 class FundingRoundInvestor(Base):
