@@ -6,8 +6,8 @@ name: discovery
 # discovery itself is LLM-free and competitor analysis is TTL-gated (25 days),
 # so weekly costs little more than monthly did.
 #
-# estimate-employees lives here (weekly) rather than in the daily
-# descriptions.yml: at ~15-30s/company across up to 5 sources it is the most
+# estimate-employees lives here (weekly) rather than in the 10x/day
+# pipeline.yml: at ~15-30s/company across up to 5 sources it is the most
 # expensive stage per company for the least time-sensitive data, and the
 # private-repo Actions quota (2,000 min/month) can't fund it daily while the
 # scrape backlog drains. Its 90-day back-off + --max-runtime-minutes budget
@@ -16,10 +16,10 @@ name: discovery
 on:
   schedule:
     # Mon 02:00 UTC. The dedup-companies step DELETEs merged company rows, so
-    # this job must never run concurrently with descriptions.yml /
-    # funding-news.yml / backfill-discovery.yml — they all write the companies
-    # table. That mutual exclusion is enforced by the shared `concurrency` group
-    # below, not by cron offsets.
+    # this job must never run concurrently with pipeline.yml /
+    # backfill-discovery.yml — they all write the companies table. That mutual
+    # exclusion is enforced by the shared `concurrency` group below, not by cron
+    # offsets.
     - cron: "0 2 * * 1"
   workflow_dispatch:
     inputs:
