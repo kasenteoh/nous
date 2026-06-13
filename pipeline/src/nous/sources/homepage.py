@@ -22,8 +22,8 @@ from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponen
 
 from nous.sources.duckduckgo import DuckDuckGoSearch, is_aggregator
 from nous.sources.parked import looks_parked
+from nous.sources.reject_hosts import is_aggregator_url
 from nous.sources.robots import RobotsBlockedError, RobotsCache
-from nous.util.slugify import strip_corporate_suffix
 from nous.util.url import canonical_domain
 
 # Re-export for backwards compatibility — callers that did
@@ -44,6 +44,36 @@ CANDIDATE_TLDS: tuple[str, ...] = (".com", ".io", ".ai", ".co")
 CANDIDATE_PATHS: tuple[str, ...] = (
     "/", "/about", "/about-us", "/product", "/products", "/company", "/team",
 )
+
+
+def _name_in_strong_position(html: str, slug_base: str, company_name: str) -> bool:
+    """Return True when *slug_base* or *company_name* appears in the page <title>
+    or an <h1> element.
+
+    "Strong position" guards against directory / aggregator pages that mention a
+    company name in body text (e.g. "Find startups like Acme on Startup Intros")
+    but whose <title>/<h1> describe the directory, not the company.
+
+    Uses the hyphen-normalised slug (e.g. "lightning-ai" → "lightning ai") so
+    both slug forms are tested against each strong element.
+    """
+    tree = HTMLParser(html)
+
+    slug_variants = {slug_base.lower(), slug_base.replace("-", " ").lower()}
+    name_lower = company_name.lower()
+
+    def _matches(text: str) -> bool:
+        t = text.lower()
+        return (
+            any(sv in t for sv in slug_variants)
+            or name_lower in t
+        )
+
+    title_node = tree.css_first("title")
+    if title_node is not None and _matches(title_node.text(strip=True)):
+        return True
+
+    return any(_matches(h1.text(strip=True)) for h1 in tree.css("h1"))
 
 
 def _is_retryable(exc: BaseException) -> bool:
@@ -311,15 +341,16 @@ async def resolve_homepage(
 
     Candidates whose canonical domain matches a previously rejected URL
     (``rejected_urls`` — confirmed-wrong domains recorded by enrichment) are
-    skipped before fetching. On a 200 response, parked/for-sale pages are
-    rejected (see nous.sources.parked), then the page's visible text is
-    validated to contain ``slug_base`` (case-insensitive). Returns the first
-    plausible URL on match.
+    skipped before fetching.  On a 200 response the page is checked in order:
+    (1) parked/for-sale (see nous.sources.parked), (2) known-aggregator host or
+    directory path (see nous.sources.reject_hosts), (3) company name present in
+    a *strong* position — the page ``<title>`` or an ``<h1>`` element.  A bare
+    body-text mention is not sufficient, which prevents startup-directory pages
+    that list the company name in prose from being accepted.
 
     Phase 2: if all TLD guesses miss, query DuckDuckGo for
-    ``"{company_name}" startup``, filter out aggregator domains, and return the
-    first candidate whose page contains the company name (same parked/rejected
-    checks).
+    ``"{company_name}" startup``, apply the same aggregator/parked/strong-name
+    checks, and return the first surviving candidate.
 
     Returns None if both phases miss.
     """
@@ -350,9 +381,17 @@ async def resolve_homepage(
         if looks_parked(result.content):
             continue
 
-        # Validate: does visible page text mention the slug?
-        visible_text = HTMLParser(result.content).text(strip=True).lower()
-        if slug_base.replace("-", " ") in visible_text or slug_base in visible_text:
+        # Reject known startup-directory and aggregator hosts (e.g. a TLD
+        # guess that accidentally hits tracxn.com or theorg.com).  Also
+        # rejects any URL whose path looks like a directory listing.
+        if is_aggregator_url(result.url):
+            continue
+
+        # Require the company name to appear in a *strong* position — the page
+        # <title> or an <h1>.  A bare body-text match is not enough: directory
+        # pages (e.g. startupintros.com/orgs/acme) mention the name in prose
+        # but their title/h1 describe the directory, not the company itself.
+        if _name_in_strong_position(result.content, slug_base, company_name):
             return result.url  # final URL after any redirects
 
     # Phase 2: DuckDuckGo search fallback. Treat any failure (network error,
@@ -371,12 +410,10 @@ async def resolve_homepage(
         )
         candidates = []
 
-    name_lower = company_name.lower()
-    # Strip corporate suffixes for a more lenient page-text match.
-    naked_name = strip_corporate_suffix(company_name).lower()
-
     for candidate_url in candidates:
-        if is_aggregator(candidate_url):
+        # Reject known aggregator hosts and directory-path patterns BEFORE
+        # fetching — saves a round-trip for the common case.
+        if is_aggregator(candidate_url) or is_aggregator_url(candidate_url):
             continue
         if canonical_domain(candidate_url) in rejected_domains:
             continue
@@ -386,9 +423,12 @@ async def resolve_homepage(
             continue
         if looks_parked(result.content):
             continue
-        visible_text = HTMLParser(result.content).text(strip=True).lower()
-        # OR: either the suffix-stripped name or the full name appears in text.
-        if (naked_name and naked_name in visible_text) or (name_lower in visible_text):
+        # Post-fetch: also reject aggregator URLs returned by redirects.
+        if is_aggregator_url(result.url):
+            continue
+        # Require strong-position match (title or h1) — same criterion as
+        # Phase 1; body-only mentions are not sufficient.
+        if _name_in_strong_position(result.content, slug_base, company_name):
             return result.url
 
     return None
