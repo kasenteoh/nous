@@ -4,7 +4,7 @@ export const revalidate = 21600;
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { getInvestorBySlug } from "@/lib/queries";
+import { getCoInvestors, getInvestorBySlug } from "@/lib/queries";
 import { formatDate, formatUsd } from "@/lib/format";
 import { CompanyCard } from "@/components/CompanyCard";
 
@@ -56,6 +56,11 @@ export default async function InvestorPage({ params }: Props) {
   if (!investor) {
     notFound();
   }
+
+  // Co-investor signal (Task C5): firms that frequently appear on the same
+  // rounds. Fetched after the existence check; degrades to [] when this firm
+  // shares no rounds (the section then renders nothing).
+  const coInvestors = await getCoInvestors(slug);
 
   const { name, type, description, website, portfolio, portfolioCount, rounds } = investor;
 
@@ -238,6 +243,35 @@ export default async function InvestorPage({ params }: Props) {
               </li>
             ))}
           </ul>
+        </section>
+      )}
+
+      {/* ── Frequently co-invests with (Task C5) ────────────────────────────── */}
+      {coInvestors.length > 0 && (
+        <section className="mb-12">
+          <h2 className="text-lg font-semibold text-ink mb-4">
+            Frequently co-invests with
+          </h2>
+          <ul className="flex flex-wrap gap-2">
+            {coInvestors.map((co) => (
+              <li key={co.slug}>
+                <Link
+                  href={`/investor/${co.slug}`}
+                  title={`${co.sharedRounds} shared ${co.sharedRounds === 1 ? "round" : "rounds"}`}
+                  className="inline-flex items-center gap-1.5 rounded-full border border-edge px-3 py-1 text-sm text-ink-soft hover:border-ink-muted hover:text-ink transition-colors"
+                >
+                  {co.name}
+                  <span className="text-xs text-ink-muted">
+                    {co.sharedRounds}
+                  </span>
+                </Link>
+              </li>
+            ))}
+          </ul>
+          <p className="mt-2 text-xs text-ink-muted">
+            Other firms that appear on the same funding rounds (number = shared
+            rounds).
+          </p>
         </section>
       )}
 

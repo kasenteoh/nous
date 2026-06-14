@@ -6,10 +6,12 @@ import { createSupabaseServerClient } from "@/lib/db";
 import { buildSpotlightPool, type Spotlight } from "@/lib/spotlight";
 import type {
   AlsoBackedByCompany,
+  CoInvestor,
   CompanyDetail,
   CompanyInvestorRow,
   CompanyListRow,
   CompanyRow,
+  CompareCompany,
   CompetitorRow,
   CompetitorWithResolved,
   FundingRound,
@@ -2233,4 +2235,286 @@ export async function getTrendingCompanies(
     oneLiner: s.oneLiner,
     facts: s.facts,
   }));
+}
+
+// ─── Compare view (Task C5) ───────────────────────────────────────────────────
+
+// Caps on how many names each compare cell lists, to keep the table readable.
+const COMPARE_MAX_INVESTORS = 8;
+const COMPARE_MAX_COMPETITORS = 6;
+
+/**
+ * Build the per-company columns for the /compare table from a slug list, in ONE
+ * query: the company row plus its funding rounds (with round-level investors),
+ * company-level investors, and competitors embedded. Excluded / unknown slugs
+ * are dropped; rows are returned in the SAME order as the input `slugs` so the
+ * comparison columns match the URL order. Returns [] on missing env or error.
+ *
+ * `totalRaised` mirrors the detail-page tile: max(stated total_raised_usd, sum
+ * of known round amounts). `latestRound*` reads the denormalized columns from
+ * migration 0028 (kept fresh by refresh-latest-round).
+ */
+export async function getCompaniesForCompare(
+  slugs: string[],
+): Promise<CompareCompany[]> {
+  const wanted = slugs.filter((s) => typeof s === "string" && s.length > 0);
+  if (wanted.length === 0) return [];
+
+  let supabase: ReturnType<typeof createSupabaseServerClient>;
+  try {
+    supabase = createSupabaseServerClient();
+  } catch (err) {
+    console.warn(
+      "[getCompaniesForCompare] Supabase not configured:",
+      (err as Error).message,
+    );
+    return [];
+  }
+
+  const { data, error } = await supabase
+    .from("companies")
+    .select(
+      "slug, name, website, industry_group, hq_city, hq_state, status, " +
+        "year_incorporated, employee_count_min, employee_count_max, " +
+        "total_raised_usd, funding_round_count, latest_round_type, " +
+        "latest_round_amount, latest_round_date, exclusion_reason, " +
+        "funding_rounds(amount_raised, funding_round_investors(investors(name))), " +
+        "company_investors(investors(name)), " +
+        "competitors(competitor_name, rank)",
+    )
+    .in("slug", wanted);
+
+  if (error) {
+    console.error("[getCompaniesForCompare] query failed:", error.message);
+    return [];
+  }
+
+  interface NameJoin {
+    investors: { name: string | null } | { name: string | null }[] | null;
+  }
+  interface CompareRow {
+    slug: string | null;
+    name: string | null;
+    website: string | null;
+    industry_group: string | null;
+    hq_city: string | null;
+    hq_state: string | null;
+    status: string | null;
+    year_incorporated: number | null;
+    employee_count_min: number | null;
+    employee_count_max: number | null;
+    total_raised_usd: number | null;
+    funding_round_count: number | null;
+    latest_round_type: string | null;
+    latest_round_amount: number | null;
+    latest_round_date: string | null;
+    exclusion_reason?: string | null;
+    funding_rounds:
+      | {
+          amount_raised: number | null;
+          funding_round_investors: NameJoin[] | null;
+        }[]
+      | null;
+    company_investors: NameJoin[] | null;
+    competitors: { competitor_name: string | null; rank: number | null }[] | null;
+  }
+
+  const bySlug = new Map<string, CompareCompany>();
+  for (const row of (data ?? []) as unknown as CompareRow[]) {
+    if (!row.slug || !row.name || row.exclusion_reason) continue;
+
+    const rounds = row.funding_rounds ?? [];
+    const computedTotal = rounds.reduce<number>(
+      (acc, r) => (r.amount_raised != null ? acc + Number(r.amount_raised) : acc),
+      0,
+    );
+    const statedTotal =
+      row.total_raised_usd != null ? Number(row.total_raised_usd) : 0;
+    const totalRaised = Math.max(statedTotal, computedTotal);
+
+    // Distinct investor names from BOTH the company-level link and round-level
+    // links (a NameJoin's investors may be object or single-element array).
+    const investorNames = new Set<string>();
+    const addName = (j: NameJoin) => {
+      const inv = Array.isArray(j.investors) ? j.investors[0] : j.investors;
+      if (inv?.name) investorNames.add(inv.name);
+    };
+    for (const ci of row.company_investors ?? []) addName(ci);
+    for (const r of rounds) {
+      for (const fri of r.funding_round_investors ?? []) addName(fri);
+    }
+
+    const competitors = (row.competitors ?? [])
+      .filter((c): c is { competitor_name: string; rank: number | null } =>
+        Boolean(c.competitor_name),
+      )
+      .sort((a, b) => (a.rank ?? 999) - (b.rank ?? 999))
+      .map((c) => c.competitor_name)
+      .slice(0, COMPARE_MAX_COMPETITORS);
+
+    bySlug.set(row.slug, {
+      slug: row.slug,
+      name: row.name,
+      website: row.website ?? null,
+      industryGroup: row.industry_group ?? null,
+      hqCity: row.hq_city ?? null,
+      hqState: row.hq_state ?? null,
+      status: row.status ?? "active",
+      yearIncorporated: row.year_incorporated ?? null,
+      employeeCountMin: row.employee_count_min ?? null,
+      employeeCountMax: row.employee_count_max ?? null,
+      totalRaised: totalRaised > 0 ? totalRaised : null,
+      roundCount: row.funding_round_count ?? rounds.length,
+      latestRoundType: row.latest_round_type ?? null,
+      latestRoundAmount:
+        row.latest_round_amount != null ? Number(row.latest_round_amount) : null,
+      latestRoundDate: row.latest_round_date ?? null,
+      investors: [...investorNames]
+        .sort((a, b) => a.localeCompare(b, "en-US", { sensitivity: "base" }))
+        .slice(0, COMPARE_MAX_INVESTORS),
+      competitors,
+    });
+  }
+
+  // Preserve the caller's slug order; drop unresolved/excluded.
+  return wanted.flatMap((slug) => {
+    const c = bySlug.get(slug);
+    return c ? [c] : [];
+  });
+}
+
+// ─── Co-investor signal (Task C5) ─────────────────────────────────────────────
+
+// Cap on the "frequently co-invests with" firms surfaced on an investor page.
+const CO_INVESTOR_LIMIT = 8;
+
+/**
+ * "Frequently co-invests with" for /investor/[slug]: other investors that
+ * appear on the SAME funding rounds as this investor, ranked by the number of
+ * shared rounds. Derived read-time from `funding_round_investors` (no stored
+ * edge — a mega-fund would make this O(N^2) to persist):
+ *
+ *   1. The funding_round_ids this investor participated in.
+ *   2. All (round, investor) links on those rounds; tally co-investors by the
+ *      count of distinct shared rounds (excluding this investor itself).
+ *   3. Resolve the top co-investor ids to slug + name.
+ *
+ * Returns [] on missing env, any error, or when this investor shares no round.
+ */
+export async function getCoInvestors(slug: string): Promise<CoInvestor[]> {
+  let supabase: ReturnType<typeof createSupabaseServerClient>;
+  try {
+    supabase = createSupabaseServerClient();
+  } catch (err) {
+    console.warn(
+      "[getCoInvestors] Supabase not configured:",
+      (err as Error).message,
+    );
+    return [];
+  }
+
+  // Resolve the investor slug → id.
+  const { data: investor, error: investorError } = await supabase
+    .from("investors")
+    .select("id")
+    .eq("slug", slug)
+    .single();
+
+  if (investorError || !investor) {
+    if (investorError?.code !== "PGRST116") {
+      console.error(
+        "[getCoInvestors] investor lookup failed:",
+        investorError?.message,
+      );
+    }
+    return [];
+  }
+
+  const investorId = investor.id as string;
+
+  // Step 1: rounds this investor is on. Order by funding_round_id so a
+  // transient 1000-row cap truncates deterministically.
+  const { data: ownLinks, error: ownError } = await supabase
+    .from("funding_round_investors")
+    .select("funding_round_id")
+    .eq("investor_id", investorId)
+    .order("funding_round_id", { ascending: true });
+
+  if (ownError) {
+    console.error("[getCoInvestors] own rounds query failed:", ownError.message);
+    return [];
+  }
+
+  const roundIds = [
+    ...new Set(
+      ((ownLinks ?? []) as { funding_round_id: string | null }[])
+        .map((r) => r.funding_round_id)
+        .filter((id): id is string => id != null),
+    ),
+  ];
+  if (roundIds.length === 0) return [];
+
+  // Step 2: every investor link on those rounds; tally shared rounds per other
+  // investor. A (co-investor, round) pair is deduped via a per-investor set so a
+  // double-linked row can't inflate the count.
+  const { data: coLinks, error: coError } = await supabase
+    .from("funding_round_investors")
+    .select("funding_round_id, investor_id")
+    .in("funding_round_id", roundIds)
+    .order("investor_id", { ascending: true });
+
+  if (coError) {
+    console.error("[getCoInvestors] co-investor query failed:", coError.message);
+    return [];
+  }
+
+  const roundsByInvestor = new Map<string, Set<string>>();
+  for (const r of (coLinks ?? []) as {
+    funding_round_id: string | null;
+    investor_id: string | null;
+  }[]) {
+    if (!r.investor_id || !r.funding_round_id) continue;
+    if (r.investor_id === investorId) continue; // skip self
+    let set = roundsByInvestor.get(r.investor_id);
+    if (!set) {
+      set = new Set<string>();
+      roundsByInvestor.set(r.investor_id, set);
+    }
+    set.add(r.funding_round_id);
+  }
+
+  if (roundsByInvestor.size === 0) return [];
+
+  const ranked = [...roundsByInvestor.entries()]
+    .map(([id, set]) => ({ id, sharedRounds: set.size }))
+    .sort((a, b) => b.sharedRounds - a.sharedRounds || a.id.localeCompare(b.id))
+    .slice(0, CO_INVESTOR_LIMIT);
+
+  // Step 3: resolve the top co-investor ids to slug + name.
+  const { data: firms, error: firmsError } = await supabase
+    .from("investors")
+    .select("id, slug, name")
+    .in(
+      "id",
+      ranked.map((r) => r.id),
+    );
+
+  if (firmsError) {
+    console.error("[getCoInvestors] firm resolve failed:", firmsError.message);
+    return [];
+  }
+
+  const firmById = new Map<string, { slug: string; name: string }>();
+  for (const f of (firms ?? []) as {
+    id: string | null;
+    slug: string | null;
+    name: string | null;
+  }[]) {
+    if (f.id && f.slug && f.name) firmById.set(f.id, { slug: f.slug, name: f.name });
+  }
+
+  return ranked.flatMap((r) => {
+    const f = firmById.get(r.id);
+    return f ? [{ slug: f.slug, name: f.name, sharedRounds: r.sharedRounds }] : [];
+  });
 }
