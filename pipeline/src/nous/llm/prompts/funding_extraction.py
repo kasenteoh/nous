@@ -55,8 +55,11 @@ class FundingExtraction(BaseModel):
     valuation_post_money_usd: Decimal | None = Field(
         default=None,
         description=(
-            "Post-money valuation in raw USD. Null if the article does not "
-            "state a valuation."
+            "Post-money valuation in raw USD (e.g. 400000000 for 'a $400M "
+            "post-money valuation'). Always capture this whenever the text "
+            "states a post-money (or plain 'valuation') figure for the round — "
+            "it is a primary, high-value fact. Null ONLY if no valuation is "
+            "stated; never guess or infer one from the round size."
         ),
     )
     valuation_source: str | None = Field(
@@ -147,6 +150,11 @@ Return JSON matching the schema. Rules:
   set is_funding_announcement=false and leave other fields null/empty.
 - Do not invent numbers. If the round size or valuation is not stated, return null.
 - amount_raised_usd is in raw USD (e.g. 50000000 for "$50M").
+- valuation_post_money_usd: Always capture the post-money valuation whenever
+  the article states one ("at a $400M post-money valuation", "valuing the
+  company at $1.2B", "$3B valuation") — it is a primary, high-value fact, so
+  do not skip it. Use raw USD (e.g. 400000000 for "$400M"). Null ONLY when no
+  valuation figure is stated; never guess or infer one from the round size.
 - valuation_source: if a publication or attribution accompanies the valuation
   number (e.g. "according to TechCrunch", "sources told The Information"),
   capture it as a short string like "TechCrunch, March 2026". Return null if
@@ -211,6 +219,9 @@ Return JSON matching the schema. Rules:
   RECENT one — use the latest date you can find as announced_date.
 - announced_date: return ONLY when the page gives a SPECIFIC day. If only a
   month or year is known, return null — do NOT guess or default to the 1st.
+- valuation_post_money_usd: Always capture the post-money valuation if the
+  site states one ("valued at $1B", "$400M post-money valuation") — use raw
+  USD. Null when none is stated; never guess or infer from the round size.
 - valuation_source: set to "Company website" followed by the latest relevant
   date if one is shown (e.g. "Company website, March 2026"). Never invent a
   third-party publication.

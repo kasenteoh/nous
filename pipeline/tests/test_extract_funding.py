@@ -255,6 +255,62 @@ async def test_valuation_source_is_persisted_when_extracted(
     assert rounds[0].valuation_source == "TechCrunch, March 2026"
 
 
+async def test_extracts_post_money_valuation_and_total(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A4 acceptance: an article like "Series B of $40M at a $400M post-money
+    valuation, bringing total raised to $58M" lands the post-money valuation +
+    its source on the FundingRound AND the stated cumulative total on the
+    company (with a source URL). Mocked extraction — no live DeepSeek."""
+    company = _make_company("ValTotalCo")
+    db.add(company)
+    await db.flush()
+    db.add(
+        _make_article(
+            company.id,
+            url="https://news.example.com/series-b-with-val-and-total",
+            raw_content=(
+                "ValTotalCo announced a Series B of $40M at a $400M post-money "
+                "valuation, bringing total raised to $58M. " * 12
+            ),
+            published=date(2026, 6, 1),
+        )
+    )
+    await db.flush()
+    await db.commit()
+
+    async def _fake(prompt: str, schema: type) -> FundingExtraction:
+        return _make_extraction(
+            round_type="Series B",
+            amount=Decimal("40000000.00"),
+            valuation=Decimal("400000000.00"),
+            valuation_source="TechCrunch, June 2026",
+            announced=date(2026, 6, 1),
+            leads=["Acme Growth"],
+            others=[],
+            confidence="high",
+            total_raised=Decimal("58000000.00"),
+        )
+
+    monkeypatch.setattr("nous.pipeline.extract_funding.complete_json", _fake)
+
+    summary = await run_extract_funding(db, limit=10)
+    assert summary.funding_rounds_created == 1
+    assert summary.totals_recorded == 1
+
+    rounds = (await db.execute(select(FundingRound))).scalars().all()
+    assert len(rounds) == 1
+    assert rounds[0].valuation_post_money == Decimal("400000000.00")
+    assert rounds[0].valuation_source == "TechCrunch, June 2026"
+
+    await db.refresh(company)
+    assert company.total_raised_usd == Decimal("58000000.00")
+    assert (
+        company.total_raised_source_url
+        == "https://news.example.com/series-b-with-val-and-total"
+    )
+
+
 # ---------------------------------------------------------------------------
 # Reconciliation
 # ---------------------------------------------------------------------------

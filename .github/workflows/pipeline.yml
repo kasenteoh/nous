@@ -102,6 +102,11 @@ on:
         required: false
         type: boolean
         default: false
+      run_requery_totals:
+        description: "Force the extract-funding --requery-totals pass (Task A4) this run, regardless of cadence. It also runs automatically once/day on the 00:00 UTC cron. Default: false."
+        required: false
+        type: boolean
+        default: false
 
 # Serialize against every other workflow that mutates the companies table (see
 # discovery.yml). resolve / enrich UPDATE company rows and ingest-news /
@@ -233,6 +238,28 @@ jobs:
           FUNDING_LIMIT="${{ inputs.funding_limit }}"
           if [ -z "$FUNDING_LIMIT" ]; then FUNDING_LIMIT=80; fi
           uv run nous extract-funding --limit "$FUNDING_LIMIT"
+
+      - name: Extract funding (re-query stated totals)
+        id: funding_requery_totals
+        if: ${{ inputs.skip_funding != true }}
+        # Periodic backfill (Task A4): re-read ALREADY-processed articles whose
+        # text states a cumulative total ("to date", "total funding", ...) for
+        # companies that still have no stated total, capping LLM spend with
+        # --limit. Idempotent (rounds reconcile, totals apply newest-wins,
+        # articles stay processed). Runs once/day on the 00:00 UTC cron — not
+        # every 3h — or on demand via run_requery_totals=true. The single cron
+        # string can't distinguish the hour, so we gate on the UTC hour here.
+        timeout-minutes: 15
+        continue-on-error: true
+        run: |
+          HOUR="$(date -u +%H)"
+          if [ "${{ inputs.run_requery_totals }}" = "true" ] || [ "$HOUR" = "00" ]; then
+            FUNDING_LIMIT="${{ inputs.funding_limit }}"
+            if [ -z "$FUNDING_LIMIT" ]; then FUNDING_LIMIT=80; fi
+            uv run nous extract-funding --limit "$FUNDING_LIMIT" --requery-totals
+          else
+            echo "Skipping --requery-totals (UTC hour=$HOUR, not 00 and not forced)."
+          fi
 
       - name: Extract funding (website fallback)
         id: funding_website

@@ -45,10 +45,11 @@ def test_build_prompt_truncates_long_article_text() -> None:
     assert "a" * (MAX_ARTICLE_CHARS + 1) not in prompt
     # Sanity: the rest of the template is a small fixed overhead, so the
     # rendered prompt length is the truncated body plus the template scaffolding.
-    # (Ceiling bumped 2,000 → 2,500 when the total_raised_usd rule landed; it
-    # still guards against runaway template bloat.)
+    # (Ceiling bumped 2,000 → 2,500 when the total_raised_usd rule landed, then
+    # → 3,000 when the Task A4 always-capture-post-money-valuation rule landed;
+    # it still guards against runaway template bloat.)
     template_overhead = len(prompt) - MAX_ARTICLE_CHARS
-    assert 0 < template_overhead < 2_500
+    assert 0 < template_overhead < 3_000
 
 
 def test_build_prompt_short_article_is_unchanged() -> None:
@@ -300,6 +301,73 @@ def test_website_prompt_contains_total_raised_rule() -> None:
     prompt = build_website_prompt(company_name="Acme", page_text="x")
     assert "total_raised_usd" in prompt
     assert "never sum" in prompt
+
+
+# ---------------------------------------------------------------------------
+# Task A4 — post-money valuation + stated total emphasis
+# ---------------------------------------------------------------------------
+
+
+def test_news_prompt_emphasizes_post_money_valuation() -> None:
+    """The news template must tell the model to ALWAYS capture the post-money
+    valuation and its source when the article states one (Task A4) — these are
+    captured only opportunistically today. Still "null over guess"."""
+    prompt = build_prompt(company_name="Acme", article_text="x")
+    assert "Always capture" in prompt
+    assert "post-money valuation" in prompt
+    assert "valuation_post_money_usd" in prompt
+    # The null-over-guess guard must survive the stronger phrasing.
+    assert "do not invent" in prompt.lower()
+
+
+def test_website_prompt_emphasizes_post_money_valuation() -> None:
+    """The website template carries the same always-capture-valuation rule."""
+    prompt = build_website_prompt(company_name="Acme", page_text="x")
+    assert "Always capture" in prompt
+    assert "post-money valuation" in prompt
+    assert "valuation_post_money_usd" in prompt
+
+
+def test_valuation_field_description_carries_post_money_emphasis() -> None:
+    """The field description (embedded in the JSON schema sent to the model)
+    must also instruct always-capture, not just the prompt template."""
+    schema = FundingExtraction.model_json_schema()
+    desc = schema["properties"]["valuation_post_money_usd"]["description"]
+    assert "post-money valuation" in desc.lower()
+    assert "Always" in desc
+
+
+# A representative LLM payload for the A4 acceptance scenario:
+# "Series B of $40M at a $400M post-money valuation, bringing total raised to
+# $58M". Asserts the FundingExtraction schema parses exactly what a compliant
+# model returns for that sentence — no live DeepSeek call.
+A4_VALUATION_TOTAL_PAYLOAD = {
+    "is_funding_announcement": True,
+    "round_type": "Series B",
+    "amount_raised_usd": 40000000,
+    "valuation_post_money_usd": 400000000,
+    "valuation_source": "TechCrunch, June 2026",
+    "announced_date": None,
+    "lead_investors": ["Acme Growth"],
+    "other_investors": [],
+    "confidence": "high",
+    "total_raised_usd": 58000000,
+}
+
+
+def test_funding_extraction_parses_valuation_and_total_fixture() -> None:
+    """The representative A4 payload (round + post-money valuation + source +
+    stated cumulative total) round-trips through the Pydantic model."""
+    obj = FundingExtraction.model_validate_json(json.dumps(A4_VALUATION_TOTAL_PAYLOAD))
+    assert obj.round_type == "Series B"
+    assert obj.amount_raised_usd == Decimal("40000000")
+    assert obj.valuation_post_money_usd == Decimal("400000000")
+    assert obj.valuation_source == "TechCrunch, June 2026"
+    assert obj.total_raised_usd == Decimal("58000000")
+
+    again = FundingExtraction.model_validate(obj.model_dump())
+    assert again.valuation_post_money_usd == Decimal("400000000")
+    assert again.total_raised_usd == Decimal("58000000")
 
 
 # ---------------------------------------------------------------------------
