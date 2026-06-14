@@ -74,7 +74,14 @@ class MockHomepageClient(HomepageClient):
                 return FetchResult(
                     url=resolved,
                     status_code=200,
-                    content=f"<html><body>{slug_base} homepage</body></html>",
+                    # A real company homepage carries its name in a strong
+                    # position (<title>/<h1>), which resolve_homepage now
+                    # requires — a bare body mention is no longer sufficient.
+                    content=(
+                        f"<html><head><title>{slug_base}</title></head>"
+                        f"<body><h1>{slug_base}</h1>{slug_base} homepage</body>"
+                        f"</html>"
+                    ),
                     content_type="text/html",
                 )
         raise httpx.RequestError(f"MockHomepageClient: no match for {url}", request=None)  # type: ignore[arg-type]

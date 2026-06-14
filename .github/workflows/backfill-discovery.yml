@@ -35,6 +35,9 @@ on:
 # Serialize against every other workflow that mutates the companies table (see
 # discovery.yml). This job auto-creates companies, so it must not race the dedup
 # DELETEs in discovery.yml. cancel-in-progress: false so a queued run waits.
+permissions:
+  contents: read
+
 concurrency:
   group: nous-pipeline-db
   cancel-in-progress: false
@@ -62,7 +65,7 @@ jobs:
           python-version: "3.11"
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v3
+        uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39 # v3
 
       - name: Install pipeline dependencies
         run: uv sync

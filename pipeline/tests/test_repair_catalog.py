@@ -2,7 +2,7 @@
 
 Covers: suffix rename, collision-merge, LSIP husk delete, LSIP-with-data
 exclude, parked-description reset, SellRaze-style false-positive safety,
-and run-twice idempotency. Requires DATABASE_URL.
+placeholder-name rename/exclude, and run-twice idempotency. Requires DATABASE_URL.
 """
 
 from __future__ import annotations
@@ -168,3 +168,89 @@ async def test_dry_run_writes_nothing(db: AsyncSession) -> None:
 
     await db.refresh(co)
     assert co.name == "AstroLSVP and LSIP Investment"  # unchanged
+
+
+# ---------------------------------------------------------------------------
+# Pass 3: placeholder name repair
+# ---------------------------------------------------------------------------
+
+
+async def test_placeholder_bracketed_name_renamed_from_domain(db: AsyncSession) -> None:
+    """A row with name "[untitled]" and a website is renamed from the domain apex."""
+    # Use a unique slug so it never collides with other test rows.
+    co = _co(
+        "[untitled]",
+        "rep3-untitled-placeholder",
+        website="https://untitled.stream/",
+    )
+    db.add(co)
+    await db.commit()
+
+    summary = await run_repair_catalog(db)
+    assert summary.placeholder_renamed == 1
+    assert summary.placeholder_excluded == 0
+
+    await db.refresh(co)
+    # Domain apex of "untitled.stream" is "untitled" → title-case → "Untitled".
+    assert co.name == "Untitled"
+    assert co.normalized_name == "untitled"
+    assert co.slug == "untitled"
+    assert co.exclusion_reason is None
+
+
+async def test_placeholder_no_website_soft_excluded(db: AsyncSession) -> None:
+    """A row with name "[TBD]" and no website is soft-excluded as 'manual'."""
+    co = _co(
+        "[TBD]",
+        "rep3-tbd-placeholder",
+        website=None,
+    )
+    db.add(co)
+    await db.commit()
+
+    summary = await run_repair_catalog(db)
+    assert summary.placeholder_excluded == 1
+    assert summary.placeholder_renamed == 0
+
+    await db.refresh(co)
+    assert co.exclusion_reason == "manual"
+    assert co.exclusion_detail is not None
+    # Name is left as-is — no rename possible without a domain to derive from.
+    assert co.name == "[TBD]"
+
+
+async def test_placeholder_repair_is_idempotent(db: AsyncSession) -> None:
+    """Running repair-catalog twice on a placeholder row changes nothing on the second run."""
+    co = _co(
+        "[untitled]",
+        "rep3-untitled-idempotent",
+        website="https://untitled2.stream/",
+    )
+    db.add(co)
+    await db.commit()
+
+    first = await run_repair_catalog(db)
+    assert first.placeholder_renamed == 1
+
+    second = await run_repair_catalog(db)
+    # After the first pass the name is "Untitled2" — no longer a placeholder.
+    assert second.placeholder_renamed == 0
+    assert second.placeholder_excluded == 0
+
+
+async def test_placeholder_dry_run_counts_but_writes_nothing(db: AsyncSession) -> None:
+    """--dry-run counts placeholder rows but makes no DB changes."""
+    co = _co(
+        "[stealth]",
+        "rep3-stealth-placeholder",
+        website="https://example.com/",
+    )
+    db.add(co)
+    await db.commit()
+
+    summary = await run_repair_catalog(db, dry_run=True)
+    assert summary.placeholder_renamed == 1
+    assert summary.dry_run is True
+
+    await db.refresh(co)
+    assert co.name == "[stealth]"  # untouched in dry-run

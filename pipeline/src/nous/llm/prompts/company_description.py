@@ -7,9 +7,22 @@ primary category, and tags.
 
 from __future__ import annotations
 
+import re
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
+
+from nous.util.industry import CANONICAL_INDUSTRIES
+
+# Singular C-suite titles — at most one person can credibly hold each. When a
+# page's testimonials / customer logos get mis-read as leadership, the model
+# tends to stamp the SAME exec title on several names (e.g. 3x "Co-Founder, COO"
+# on Shippo's page). "Founder"/"Co-Founder" are intentionally NOT here — a
+# company can have several of those.
+_SINGULAR_EXEC = re.compile(
+    r"\b(ceo|coo|cto|cfo|cmo|cro|cpo|ciso|chief\s+\w+\s+officer|president)\b",
+    re.IGNORECASE,
+)
 
 
 class PersonExtraction(BaseModel):
@@ -68,8 +81,8 @@ class CompanyDescription(BaseModel):
     industry: str | None = Field(
         default=None,
         description=(
-            "Coarse industry bucket (e.g. 'fintech', 'developer tools', "
-            "'AI infrastructure', 'healthcare'). Null if unclear — never guess."
+            "Coarse industry bucket chosen from the fixed canonical list given "
+            "in the prompt (exact spelling). Null if none fits — never guess."
         ),
     )
     website_state: Literal[
@@ -110,11 +123,41 @@ class CompanyDescription(BaseModel):
     hq_country: str | None = Field(
         default=None,
         description=(
-            "Headquarters country as a 2-letter ISO code (e.g. 'US', 'IN', "
-            "'GB') ONLY when the text clearly states it. Null otherwise — "
-            "never guess."
+            "Headquarters country as a 2-letter ISO code (e.g. 'US', 'IN', 'GB'). "
+            "Set this when the text CLEARLY implies a country — a formal HQ line, "
+            "an address, 'UK-based', 'headquartered in Bangalore', a non-US city "
+            "name, or similar. You do NOT need an explicit 'HQ:' line; a clear "
+            "implication is enough. Null when the text is ambiguous or silent on "
+            "location — never invent a country you don't see."
         ),
     )
+
+    @model_validator(mode="after")
+    def _drop_implausible_people(self) -> CompanyDescription:
+        """Drop people whose role claims a singular C-suite title that two or
+        more entries also claim. That collision is the signature of testimonial
+        / customer names mis-extracted as leadership (e.g. three "Co-Founder,
+        COO" rows on Shippo's page); we can't tell which — if any — is the real
+        holder, and the no-fabrication rule prefers omission to a wrong roster.
+        Several founders are legitimate and left untouched."""
+        if len(self.people) < 2:
+            return self
+        person_titles = [
+            {m.group(0).lower() for m in _SINGULAR_EXEC.finditer(p.role)}
+            for p in self.people
+        ]
+        counts: dict[str, int] = {}
+        for titles in person_titles:
+            for title in titles:
+                counts[title] = counts.get(title, 0) + 1
+        contested = {title for title, n in counts.items() if n >= 2}
+        if contested:
+            self.people = [
+                person
+                for person, titles in zip(self.people, person_titles, strict=True)
+                if titles.isdisjoint(contested)
+            ]
+        return self
 
 
 PROMPT_TEMPLATE = """\
@@ -134,18 +177,23 @@ Rules:
   "fintech", "AI infrastructure", "vertical SaaS", "consumer", "biotech tooling".
   Don't invent obscure categories.
 - `tags`: up to 8 lowercase, hyphenated technical/category tags.
-- `people`: list the founders and senior leadership (CEO, CTO, and other
-  C-level or founder roles) that the site actually names — typically from an
-  about/team/leadership page. Use the role exactly as stated. Return an EMPTY
-  list if the site does not clearly name them. Do NOT guess or fabricate names.
+- `people`: list ONLY the company's own founders and senior leadership (CEO,
+  CTO, and other C-level or founder roles) that the site actually names —
+  typically from an about/team/leadership page. Use the role exactly as stated.
+  IGNORE names that appear in testimonials, customer quotes or logos, advisory
+  boards, investor lists, press mentions, or blog-post bylines — those people
+  are NOT the company's leadership. Never assign the same singular executive
+  title (CEO, COO, CTO, ...) to more than one person. If you are not confident a
+  name is actual company leadership, omit it. Return an EMPTY list if the site
+  does not clearly name its leaders. Do NOT guess or fabricate names or roles.
 - `hq_city` / `hq_state`: the company's headquarters location, US-focused.
   Extract these ONLY when the text clearly states them (an address, a
   "headquartered in ..." line, or a contact/footer location). `hq_state` must
   be a 2-letter US state code; leave it null if the HQ is outside the US or the
   state is not given. Return null — do NOT guess a location the text doesn't state.
-- `industry`: a coarse industry bucket like "fintech", "developer tools",
-  "AI infrastructure", or "healthcare". Return null if the text does not make
-  the industry clear. Never fabricate one.
+- `industry`: a coarse industry bucket. Choose the closest match from this
+  fixed list, using the exact spelling: {industries}. Return null if none of
+  them clearly fits — never invent a new bucket.
 - `website_state`: classify the page itself. Use 'parked_or_for_sale' for
   domain-sale/parking/registrar placeholder pages, 'under_construction' for
   launching-soon pages with no product info, 'unrelated_site' when the text
@@ -159,8 +207,12 @@ Rules:
   does not support a confident call, return null. Never guess.
 - `not_startup_reason`: one short factual sentence, only when is_startup is
   false (e.g. "Founded in 2000; publicly traded enterprise").
-- `founded_year` / `hq_country`: only when the text states them. `hq_country`
-  is a 2-letter ISO code. Null otherwise — never fabricate.
+- `founded_year`: only when the text states it. Null otherwise — never fabricate.
+- `hq_country`: a 2-letter ISO code (e.g. 'US', 'IN', 'GB'). Set this when
+  the text CLEARLY implies a country — a formal HQ line, an address, 'UK-based',
+  'headquartered in Bangalore', a recognisable non-US city, or similar. You do
+  NOT need an explicit "HQ:" field; a clear implication is sufficient. Null when
+  the text is ambiguous or silent on country — never invent a value you don't see.
 
 Company name: {company_name}
 
@@ -177,4 +229,5 @@ def build_prompt(*, company_name: str, cleaned_text: str) -> str:
     return PROMPT_TEMPLATE.format(
         company_name=company_name,
         cleaned_text=cleaned_text,
+        industries=", ".join(CANONICAL_INDUSTRIES),
     )

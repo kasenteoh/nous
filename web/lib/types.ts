@@ -199,6 +199,13 @@ export interface InvestorDetail {
   type: string;
   description: string | null;
   website: string | null;
+  /**
+   * Denormalized total from `investors.portfolio_count` (migration 0025) —
+   * counts DISTINCT non-excluded companies via EITHER company_investors OR
+   * funding_round_investors. Matches the /investors index. Falls back to
+   * portfolio.length when the column is not yet populated in prod.
+   */
+  portfolioCount: number;
   /** Portfolio companies from the company_investors join (shaped for CompanyCard). */
   portfolio: CompanyListRow[];
   /** Funding rounds this investor led or participated in, newest first. */
@@ -247,6 +254,16 @@ export interface AlsoBackedByCompany {
   slug: string;
   name: string;
   sharedInvestors: string[];
+}
+
+/**
+ * Minimal row returned by {@link searchHuskFallback}: a company that matched
+ * the search term by name but hasn't been enriched yet (husk). Surfaced below
+ * the main result grid as a muted "we track this but have no full profile" link.
+ */
+export interface HuskFallbackRow {
+  slug: string;
+  name: string;
 }
 
 /** Full company detail assembled from the DB queries. */

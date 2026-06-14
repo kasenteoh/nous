@@ -19,6 +19,8 @@ from urllib.parse import parse_qs, unquote, urlparse
 import httpx
 from selectolax.parser import HTMLParser
 
+from nous.util.ssrf import BlockedAddressError
+
 logger = logging.getLogger(__name__)
 
 DDG_HTML_URL = "https://html.duckduckgo.com/html/"
@@ -142,7 +144,11 @@ class DuckDuckGoSearch:
                     timeout=15.0,
                     follow_redirects=True,
                 )
-            except (httpx.RequestError, httpx.HTTPStatusError) as exc:
+            except (
+                httpx.RequestError,
+                httpx.HTTPStatusError,
+                BlockedAddressError,
+            ) as exc:
                 logger.warning("DDG search network error for %r: %s", query, exc)
                 self._last_request_at = time.monotonic()
                 return []

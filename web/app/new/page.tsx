@@ -19,9 +19,14 @@ import type {
 } from "@/lib/queries";
 
 export const metadata: Metadata = {
-  title: "New this week — nous",
+  // Bare title — the root layout's template appends " — nous" exactly once.
+  // (Previously hardcoded the suffix here, producing "… — nous — nous".)
+  title: "New this week",
   description:
     "Companies discovered and funding rounds extracted in the last 7 days on nous.",
+  // Self-canonical so ?param/ trailing-slash variants don't fragment indexing
+  // (every sibling page already declares one).
+  alternates: { canonical: "/new" },
 };
 
 // ── Label style (matches front page margin-notes idiom) ───────────────────────

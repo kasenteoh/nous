@@ -64,6 +64,9 @@ on:
 # dedup-companies (below) DELETEs merged rows; an overlapping run elsewhere
 # would crash with a StaleDataError. cancel-in-progress: false so a queued run
 # waits its turn instead of being dropped.
+permissions:
+  contents: read
+
 concurrency:
   group: nous-pipeline-db
   cancel-in-progress: false
@@ -94,7 +97,7 @@ jobs:
           python-version: "3.11"
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v3
+        uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39 # v3
 
       - name: Install pipeline dependencies
         run: uv sync
@@ -117,6 +120,32 @@ jobs:
             ARGS+=(--similarity-threshold "${{ inputs.similarity_threshold }}")
           fi
           uv run nous refresh-vc-portfolios "${ARGS[@]}"
+
+      - name: Deduplicate investors
+        id: dedup_investors
+        # Merges investor rows whose canonical name (after alias mapping, e.g.
+        # "a16z" ↔ "Andreessen Horowitz") is identical. Runs after VC refresh
+        # so any newly-inserted investors are included. Also sets
+        # type='institutional' for known VC portfolio firms.
+        # Must run BEFORE refresh-investor-counts so counts reflect the
+        # post-merge investor set (fewer rows, correct totals).
+        timeout-minutes: 10
+        continue-on-error: true
+        run: uv run nous dedup-investors
+
+      - name: Refresh investor counts
+        id: refresh_investor_counts
+        # Recomputes investors.portfolio_count from both company_investors and
+        # funding_round_investors so the investor index can ORDER BY
+        # portfolio_count DESC. Runs un-gated (regardless of skip_vc) so counts
+        # stay correct even when VC refresh is skipped, e.g. on manual dispatch.
+        # Also called inside refresh-vc-portfolios and extract-funding, but an
+        # explicit step here ensures it runs even when those pipeline stages
+        # are not in this workflow. Runs AFTER dedup-investors so counts
+        # reflect the merged (deduplicated) investor rows.
+        timeout-minutes: 10
+        continue-on-error: true
+        run: uv run nous refresh-investor-counts
 
       - name: Deduplicate companies
         id: dedup
@@ -190,6 +219,15 @@ jobs:
         if: ${{ !cancelled() }}
         continue-on-error: true
         run: uv run nous db-stats
+
+      - name: Pipeline health
+        # Always runs (even if earlier stages failed) so every discovery run gets
+        # a health annotation in the Actions UI.  Exits 0 — never blocks the
+        # pipeline.  Emits ::warning:: / ::error:: annotations and a step-summary
+        # markdown table for any stage that logged status='empty' or 'error'.
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        run: uv run nous pipeline-health
 
       - name: Trigger Vercel deploy
         # contains(steps.*.outcome, ...) covers every id'd step; only pipeline

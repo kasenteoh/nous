@@ -13,6 +13,7 @@ import type {
   CompetitorWithResolved,
   FundingRound,
   FundingRoundWithInvestors,
+  HuskFallbackRow,
   InvestorDetail,
   InvestorListRow,
   InvestorRoundRow,
@@ -67,6 +68,9 @@ interface NestedRelatedCompany {
   description_short: string | null;
   status: string | null;
   industry_group: string | null;
+  // Excluded (junk/husk) companies 404 on /c/[slug]; carry the flag so related
+  // links to them can be dropped rather than rendered as dead links.
+  exclusion_reason?: string | null;
 }
 
 type CompanyRelationshipJoin = {
@@ -197,8 +201,55 @@ export async function listCompanies(
   );
 
   if (error) {
-    console.error("[listCompanies] companies query failed:", error.message);
-    return { rows: [], total: 0 };
+    // PostgREST returns PGRST103 "Requested range not satisfiable" when the
+    // offset is beyond the last row. In that case the `count` header is still
+    // returned (it reflects the filter set, not the range), but supabase-js
+    // surfaces it as null when `error` is set. Fall back to a head-only count
+    // so the page can clamp the requested page number rather than showing a
+    // false "total=0" cold-start box.
+    if (count != null) {
+      return { rows: [], total: count };
+    }
+
+    // Fetch the count independently — we still have all the filters wired up.
+    // Rebuild the count query from the same options to stay consistent.
+    let countQuery = supabase
+      .from("companies")
+      .select(
+        "slug",
+        { count: "exact", head: true },
+      )
+      .is("exclusion_reason", null)
+      .or(CATALOG_BAR_OR);
+
+    const search2 = opts.search ? sanitizeIlikeTerm(opts.search) : "";
+    if (search2) {
+      countQuery = countQuery.or(
+        `name.ilike.%${search2}%,description_short.ilike.%${search2}%`,
+      );
+    }
+    if (opts.industry_group) {
+      countQuery = countQuery.eq("industry_group", opts.industry_group);
+    }
+    if (opts.discovered_via) {
+      countQuery = countQuery.eq("discovered_via", opts.discovered_via);
+    }
+    if (opts.tag) {
+      countQuery = countQuery.contains("tags", [opts.tag]);
+    }
+    if (opts.state) {
+      countQuery = countQuery.eq("hq_state", opts.state);
+    }
+
+    const { count: fallbackCount, error: countError } = await countQuery;
+    if (countError) {
+      console.error("[listCompanies] companies query failed:", error.message);
+      console.error("[listCompanies] fallback count failed:", countError.message);
+      return { rows: [], total: 0 };
+    }
+
+    // Return 0 rows but the real total — caller can clamp the page.
+    return { rows: [], total: fallbackCount ?? 0 };
   }
 
   const rows = (companies ?? []).map((c) => ({
@@ -237,6 +288,80 @@ export async function listIndustryGroups(): Promise<string[]> {
     if (value) seen.add(value);
   }
   return [...seen].sort((a, b) => a.localeCompare(b));
+}
+
+/**
+ * Distinct `discovered_via` values present in the catalog (excluding excluded
+ * companies), for the source filter dropdown. Returns a sorted list so the
+ * dropdown is deterministic. Falls back to [] when Supabase is unconfigured so
+ * the page still builds during CI.
+ *
+ * Uses the same keyset-scan helper as listIndustryGroups — PostgREST caps
+ * single-shot selects at 1000 rows, and we want the full catalog.
+ */
+export async function listDiscoveredViaValues(): Promise<string[]> {
+  const rows = await scanCompanies(
+    "listDiscoveredViaValues",
+    "slug, discovered_via",
+    "discovered_via",
+    true,
+  );
+  if (rows === null) return [];
+
+  const seen = new Set<string>();
+  for (const row of rows) {
+    const value = row.discovered_via as string | null;
+    if (value) seen.add(value);
+  }
+  return [...seen].sort((a, b) => a.localeCompare(b));
+}
+
+/**
+ * Husk fallback search (Task 1.5): when the main catalog search returns 0
+ * results for a non-empty term, run a second query that includes companies with
+ * no description (husks) that match the name. Used to surface well-known
+ * companies (Anthropic, Vercel, etc.) that haven't been enriched yet.
+ *
+ * Husks are companies where `exclusion_reason IS NULL` but which fail the
+ * catalog bar (`description_short IS NULL AND funding_round_count = 0`). We
+ * can't simply invert CATALOG_BAR_OR because PostgREST doesn't expose NOT (…OR…)
+ * natively via the JS client without raw RPC. Instead we query
+ * `exclusion_reason IS NULL AND name ILIKE %term%` without the catalog bar,
+ * limited to ~10, and return only rows not already in the main results (which is
+ * an empty array in this fallback path).
+ */
+export async function searchHuskFallback(
+  term: string,
+): Promise<HuskFallbackRow[]> {
+  let supabase: ReturnType<typeof createSupabaseServerClient>;
+  try {
+    supabase = createSupabaseServerClient();
+  } catch (err) {
+    console.warn(
+      "[searchHuskFallback] Supabase not configured:",
+      (err as Error).message,
+    );
+    return [];
+  }
+
+  const safe = sanitizeIlikeTerm(term);
+  if (!safe) return [];
+
+  const { data, error } = await supabase
+    .from("companies")
+    .select("slug, name")
+    .is("exclusion_reason", null)
+    .ilike("name", `%${safe}%`)
+    .order("name", { ascending: true })
+    .limit(10);
+
+  if (error) {
+    console.error("[searchHuskFallback] query failed:", error.message);
+    return [];
+  }
+
+  return ((data ?? []) as { slug: string | null; name: string | null }[])
+    .filter((r): r is { slug: string; name: string } => r.slug != null && r.name != null);
 }
 
 // ─── Front-page queries ───────────────────────────────────────────────────────
@@ -929,7 +1054,7 @@ export async function getRelatedCompanies(
   const { data, error } = await supabase
     .from("company_relationships")
     .select(
-      "score, evidence, related_company:companies!related_company_id(slug, name, description_short, status, industry_group)",
+      "score, evidence, related_company:companies!related_company_id(slug, name, description_short, status, industry_group, exclusion_reason)",
     )
     .eq("company_id", companyId)
     .eq("relationship_type", "similar")
@@ -945,7 +1070,9 @@ export async function getRelatedCompanies(
     const c = Array.isArray(row.related_company)
       ? row.related_company[0]
       : row.related_company;
-    if (!c?.slug || !c.name) return [];
+    // Drop unresolved joins AND excluded companies — the latter 404 on
+    // /c/[slug], so linking them produces dead "Related companies" links.
+    if (!c?.slug || !c.name || c.exclusion_reason) return [];
     return [
       {
         slug: c.slug,
@@ -973,19 +1100,27 @@ const ALSO_BACKED_BY_LIMIT = 8;
  * a two-hop shared-investor walk computed read-time, EXCLUDING high-degree
  * (mega-fund) investors so the result stays meaningful.
  *
- * Four small round-trips + in-memory aggregation (the codebase already does
- * keyset scans + JS processing for similar shapes):
- *   1. This company's investor_ids from `company_investors`.
- *   2. Each investor's total holding count via head-count queries; drop any
- *      investor with > {@link ALSO_BACKED_BY_MAX_INVESTOR_DEGREE} holdings.
- *      Keep the names of the remaining (low-degree) investors.
- *   3. Other companies (company_id != this) backed by any remaining investor,
- *      tallied by number of shared low-degree investors; ranked desc; top
- *      {@link ALSO_BACKED_BY_LIMIT}.
- *   4. companies(slug, name) for those ids → {slug, name, sharedInvestors}.
+ * The previous implementation only looked at `company_investors`, which in
+ * practice points exclusively to ~13 mega-funds (all ≥52 holdings) that are
+ * always filtered out by the degree cap. Boutique investors appear only in
+ * `funding_round_investors`. This implementation UNIONs both paths in
+ * TypeScript (PostgREST cannot UNION directly):
  *
- * Returns [] on missing env or any error, and whenever the company has no
- * low-degree investors (every result set is capped).
+ *   Step 1a: this company's investor_ids from `company_investors`.
+ *   Step 1b: investor_ids from `funding_round_investors → funding_rounds`
+ *            where funding_rounds.company_id = this company.
+ *   (Union deduplicated in-process.)
+ *
+ *   Step 2: Each investor's total holding count across BOTH paths, merged
+ *           in-process; drop investors with > ALSO_BACKED_BY_MAX_INVESTOR_DEGREE
+ *           total distinct companies. Keep names of surviving low-degree investors.
+ *
+ *   Step 3: Other companies (≠ this) backed by any low-degree investor via
+ *           EITHER path, tallied by shared-investor count; top ALSO_BACKED_BY_LIMIT.
+ *
+ *   Step 4: Resolve company ids to slug + name.
+ *
+ * Returns [] on missing env, any error, or when no low-degree investors exist.
  */
 export async function getAlsoBackedBy(
   companyId: string,
@@ -1001,45 +1136,81 @@ export async function getAlsoBackedBy(
     return [];
   }
 
-  // Step 1: this company's investor ids.
-  const { data: ownRows, error: ownError } = await supabase
-    .from("company_investors")
-    .select("investor_id")
-    .eq("company_id", companyId);
+  // Step 1: UNION company_investors + funding_round_investors for this company.
+  // PostgREST has no UNION primitive — run both queries in parallel and merge.
+  const [ciResult, friResult] = await Promise.all([
+    // 1a: direct company-level investors.
+    supabase
+      .from("company_investors")
+      .select("investor_id")
+      .eq("company_id", companyId),
 
-  if (ownError) {
+    // 1b: round-level investors — join through funding_rounds to get company_id.
+    // PostgREST: select investor_id from funding_round_investors where
+    //   funding_rounds.company_id = companyId.
+    supabase
+      .from("funding_round_investors")
+      .select("investor_id, funding_rounds!inner(company_id)")
+      .eq("funding_rounds.company_id", companyId),
+  ]);
+
+  if (ciResult.error) {
     console.error(
-      "[getAlsoBackedBy] own investors query failed:",
-      ownError.message,
+      "[getAlsoBackedBy] own company_investors query failed:",
+      ciResult.error.message,
     );
     return [];
   }
+  if (friResult.error) {
+    console.error(
+      "[getAlsoBackedBy] own funding_round_investors query failed:",
+      friResult.error.message,
+    );
+    // Non-fatal: fall through with only the company_investors result.
+  }
 
-  const ownInvestorIds = ((ownRows ?? []) as { investor_id: string | null }[])
-    .map((r) => r.investor_id)
-    .filter((id): id is string => id != null);
+  // Deduplicate investor ids across both sources.
+  const ownIdSet = new Set<string>();
+  for (const r of (ciResult.data ?? []) as { investor_id: string | null }[]) {
+    if (r.investor_id) ownIdSet.add(r.investor_id);
+  }
+  // friResult rows embed a funding_rounds object — the investor_id is flat.
+  for (const r of ((friResult.data ?? []) as {
+    investor_id: string | null;
+    funding_rounds: { company_id: string } | { company_id: string }[] | null;
+  }[])) {
+    if (r.investor_id) ownIdSet.add(r.investor_id);
+  }
 
+  const ownInvestorIds = [...ownIdSet];
   if (ownInvestorIds.length === 0) return [];
 
-  // Step 2: keep only low-degree investors. A head-count per investor avoids
-  // pulling their whole (possibly huge) holdings list. Run in parallel, then
-  // fetch the names of the survivors.
+  // Step 2: compute each investor's total degree across BOTH paths in parallel.
+  // We count DISTINCT companies via company_investors PLUS DISTINCT companies
+  // via funding_round_investors (inner-joined through funding_rounds).
+  // Both counts are head-only to avoid pulling large result sets.
   const degreeResults = await Promise.all(
     ownInvestorIds.map(async (id) => {
-      const { count, error } = await supabase
-        .from("company_investors")
-        .select("*", { count: "exact", head: true })
-        .eq("investor_id", id);
-      if (error) {
-        console.error(
-          "[getAlsoBackedBy] investor degree count failed:",
-          error.message,
-        );
+      const [ciCount, friCount] = await Promise.all([
+        supabase
+          .from("company_investors")
+          .select("company_id", { count: "exact", head: true })
+          .eq("investor_id", id),
+        supabase
+          .from("funding_round_investors")
+          .select("funding_rounds!inner(company_id)", { count: "exact", head: true })
+          .eq("investor_id", id),
+      ]);
+
+      if (ciCount.error || friCount.error) {
         // Treat an unknown degree as high-degree (exclude) — safer than
         // accidentally relating half the catalog on a transient error.
         return { id, count: Number.POSITIVE_INFINITY };
       }
-      return { id, count: count ?? 0 };
+      // Sum both paths; this over-counts companies that appear in both paths
+      // for the same investor, but that's acceptable for the degree guard
+      // (it errs on the side of excluding rather than including mega-funds).
+      return { id, count: (ciCount.count ?? 0) + (friCount.count ?? 0) };
     }),
   );
 
@@ -1071,29 +1242,50 @@ export async function getAlsoBackedBy(
     if (r.id && r.name) investorName.set(r.id, r.name);
   }
 
-  // Step 3: other companies backed by any low-degree investor, tallied by the
-  // count of shared low-degree investors. Order by investor_id so a transient
-  // PostgREST 1000-row cap (this edge table can be large) truncates
-  // deterministically rather than arbitrarily.
-  const { data: sharedRows, error: sharedError } = await supabase
-    .from("company_investors")
-    .select("company_id, investor_id")
-    .in("investor_id", lowDegreeIds)
-    .neq("company_id", companyId)
-    .order("investor_id", { ascending: true });
+  // Step 3: other companies backed by any low-degree investor via EITHER path,
+  // tallied by count of shared low-degree investors. Run both edge-table queries
+  // in parallel and merge in-process; order by investor_id so a transient
+  // PostgREST 1000-row cap truncates deterministically.
+  const [ciSharedResult, friSharedResult] = await Promise.all([
+    // 3a: company_investors path.
+    supabase
+      .from("company_investors")
+      .select("company_id, investor_id")
+      .in("investor_id", lowDegreeIds)
+      .neq("company_id", companyId)
+      .order("investor_id", { ascending: true }),
 
-  if (sharedError) {
+    // 3b: funding_round_investors path — embed funding_rounds to get company_id.
+    supabase
+      .from("funding_round_investors")
+      .select("investor_id, funding_rounds!inner(company_id)")
+      .in("investor_id", lowDegreeIds)
+      .neq("funding_rounds.company_id", companyId)
+      .order("investor_id", { ascending: true }),
+  ]);
+
+  if (ciSharedResult.error) {
     console.error(
-      "[getAlsoBackedBy] shared-investor query failed:",
-      sharedError.message,
+      "[getAlsoBackedBy] shared company_investors query failed:",
+      ciSharedResult.error.message,
     );
     return [];
   }
+  if (friSharedResult.error) {
+    console.error(
+      "[getAlsoBackedBy] shared funding_round_investors query failed:",
+      friSharedResult.error.message,
+    );
+    // Non-fatal: fall through with company_investors results only.
+  }
 
-  // company_id → set of shared low-degree investor names (a set so a duplicate
-  // (company, investor) edge can't double-count).
+  // company_id → set of shared low-degree investor names. A set ensures a
+  // (company, investor) pair is never double-counted even if the company appears
+  // in both paths.
   const sharedByCompany = new Map<string, Set<string>>();
-  for (const r of (sharedRows ?? []) as {
+
+  // 3a: company_investors rows — company_id is flat.
+  for (const r of (ciSharedResult.data ?? []) as {
     company_id: string | null;
     investor_id: string | null;
   }[]) {
@@ -1104,6 +1296,27 @@ export async function getAlsoBackedBy(
     if (!names) {
       names = new Set<string>();
       sharedByCompany.set(r.company_id, names);
+    }
+    names.add(name);
+  }
+
+  // 3b: funding_round_investors rows — company_id is nested inside funding_rounds.
+  for (const r of ((friSharedResult.data ?? []) as {
+    investor_id: string | null;
+    funding_rounds: { company_id: string | null } | { company_id: string | null }[] | null;
+  }[])) {
+    if (!r.investor_id) continue;
+    const name = investorName.get(r.investor_id);
+    if (!name) continue;
+
+    const fr = Array.isArray(r.funding_rounds) ? r.funding_rounds[0] : r.funding_rounds;
+    const cid = fr?.company_id;
+    if (!cid || cid === companyId) continue;
+
+    let names = sharedByCompany.get(cid);
+    if (!names) {
+      names = new Set<string>();
+      sharedByCompany.set(cid, names);
     }
     names.add(name);
   }
@@ -1121,7 +1334,7 @@ export async function getAlsoBackedBy(
   const topIds = ranked.map(([id]) => id);
   const { data: companyRows, error: companyError } = await supabase
     .from("companies")
-    .select("id, slug, name")
+    .select("id, slug, name, exclusion_reason")
     .in("id", topIds);
 
   if (companyError) {
@@ -1137,8 +1350,11 @@ export async function getAlsoBackedBy(
     id: string | null;
     slug: string | null;
     name: string | null;
+    exclusion_reason?: string | null;
   }[]) {
-    if (r.id && r.slug && r.name) {
+    // Skip excluded companies — their /c/[slug] page 404s, so surfacing them
+    // here would be a dead link.
+    if (r.id && r.slug && r.name && !r.exclusion_reason) {
       companyById.set(r.id, { slug: r.slug, name: r.name });
     }
   }
@@ -1365,8 +1581,13 @@ export async function countNewThisWeek(days = 7): Promise<NewThisWeekCounts> {
       .or(CATALOG_BAR_OR)
       .gte("created_at", cutoff),
     supabase
+      // Inner-join companies + exclusion filter so this count matches what the
+      // /new feed actually lists. listNewThisWeekFundingRounds drops rounds for
+      // excluded/missing companies; without the same filter here the summary
+      // line overstates the rounds shown below it ("76 extracted" vs 70 listed).
       .from("funding_rounds")
-      .select("id", { count: "exact", head: true })
+      .select("id, companies!inner(exclusion_reason)", { count: "exact", head: true })
+      .is("companies.exclusion_reason", null)
       .gte("created_at", cutoff),
   ]);
 
@@ -1401,12 +1622,14 @@ export interface InvestorListResult {
  * A page of investors ranked by portfolio size (most holdings first), plus the
  * total investor count for pagination.
  *
- * Ranking uses PostgREST's embedded-aggregate ordering: `company_investors(count)`
- * embeds the per-investor holding count, and `.order("count", { referencedTable })`
- * sorts by it server-side — no in-process sort over the whole table (which can
- * run to thousands of firms). `name` is the deterministic tiebreaker so paging is
- * stable when many firms share a count. `count: "exact"` returns the unfiltered
- * total in the same round trip.
+ * Ranking uses the denormalized `portfolio_count` column (migration 0025), which
+ * counts DISTINCT non-excluded companies a firm backs via EITHER `company_investors`
+ * OR `funding_round_investors → funding_rounds`. This replaces the previous
+ * embedded-aggregate ordering (`.order("count", { referencedTable })`) which
+ * supabase-js silently ignores, causing the index to render alphabetically
+ * instead of by portfolio size. `name` is the deterministic tiebreaker so paging
+ * is stable when many firms share a count. `count: "exact"` returns the
+ * unfiltered total in the same round trip.
  */
 export async function listInvestors(
   opts: { limit?: number; offset?: number } = {},
@@ -1424,8 +1647,8 @@ export async function listInvestors(
 
   const { data, error, count } = await supabase
     .from("investors")
-    .select("slug, name, type, company_investors(count)", { count: "exact" })
-    .order("count", { referencedTable: "company_investors", ascending: false })
+    .select("slug, name, type, portfolio_count", { count: "exact" })
+    .order("portfolio_count", { ascending: false })
     .order("name", { ascending: true })
     .range(offset, offset + limit - 1);
 
@@ -1438,21 +1661,17 @@ export async function listInvestors(
     slug: string | null;
     name: string | null;
     type: string | null;
-    // Embedded aggregate comes back as [{ count: number }] (or [] / null).
-    company_investors: { count: number }[] | { count: number } | null;
+    portfolio_count: number | null;
   };
 
   const rows = ((data ?? []) as Row[]).flatMap((r) => {
     if (!r.slug || !r.name) return [];
-    const agg = Array.isArray(r.company_investors)
-      ? r.company_investors[0]
-      : r.company_investors;
     return [
       {
         slug: r.slug,
         name: r.name,
         type: r.type ?? "unknown",
-        portfolioCount: agg?.count ?? 0,
+        portfolioCount: r.portfolio_count ?? 0,
       },
     ];
   });
@@ -1483,10 +1702,11 @@ export async function getInvestorBySlug(
     return null;
   }
 
-  // 1. The investor row.
+  // 1. The investor row. `portfolio_count` is the denormalized count from
+  // migration 0025 — used in the header to match the /investors index.
   const { data: investor, error: investorError } = await supabase
     .from("investors")
-    .select("id, slug, name, type, description, website")
+    .select("id, slug, name, type, description, website, portfolio_count")
     .eq("slug", slug)
     .single();
 
@@ -1634,12 +1854,66 @@ export async function getInvestorBySlug(
       return b.announced_date.localeCompare(a.announced_date);
     });
 
+  // Union the company-level portfolio with companies this investor funded via
+  // rounds, so the rendered card list reflects every connected company and the
+  // "Portfolio" section never reads "none" while Funding activity lists rounds.
+  // ("Backs N" uses the denormalized portfolio_count, which covers both paths.)
+  const haveSlugs = new Set(portfolio.map((c) => c.slug));
+  const roundOnlySlugs = [
+    ...new Set(rounds.map((r) => r.companySlug).filter((s) => !haveSlugs.has(s))),
+  ];
+  if (roundOnlySlugs.length > 0) {
+    const { data: extra, error: extraError } = await supabase
+      .from("companies")
+      .select(
+        "slug, name, hq_city, hq_state, industry_group, description_short, status, exclusion_reason",
+      )
+      .in("slug", roundOnlySlugs);
+    if (extraError) {
+      console.error(
+        "[getInvestorBySlug] round-company hydrate failed:",
+        extraError.message,
+      );
+    }
+    for (const c of (extra ?? []) as {
+      slug: string | null;
+      name: string | null;
+      hq_city: string | null;
+      hq_state: string | null;
+      industry_group: string | null;
+      description_short: string | null;
+      status: string | null;
+      exclusion_reason?: string | null;
+    }[]) {
+      if (!c.slug || !c.name || c.exclusion_reason) continue;
+      portfolio.push({
+        slug: c.slug,
+        name: c.name,
+        hq_city: c.hq_city ?? null,
+        hq_state: c.hq_state ?? null,
+        industry_group: c.industry_group ?? null,
+        description_short: c.description_short ?? null,
+        status: c.status ?? "active",
+      });
+    }
+    portfolio.sort((a, b) =>
+      a.name.localeCompare(b.name, "en-US", { sensitivity: "base" }),
+    );
+  }
+
   return {
     slug: investor.slug as string,
     name: investor.name as string,
     type: (investor.type as string | null) ?? "unknown",
     description: (investor.description as string | null) ?? null,
     website: (investor.website as string | null) ?? null,
+    // portfolio_count is the denormalized total from migration 0025 (covers
+    // both company_investors AND funding_round_investors paths). Use it as the
+    // headline "Backs N companies" number so it matches the /investors index.
+    // The rendered `portfolio` card list may be shorter because it only shows
+    // companies linked directly via company_investors (round-only companies
+    // are not yet in the card list). See Task 3.1.
+    portfolioCount: (investor.portfolio_count as number | null) ?? portfolio.length,
     portfolio,
     rounds,
   };

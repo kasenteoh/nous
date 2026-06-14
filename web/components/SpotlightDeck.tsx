@@ -78,15 +78,21 @@ export function SpotlightDeck({ spotlights }: Props) {
       </p>
 
       {/* Stable polite live region; the keyed child remounts per spotlight so
-          the enter animation replays (motion-safe only). */}
-      <div aria-live="polite">
+          the enter animation replays (motion-safe only).
+          min-h-[20rem] (320px) fixes the control-row jump: the tallest
+          realistic one-liner (~4 lines of text-lg/leading-relaxed on mobile)
+          plus name, facts, and link totals ≈ 285px, so 20rem holds even the
+          longest entries without shifting the ‹ › row below. */}
+      <div aria-live="polite" className="min-h-[20rem]">
         <div
           key={current.slug}
           className="motion-safe:animate-[spotlight-in_240ms_ease-out]"
         >
-          <h1 className="mt-5 text-4xl sm:text-5xl font-bold tracking-tight text-ink">
+          {/* h2, not h1: the page's constant <h1> is the visually-hidden site
+              heading (see app/page.tsx). This name rotates inside aria-live. */}
+          <h2 className="mt-5 text-4xl sm:text-5xl font-bold tracking-tight text-ink">
             {current.name}
-          </h1>
+          </h2>
           <p className="mt-4 text-lg text-ink-soft leading-relaxed max-w-lg">
             {current.oneLiner}
           </p>

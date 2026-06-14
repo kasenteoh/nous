@@ -43,6 +43,11 @@ export default async function FrontPage() {
 
   return (
     <main className="flex-1 w-full max-w-6xl mx-auto px-6 flex flex-col">
+      {/* Stable, descriptive page heading. The visible "headline" is the
+          rotating spotlight company name (an <h2> inside an aria-live region),
+          which would otherwise leave the home page with no constant <h1> and
+          send screen-reader heading-nav to an arbitrary company name. */}
+      <h1 className="sr-only">nous — US software startup discovery</h1>
       {/* Structured data: the site operator + sitelinks-searchbox wiring into
           the /companies?q=… search the masthead form already exposes. */}
       <JsonLd
@@ -74,9 +79,9 @@ export default async function FrontPage() {
           ) : (
             <section>
               <p className={labelClass}>Today&rsquo;s spotlight</p>
-              <h1 className="mt-5 text-4xl font-bold tracking-tight text-ink">
+              <h2 className="mt-5 text-4xl font-bold tracking-tight text-ink">
                 Nothing to spotlight yet
-              </h1>
+              </h2>
               <p className="mt-4 text-lg text-ink-muted leading-relaxed max-w-lg">
                 The index is still filling. Browse what&rsquo;s here already,
                 or check back soon.

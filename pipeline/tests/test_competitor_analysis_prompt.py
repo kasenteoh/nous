@@ -222,3 +222,61 @@ def test_out_of_order_ranks_are_normalized() -> None:
     )
     assert [c.rank for c in ca.competitors] == [1, 2, 3]
     assert [c.name for c in ca.competitors] == ["A", "B", "C"]
+
+
+# ---------------------------------------------------------------------------
+# Meta-commentary leak guard (H3)
+# ---------------------------------------------------------------------------
+
+
+def test_meta_leak_in_reasoning_is_dropped() -> None:
+    """A competitor whose reasoning leaks the model's selection commentary is
+    dropped entirely; the survivors are renumbered contiguously."""
+    ca = CompetitorAnalysis(
+        competitors=[
+            Competitor(
+                name="Real", description="A rival.", reasoning="Same market.", rank=1
+            ),
+            Competitor(
+                name="Den",
+                description="Domain brokerage.",
+                reasoning="Included temporarily for evaluation but should be dropped.",
+                rank=2,
+            ),
+        ]
+    )
+    assert [c.name for c in ca.competitors] == ["Real"]
+    assert [c.rank for c in ca.competitors] == [1]
+
+
+def test_meta_leak_in_description_is_dropped() -> None:
+    ca = CompetitorAnalysis(
+        competitors=[
+            Competitor(
+                name="A",
+                description="Not a competitor, included for completeness.",
+                reasoning="r",
+                rank=1,
+            ),
+            Competitor(
+                name="B", description="A direct rival.", reasoning="Same buyers.", rank=2
+            ),
+        ]
+    )
+    assert [c.name for c in ca.competitors] == ["B"]
+
+
+def test_clean_competitors_survive_meta_filter() -> None:
+    ca = CompetitorAnalysis(
+        competitors=[
+            Competitor(name="A", description="d", reasoning="Overlapping product.", rank=1),
+            Competitor(name="B", description="d", reasoning="Same customers.", rank=2),
+        ]
+    )
+    assert [c.name for c in ca.competitors] == ["A", "B"]
+
+
+def test_prompt_forbids_meta_commentary_in_reasoning() -> None:
+    prompt = build_prompt(target=_target(), peers=[]).lower()
+    assert "for evaluation" in prompt  # names the anti-pattern
+    assert "exclude it rather than" in prompt

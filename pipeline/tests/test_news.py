@@ -21,6 +21,7 @@ from nous.sources.news import (
     _matches_funding_keyword,
 )
 from nous.sources.techcrunch import TC_FUNDING_FEED, fetch_techcrunch_funding_articles
+from nous.util.ssrf import BlockedAddressError
 
 FIXTURES = Path(__file__).parent / "fixtures"
 GOOGLE_NEWS_XML = (FIXTURES / "google_news_sample.xml").read_text()
@@ -84,7 +85,7 @@ class _MockTransport(httpx.AsyncBaseTransport):
         return httpx.Response(404, content=b"Not Found")
 
 
-def _inject(client: NewsClient, transport: _MockTransport) -> None:
+def _inject(client: NewsClient, transport: httpx.AsyncBaseTransport) -> None:
     """Replace the real httpx clients with mocked transport post-__aenter__."""
     assert client._client is not None
     assert client._robots is not None
@@ -468,6 +469,36 @@ async def test_fetch_article_body_returns_none_on_network_error() -> None:
     async with client:
         _inject(client, transport)
         body = await client.fetch_article_body("https://badhost.com/article")
+
+    assert body is None
+
+
+async def test_fetch_article_body_returns_none_on_blocked_address() -> None:
+    """A direct-publisher article URL whose host is SSRF-blocked or unresolvable
+    must return None, not propagate BlockedAddressError and crash ingest-news.
+
+    The article-page GET goes through a guarded_async_client, so on a non-public
+    or (now that the guard fails closed on DNS failure) unresolvable host it
+    raises BlockedAddressError. fetch_article_body must swallow it like the
+    other handled fetch errors (robots-block, 4xx, 5xx, network error). robots
+    here 404s so the test reaches the page GET that the guard rejects.
+    """
+
+    class _BlockingArticleTransport(httpx.AsyncBaseTransport):
+        async def handle_async_request(
+            self, request: httpx.Request
+        ) -> httpx.Response:
+            url_str = str(request.url)
+            if "robots.txt" in url_str:
+                return httpx.Response(404, content=b"Not Found")
+            raise BlockedAddressError(f"blocked: {url_str}")
+
+    client = NewsClient(user_agent=USER_AGENT)
+    async with client:
+        _inject(client, _BlockingArticleTransport())
+        body = await client.fetch_article_body(
+            "https://blocked-publisher.example.com/article"
+        )
 
     assert body is None
 

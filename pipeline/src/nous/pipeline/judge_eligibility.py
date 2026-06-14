@@ -42,6 +42,7 @@ from nous.llm.client import (
     complete_json,
 )
 from nous.llm.prompts.company_eligibility import EligibilityJudgment, build_prompt
+from nous.pipeline.enrich_companies import _infer_country_from_url
 from nous.util.text import extract_visible_text, truncate_to_chars
 
 logger = logging.getLogger(__name__)
@@ -128,17 +129,32 @@ async def _judge_one_company(
     company.eligibility_checked_at = now
     if judgment.founded_year and not company.year_incorporated:
         company.year_incorporated = judgment.founded_year
+    # Country resolution — mirrors the enrich-companies three-tier logic:
+    #   1. LLM explicit statement (highest confidence).
+    #   2. ccTLD of the company website (deterministic, no cost).
+    #   3. US state/city already set → infer US.
+    # Only set US when there is positive evidence; leave NULL otherwise.
     llm_country = (judgment.hq_country or "").strip().upper() or None
     if llm_country:
         company.hq_country = llm_country
+    elif not company.hq_country:
+        cctld_country = _infer_country_from_url(company.website)
+        if cctld_country:
+            company.hq_country = cctld_country
+        elif company.hq_state or company.hq_city:
+            company.hq_country = "US"
+
     if judgment.is_startup is False:
         company.exclusion_reason = "not_a_startup"
         company.exclusion_detail = judgment.not_startup_reason
         company.excluded_at = now
         summary.companies_excluded += 1
-    elif llm_country is not None and llm_country != "US":
+    elif company.hq_country is not None and company.hq_country != "US":
         company.exclusion_reason = "non_us"
-        company.exclusion_detail = f"website states HQ country {llm_country}"
+        company.exclusion_detail = (
+            f"HQ country inferred as {company.hq_country}"
+            + (f" (LLM: {llm_country})" if llm_country else " (ccTLD)")
+        )
         company.excluded_at = now
         summary.companies_excluded += 1
 

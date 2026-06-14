@@ -34,10 +34,12 @@ from types import TracebackType
 from typing import TYPE_CHECKING
 from urllib.parse import urlparse
 
+from nous.util.ssrf import BlockedAddressError, assert_public_url
+
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
-    from playwright.async_api import Browser, Playwright
+    from playwright.async_api import Browser, Playwright, Route
 
 
 # Default UA presents as a real Chrome on macOS — paired with Chromium's
@@ -48,6 +50,16 @@ _DEFAULT_USER_AGENT = (
     "AppleWebKit/537.36 (KHTML, like Gecko) "
     "Chrome/120.0.0.0 Safari/537.36"
 )
+
+
+async def _abort_if_blocked(route: Route) -> None:
+    """Abort any request (initial, redirect, or sub-resource) to a non-public host."""
+    try:
+        await assert_public_url(route.request.url)
+    except BlockedAddressError:
+        await route.abort()
+    else:
+        await route.continue_()
 
 
 class HeadlessBrowserClient:
@@ -114,9 +126,16 @@ class HeadlessBrowserClient:
         """Navigate to ``url``, wait for JS hydration, return rendered HTML.
 
         Returns None on navigation timeout / browser error so the caller can
-        fall back to whatever the httpx-side response was. Never raises;
-        Playwright errors are logged and swallowed.
+        fall back to whatever the httpx-side response was. Never raises for
+        Playwright errors (logged and swallowed) — but DOES raise
+        BlockedAddressError for an internal/non-public target, validated before
+        any browser interaction.
         """
+        # SSRF guard FIRST — before touching the browser — so a blocked URL is
+        # rejected even outside the context manager. The context.route handler
+        # below additionally re-validates every redirect hop and sub-resource.
+        await assert_public_url(url)
+
         if self._browser is None:
             raise RuntimeError(
                 "HeadlessBrowserClient must be used as an async context manager"
@@ -134,6 +153,7 @@ class HeadlessBrowserClient:
                 await asyncio.sleep(wait)
 
             context = await self._browser.new_context(user_agent=self._user_agent)
+            await context.route("**/*", _abort_if_blocked)
             page = await context.new_page()
             try:
                 await page.goto(

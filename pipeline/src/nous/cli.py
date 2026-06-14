@@ -364,6 +364,11 @@ def ingest_news(
                 inputs_seen=summary.articles_seen,
                 rows_written=summary.articles_inserted + summary.auto_created_companies,
                 summary=summary,
+                # flag_empty=True: a run that queried companies but wrote nothing
+                # is classified status='empty' so pipeline-health surfaces it as
+                # a regression signal (this silent-failure mode hid the news
+                # coverage bug for months — see Task 4.1 diagnosis).
+                flag_empty=True,
             )
         finally:
             emit_run_telemetry("ingest-news")
@@ -466,12 +471,14 @@ def extract_funding_website(
     so the news/TechCrunch path always stays the primary source.
     """
     import asyncio
+    from datetime import UTC, datetime
 
     from nous.db.session import AsyncSessionLocal
-    from nous.observability import emit_run_telemetry
+    from nous.observability import emit_run_telemetry, record_pipeline_run
     from nous.pipeline.extract_funding import run_extract_funding_website
 
     async def _run() -> None:
+        started = datetime.now(UTC)
         try:
             async with AsyncSessionLocal() as session:
                 summary = await run_extract_funding_website(
@@ -481,6 +488,21 @@ def extract_funding_website(
                     recheck_after_days=recheck_after_days,
                 )
                 click.echo(summary.model_dump_json(indent=2))
+            await record_pipeline_run(
+                "extract-funding-website",
+                started_at=started,
+                inputs_seen=summary.companies_seen,
+                rows_written=summary.funding_rounds_created
+                + summary.funding_rounds_merged,
+                summary=summary,
+                # flag_empty=True: a run that inspected companies but wrote 0
+                # funding rows is classified status='empty' so pipeline-health
+                # surfaces it — the same silent-failure mode that masked the
+                # news coverage gap for months (Task 4.1 diagnosis). Without
+                # record_pipeline_run here, a zero-output website run was
+                # entirely invisible to the observability layer.
+                flag_empty=True,
+            )
         finally:
             emit_run_telemetry("extract-funding-website")
 
@@ -539,6 +561,73 @@ def analyze_competitors(limit: int, ttl_days: int, dry_run: bool) -> None:
                 )
         finally:
             emit_run_telemetry("analyze-competitors")
+
+    asyncio.run(_run())
+
+
+@cli.command("refresh-investor-counts")
+def refresh_investor_counts_cmd() -> None:
+    """Recompute investors.portfolio_count across both link tables.
+
+    Counts distinct non-excluded companies per investor via company_investors
+    and funding_round_investors → funding_rounds (UNION, so no double-count).
+    Idempotent: a full recompute from first principles, including zeroing
+    investors with no qualifying links.
+    """
+    import asyncio
+    from datetime import UTC, datetime
+
+    from nous.db.session import AsyncSessionLocal
+    from nous.observability import record_pipeline_run
+    from nous.pipeline.refresh_investor_counts import refresh_investor_counts
+
+    async def _run() -> None:
+        started = datetime.now(UTC)
+        async with AsyncSessionLocal() as session:
+            summary = await refresh_investor_counts(session)
+            await session.commit()
+            click.echo(summary.model_dump_json(indent=2))
+        await record_pipeline_run(
+            "refresh-investor-counts",
+            started_at=started,
+            inputs_seen=0,
+            rows_written=summary.investors_updated,
+            summary=summary,
+        )
+
+    asyncio.run(_run())
+
+
+@cli.command("dedup-investors")
+def dedup_investors_cmd() -> None:
+    """Collapse duplicate investor rows by canonical name (alias-applied).
+
+    Groups investors by their post-alias canonical name, picks the survivor
+    (most links → oldest created_at), merges losers via merge_investors (which
+    repoints company_investors + funding_round_investors and calls
+    refresh-investor-counts). Also sets type='institutional' for known VC firms.
+
+    Idempotent: a second run finds no duplicates and is a no-op.
+    """
+    import asyncio
+    from datetime import UTC, datetime
+
+    from nous.db.session import AsyncSessionLocal
+    from nous.observability import record_pipeline_run
+    from nous.pipeline.dedup_investors import run_dedup_investors
+
+    async def _run() -> None:
+        started = datetime.now(UTC)
+        async with AsyncSessionLocal() as session:
+            summary = await run_dedup_investors(session)
+            click.echo(summary.model_dump_json(indent=2))
+        await record_pipeline_run(
+            "dedup-investors",
+            started_at=started,
+            inputs_seen=summary.investors_seen,
+            rows_written=summary.investors_merged + summary.type_classifications,
+            summary=summary,
+        )
 
     asyncio.run(_run())
 
@@ -876,6 +965,54 @@ def judge_eligibility(limit: int | None) -> None:
     asyncio.run(_run())
 
 
+@cli.command("pipeline-health")
+@click.option(
+    "--strict",
+    is_flag=True,
+    default=False,
+    help=(
+        "Exit non-zero when any stage logged status='empty' or status='error'. "
+        "Default: always exit 0 (annotate only), matching continue-on-error semantics."
+    ),
+)
+def pipeline_health(strict: bool) -> None:
+    """Inspect pipeline_runs for empty/error stages and emit CI annotations.
+
+    Queries the most-recent pipeline_runs row for every stage and prints a
+    GitHub Actions ``::warning::`` / ``::error::`` annotation for each non-green
+    stage.  Appends a markdown table to the step summary when GITHUB_STEP_SUMMARY
+    is set.  Exits 0 by default so it never blocks the pipeline; pass --strict
+    to exit non-zero on any non-green stage.
+    """
+    import asyncio
+    import sys
+
+    from nous.db.session import AsyncSessionLocal
+    from nous.pipeline.pipeline_health import (
+        HealthReport,
+        emit_health_annotations,
+        run_pipeline_health,
+    )
+
+    async def _run() -> HealthReport:
+        async with AsyncSessionLocal() as session:
+            return await run_pipeline_health(session)
+
+    report = asyncio.run(_run())
+    emit_health_annotations(report)
+
+    if report.stages:
+        click.echo(
+            f"pipeline-health: checked {len(report.stages)} stage(s), "
+            f"{len(report.bad)} non-green"
+        )
+    else:
+        click.echo("pipeline-health: no pipeline_runs rows found (table is empty)")
+
+    if strict and not report.all_green:
+        sys.exit(1)
+
+
 @cli.command("repair-catalog")
 @click.option(
     "--dry-run",
@@ -893,6 +1030,44 @@ def repair_catalog(dry_run: bool) -> None:
     async def _run() -> None:
         async with AsyncSessionLocal() as session:
             summary = await run_repair_catalog(session, dry_run=dry_run)
+            click.echo(summary.model_dump_json(indent=2))
+
+    asyncio.run(_run())
+
+
+@cli.command("repair-wrong-websites")
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    default=False,
+    help="Log intended repairs without writing.",
+)
+def repair_wrong_websites(dry_run: bool) -> None:
+    """Repair rows poisoned by the pre-hardening homepage resolver.
+
+    Three passes (all idempotent — a second run is a no-op):
+
+    \b
+    (a) company.website host is in the aggregator/directory reject set
+        → append bad URL to rejected_urls, clear website + enrichment fields,
+          drop stale raw_pages so resolve→scrape→enrich restart cleanly.
+
+    (b) company.description_short contains for-sale / parked prose
+        → same clear action as (a).
+
+    (c) exclusion_reason IN ('not_a_startup','non_us') with exclusion_detail
+        referencing "personal homepage" or a wrong-site phrase
+        → clear exclusion + eligibility_checked_at so judge-eligibility
+          re-judges from the corrected site.
+    """
+    import asyncio
+
+    from nous.db.session import AsyncSessionLocal
+    from nous.pipeline.repair_wrong_websites import run_repair_wrong_websites
+
+    async def _run() -> None:
+        async with AsyncSessionLocal() as session:
+            summary = await run_repair_wrong_websites(session, dry_run=dry_run)
             click.echo(summary.model_dump_json(indent=2))
 
     asyncio.run(_run())
@@ -926,6 +1101,26 @@ def exclude_company(slug: str, reason: str, detail: str | None, clear: bool) -> 
             result = await run_exclude_company(
                 session, slug=slug, reason=reason, detail=detail, clear=clear
             )
+            click.echo(result.model_dump_json(indent=2))
+
+    asyncio.run(_run())
+
+
+@cli.command("unexclude-company")
+@click.argument("slug")
+def unexclude_company(slug: str) -> None:
+    """Re-include a company by clearing its exclusion (alias for exclude-company --clear).
+
+    Example: unexclude-company abnormal-security
+    """
+    import asyncio
+
+    from nous.db.session import AsyncSessionLocal
+    from nous.pipeline.exclude_company import run_exclude_company
+
+    async def _run() -> None:
+        async with AsyncSessionLocal() as session:
+            result = await run_exclude_company(session, slug=slug, clear=True)
             click.echo(result.model_dump_json(indent=2))
 
     asyncio.run(_run())

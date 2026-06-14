@@ -36,6 +36,7 @@ from __future__ import annotations
 import logging
 from datetime import UTC, date, datetime, timedelta
 from typing import Literal
+from urllib.parse import urlparse
 from uuid import UUID
 
 from pydantic import BaseModel
@@ -60,12 +61,50 @@ from nous.llm.prompts.funding_extraction import (
     build_prompt,
     build_website_prompt,
 )
+from nous.pipeline.refresh_investor_counts import refresh_investor_counts
+from nous.sources.reject_hosts import is_aggregator_url
 from nous.util.text import extract_visible_text, truncate_to_chars
 
 logger = logging.getLogger(__name__)
 
 # Minimum cleaned website text length to bother extracting from.
 _MIN_TEXT_CHARS = 200
+
+# Image / media-hosting hosts whose URLs must never be accepted as a funding
+# source.  These are not in AGGREGATOR_HOSTS (which covers directories and
+# editorial sites), so we check them locally.
+# TODO: fold these into reject_hosts.AGGREGATOR_HOSTS once the shared module
+# is next edited.
+_IMAGE_HOSTS: frozenset[str] = frozenset(
+    {
+        "imgur.com",
+        "i.imgur.com",
+        "i.redd.it",
+        "preview.redd.it",
+        "pbs.twimg.com",
+        "cdn.discordapp.com",
+        "media.giphy.com",
+    }
+)
+
+
+def _is_junk_source_url(url: str) -> bool:
+    """Return True when *url* is unsuitable as a funding-round source.
+
+    Combines the shared aggregator/directory reject-list with a local check
+    for obvious image/CDN hosts.  A company's own website is NOT junk — only
+    third-party aggregator or image hosts are rejected.
+    """
+    if is_aggregator_url(url):
+        return True
+    parsed = urlparse(url)
+    host = parsed.netloc.lower()
+    if ":" in host:
+        host = host.split(":")[0]
+    bare = host[4:] if host.startswith("www.") else host
+    return bare in _IMAGE_HOSTS or any(
+        bare.endswith("." + h) for h in _IMAGE_HOSTS
+    )
 
 # Phrases that signal an article states a cumulative funding total. Used by
 # the --requery-totals backfill to pick already-processed articles worth a
@@ -411,6 +450,12 @@ async def run_extract_funding(
         session.add(article)
         await session.commit()
 
+    # Recompute portfolio_count for all investors now that funding-round
+    # investor links may have been added. Committed in its own transaction so a
+    # count failure doesn't roll back the extraction work.
+    await refresh_investor_counts(session)
+    await session.commit()
+
     return summary
 
 
@@ -422,6 +467,8 @@ class ExtractFundingWebsiteSummary(_RoundPersistCounts):
     skipped_not_funding: int = 0
     skipped_low_confidence: int = 0
     skipped_rate_limited: int = 0
+    # Companies skipped because their website URL is a junk/image/aggregator host.
+    skipped_junk_source: int = 0
     # Companies whose `status` value actually transitioned (active -> exit).
     status_changes_applied: int = 0
     # Same-status re-confirmations that only filled a NULL status_source_url.
@@ -556,16 +603,28 @@ async def run_extract_funding_website(
                 else:
                     # Attribute the round to the company's website (the source
                     # of the text).
-                    await _persist_round_and_investors(
-                        session,
-                        summary,
-                        company_id=company.id,
-                        extraction=extraction,
-                        primary_news_url=company.website
-                        or (pages[0].url if pages else ""),
-                        proximity_days=proximity_days,
-                    )
-                    summary.companies_with_funding += 1
+                    source_url = company.website or (pages[0].url if pages else "")
+                    if source_url and _is_junk_source_url(source_url):
+                        # Reject rounds whose attributed URL is an image host,
+                        # CDN, or aggregator directory.  A company's own domain
+                        # is never rejected here — only third-party junk URLs.
+                        logger.warning(
+                            "Skipping website funding for %r: source URL is a "
+                            "junk/aggregator host (%s)",
+                            company.name,
+                            source_url,
+                        )
+                        summary.skipped_junk_source += 1
+                    else:
+                        await _persist_round_and_investors(
+                            session,
+                            summary,
+                            company_id=company.id,
+                            extraction=extraction,
+                            primary_news_url=source_url,
+                            proximity_days=proximity_days,
+                        )
+                        summary.companies_with_funding += 1
         else:
             summary.skipped_no_text += 1
 

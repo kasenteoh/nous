@@ -56,11 +56,11 @@ on:
         type: boolean
         default: false
       news_limit:
-        description: "Ingest news: max companies for the per-company RSS rotation. Default: 40."
+        description: "Ingest news: max companies for the per-company RSS rotation. Default: 400."
         required: false
         type: string
       news_lookback_days:
-        description: "Ingest news: lookback window in days. Default: 7."
+        description: "Ingest news: lookback window in days. Default: 14."
         required: false
         type: string
       funding_limit:
@@ -68,7 +68,7 @@ on:
         required: false
         type: string
       website_funding_limit:
-        description: "Website funding gap-fill: max companies per run. Default: 15."
+        description: "Website funding gap-fill: max companies per run. Default: 100."
         required: false
         type: string
       resolve_limit:
@@ -83,12 +83,24 @@ on:
         description: "Enrich: max companies to enrich (caps LLM spend). Default: 30."
         required: false
         type: string
+      judge_limit:
+        description: "Judge eligibility: max companies to judge this run (drains the backlog). Default: 30."
+        required: false
+        type: string
+      run_repair_websites:
+        description: "Run the one-off repair-wrong-websites poisoned-row cleanup (Task 2.2). Default: false."
+        required: false
+        type: boolean
+        default: false
 
 # Serialize against every other workflow that mutates the companies table (see
 # discovery.yml). resolve / enrich UPDATE company rows and ingest-news /
 # extract-funding INSERT them, all of which race the dedup DELETEs in
 # discovery.yml. cancel-in-progress: false so a queued run waits its turn — and
 # so two pipeline runs (10x/day) never overlap each other either.
+permissions:
+  contents: read
+
 concurrency:
   group: nous-pipeline-db
   cancel-in-progress: false
@@ -117,7 +129,7 @@ jobs:
           python-version: "3.11"
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v3
+        uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39 # v3
 
       - name: Install pipeline dependencies
         run: uv sync
@@ -162,6 +174,18 @@ jobs:
         continue-on-error: true
         run: uv run nous repair-catalog
 
+      - name: Repair wrong websites
+        id: repair_websites
+        if: ${{ inputs.run_repair_websites == true }}
+        # One-off (Task 2.2): reset companies whose website is a directory/
+        # aggregator/parked host or whose description is parked prose, and
+        # re-queue false exclusions, so the hardened resolver re-resolves them
+        # cleanly on the next run. Gated off by default; dispatch with
+        # run_repair_websites=true to apply the cleanup once.
+        timeout-minutes: 15
+        continue-on-error: true
+        run: uv run nous repair-wrong-websites
+
       # ----- Funding news (freshness-first) -----------------------------------
 
       - name: Ingest news
@@ -169,21 +193,22 @@ jobs:
         if: ${{ inputs.skip_news != true }}
         # Per-company Google News RSS (rotates least-recently-checked first via
         # companies.news_checked_at) + the TechCrunch venture-tag broad sweep.
-        # --limit 40 x 10 runs/day ≈ 400 companies/day, covering the ~2.6k table
-        # within a few days while keeping each run's Google News request count
-        # polite. The TC sweep runs every time but only LLM-identifies *new*
-        # articles. continue-on-error: a transient news block shouldn't fail the
-        # run.
-        timeout-minutes: 10
+        # --limit 400 x 8 runs/day ≈ 3,200 companies/day, covering the ~2.6k
+        # table in a single day and draining any backlog fast. Raised from 40
+        # (old private-repo quota sizing) now that Actions minutes are free.
+        # --lookback-days defaults to 14 (not the CLI's 7) so each per-company
+        # RSS query captures two full weeks of headlines, recovering from the
+        # months the robots-block hid (fixed in #54/#61).
+        # The TC sweep runs every time but only LLM-identifies *new* articles.
+        # continue-on-error: a transient news block shouldn't fail the run.
+        timeout-minutes: 15
         continue-on-error: true
         run: |
           NEWS_LIMIT="${{ inputs.news_limit }}"
-          if [ -z "$NEWS_LIMIT" ]; then NEWS_LIMIT=40; fi
-          ARGS=(--limit "$NEWS_LIMIT")
-          if [ -n "${{ inputs.news_lookback_days }}" ]; then
-            ARGS+=(--lookback-days "${{ inputs.news_lookback_days }}")
-          fi
-          uv run nous ingest-news "${ARGS[@]}"
+          if [ -z "$NEWS_LIMIT" ]; then NEWS_LIMIT=400; fi
+          NEWS_LOOKBACK="${{ inputs.news_lookback_days }}"
+          if [ -z "$NEWS_LOOKBACK" ]; then NEWS_LOOKBACK=14; fi
+          uv run nous ingest-news --limit "$NEWS_LIMIT" --lookback-days "$NEWS_LOOKBACK"
 
       - name: Extract funding
         id: funding
@@ -203,15 +228,16 @@ jobs:
         id: funding_website
         if: ${{ inputs.skip_funding != true }}
         # Gap-fill only: companies that still have no funding rounds after the
-        # news pass. The website_funding_checked_at 180-day back-off (stamped
-        # even on "nothing found") means this drains its eligible set in a couple
-        # of weeks and then no-ops until the window reopens — so a tiny per-run
-        # --limit is enough and keeps LLM spend negligible.
-        timeout-minutes: 8
+        # news pass. Limit raised from 15 → 100 to drain the ~2k-company backlog
+        # faster now that Actions minutes are free. At ~2s/company (scrape +
+        # LLM) 100 companies ≈ 3-4 min; raised to 20 min for ample headroom.
+        # The 180-day back-off means each company is only checked once every
+        # 6 months, so the per-run spend stays bounded once the backlog clears.
+        timeout-minutes: 20
         continue-on-error: true
         run: |
           WF_LIMIT="${{ inputs.website_funding_limit }}"
-          if [ -z "$WF_LIMIT" ]; then WF_LIMIT=15; fi
+          if [ -z "$WF_LIMIT" ]; then WF_LIMIT=100; fi
           uv run nous extract-funding-website --limit "$WF_LIMIT"
 
       # ----- Descriptions (backlog drain + new companies) ---------------------
@@ -261,15 +287,30 @@ jobs:
         # enriched before that judgment existed (~1,600 one-time DeepSeek calls).
         # Each judged row is stamped, so this drains in a couple of weeks at 10x/
         # day and then no-ops. Runs after enrich so freshly described rows are
-        # already stamped by enrich itself and skipped here.
-        timeout-minutes: 10
+        # already stamped by enrich itself and skipped here. Timeout raised to
+        # 45m so a high judge_limit can drain the one-time backlog in a single
+        # dispatch (each row is stamped as it's judged, so a timeout mid-drain
+        # still preserves progress).
+        timeout-minutes: 45
         continue-on-error: true
-        run: uv run nous judge-eligibility --limit 30
+        run: |
+          JUDGE_LIMIT="${{ inputs.judge_limit }}"
+          if [ -z "$JUDGE_LIMIT" ]; then JUDGE_LIMIT=30; fi
+          uv run nous judge-eligibility --limit "$JUDGE_LIMIT"
 
       - name: Database stats
         if: ${{ !cancelled() }}
         continue-on-error: true
         run: uv run nous db-stats
+
+      - name: Pipeline health
+        # Always runs (even if earlier stages failed) so every pipeline run gets
+        # a health annotation in the Actions UI.  Exits 0 — never blocks the
+        # pipeline.  Emits ::warning:: / ::error:: annotations and a step-summary
+        # markdown table for any stage that logged status='empty' or 'error'.
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        run: uv run nous pipeline-health
 
       - name: Trigger Vercel deploy
         # Fires when at least one id'd pipeline stage above succeeded. Only the

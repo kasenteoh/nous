@@ -253,6 +253,107 @@ async def test_reconcile_funding_round_maintains_count(db: AsyncSession) -> None
     assert company.funding_round_count == 1
 
 
+# ---------------------------------------------------------------------------
+# reconcile_funding_round — None+None guard (Task 4.2 regression tests)
+# ---------------------------------------------------------------------------
+
+
+async def test_reconcile_null_null_yields_two_rows(db: AsyncSession) -> None:
+    """Two vague extractions (round_type=None, announced_date=None) for the
+    same company must each produce their OWN row rather than collapsing into
+    one.  The None+None guard in reconcile_funding_round forces an INSERT
+    whenever both discriminators are absent.
+    """
+    company = _make_quality_company("Vague Co", "vague-co")
+    db.add(company)
+    await db.flush()
+
+    null_null = FundingExtraction(
+        is_funding_announcement=True,
+        round_type=None,
+        announced_date=None,
+        confidence="low",
+    )
+
+    _, created1 = await reconcile_funding_round(
+        db,
+        company_id=company.id,
+        extraction=null_null,
+        primary_news_url="https://example.com/headline-1",
+    )
+    assert created1 is True
+
+    _, created2 = await reconcile_funding_round(
+        db,
+        company_id=company.id,
+        extraction=null_null,
+        primary_news_url="https://example.com/headline-2",
+    )
+    assert created2 is True  # must NOT merge with the first row
+
+    result = await db.execute(
+        select(FundingRound).where(FundingRound.company_id == company.id)
+    )
+    rows = result.scalars().all()
+    assert len(rows) == 2, (
+        "expected 2 separate rounds for two vague headlines; got "
+        f"{len(rows)} (None+None guard not firing)"
+    )
+
+    await db.refresh(company)
+    assert company.funding_round_count == 2
+
+
+async def test_reconcile_matching_type_and_date_still_merges(db: AsyncSession) -> None:
+    """A pair of extractions that share a non-None round_type AND a date within
+    the proximity window must still merge into a single row (normal path
+    unaffected by the None+None guard).
+    """
+    company = _make_quality_company("Typed Co", "typed-co")
+    db.add(company)
+    await db.flush()
+
+    first = FundingExtraction(
+        is_funding_announcement=True,
+        round_type="Series A",
+        announced_date=date(2026, 3, 1),
+        confidence="medium",
+    )
+    second = FundingExtraction(
+        is_funding_announcement=True,
+        round_type="Series A",
+        announced_date=date(2026, 3, 15),  # within 60-day window
+        amount_raised_usd=5_000_000,
+        confidence="high",
+    )
+
+    _, created1 = await reconcile_funding_round(
+        db,
+        company_id=company.id,
+        extraction=first,
+        primary_news_url="https://example.com/series-a-1",
+    )
+    assert created1 is True
+
+    row2, created2 = await reconcile_funding_round(
+        db,
+        company_id=company.id,
+        extraction=second,
+        primary_news_url="https://example.com/series-a-2",
+    )
+    assert created2 is False  # matched and merged
+    assert row2.amount_raised == 5_000_000  # null-fill from second extraction
+
+    result = await db.execute(
+        select(FundingRound).where(FundingRound.company_id == company.id)
+    )
+    rows = result.scalars().all()
+    assert len(rows) == 1, "matching type+date pair must reconcile to a single row"
+
+    await db.refresh(company)
+    assert company.funding_round_count == 1
+
+
 async def test_merge_companies_refreshes_survivor_count(db: AsyncSession) -> None:
     survivor = _make_quality_company("Survivor Co", "survivor-co")
     loser = _make_quality_company("Loser Co", "loser-co")

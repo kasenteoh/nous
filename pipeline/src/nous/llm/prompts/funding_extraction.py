@@ -71,7 +71,10 @@ class FundingExtraction(BaseModel):
     announced_date: date | None = Field(
         default=None,
         description=(
-            "The date the round was publicly announced. Null if unclear."
+            "The date the round was publicly announced. Return ONLY when the "
+            "article gives a SPECIFIC day (e.g. 'March 15, 2024'). If only a "
+            "month or year is known, return null — do NOT guess or default to "
+            "the 1st."
         ),
     )
     lead_investors: list[str] = Field(
@@ -148,7 +151,9 @@ Return JSON matching the schema. Rules:
   number (e.g. "according to TechCrunch", "sources told The Information"),
   capture it as a short string like "TechCrunch, March 2026". Return null if
   no source is named alongside the valuation — never invent.
-- announced_date is the date the round was publicly announced; null if unclear.
+- announced_date: return ONLY when the article gives a SPECIFIC day (e.g.
+  "March 15, 2024"). If only a month or year is known, return null — do NOT
+  guess or default to the 1st of the month/year.
 - lead_investors: only firms the article identifies as leading. Other participants
   go in other_investors.
 - confidence: 'high' if amount + lead are both stated explicitly; 'medium' if
@@ -204,6 +209,8 @@ Return JSON matching the schema. Rules:
 - amount_raised_usd is in raw USD (e.g. 50000000 for "$50M").
 - If MULTIPLE funding events or dates appear on the page, report only the MOST
   RECENT one — use the latest date you can find as announced_date.
+- announced_date: return ONLY when the page gives a SPECIFIC day. If only a
+  month or year is known, return null — do NOT guess or default to the 1st.
 - valuation_source: set to "Company website" followed by the latest relevant
   date if one is shown (e.g. "Company website, March 2026"). Never invent a
   third-party publication.

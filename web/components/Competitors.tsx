@@ -9,8 +9,19 @@ interface Props {
   competitors: CompetitorWithResolved[];
 }
 
+// LLM scratch-notes occasionally leak into a competitor's stored rationale
+// (e.g. "Included temporarily for evaluation but should be dropped."). Drop any
+// such entry so internal model reasoning never reaches a customer. This is a
+// display-side guard; the durable fix is validating these out in the pipeline.
+const META_LEAK =
+  /should be dropped|for evaluation|temporar|placeholder|do not (include|display|show)|not a (real )?competitor/i;
+
 export function Competitors({ competitors }: Props) {
-  if (competitors.length === 0) {
+  const shown = competitors.filter(
+    (c) =>
+      !META_LEAK.test(c.reasoning ?? "") && !META_LEAK.test(c.description ?? ""),
+  );
+  if (shown.length === 0) {
     // Section omitted entirely when there is nothing to show — same convention
     // as the FundingHistory empty state and spec §11 (unknown = hidden).
     return null;
@@ -21,7 +32,7 @@ export function Competitors({ competitors }: Props) {
       <h2 className="text-lg font-semibold text-ink mb-4">Competitors</h2>
 
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-        {competitors.map((c) => (
+        {shown.map((c) => (
           <article
             key={c.id}
             className="rounded-lg border border-edge p-4"

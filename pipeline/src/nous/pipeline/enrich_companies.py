@@ -14,6 +14,7 @@ from __future__ import annotations
 import logging
 import re
 from datetime import UTC, datetime, timedelta
+from urllib.parse import urlparse
 
 from pydantic import BaseModel
 from sqlalchemy import ColumnElement, delete, exists, func, or_, select
@@ -31,6 +32,7 @@ from nous.llm.client import (
     complete_json,
 )
 from nous.llm.prompts.company_description import CompanyDescription, build_prompt
+from nous.util.industry import normalize_industry
 from nous.util.text import extract_visible_text, truncate_to_chars
 
 logger = logging.getLogger(__name__)
@@ -43,6 +45,117 @@ def _normalize_tag(tag: str) -> str:
     """Lowercase + replace whitespace runs with hyphens."""
     tag = tag.lower().strip()
     return re.sub(r"\s+", "-", tag)
+
+
+# ---------------------------------------------------------------------------
+# Deterministic ccTLD → ISO-3166-alpha2 country inference
+# ---------------------------------------------------------------------------
+
+# Maps the public-facing ccTLD suffix (after the last dot, lower-cased) to a
+# 2-letter ISO country code.  Only unambiguous, country-specific TLDs are here;
+# generic TLDs (.com, .io, .co, .ai, .tech, …) are excluded because they carry
+# no reliable geographic signal (most US startups use .com; many non-US ones
+# also do).
+#
+# Compound ccTLDs (e.g. .co.uk) are matched by their combined suffix, longest
+# match first.
+_CCTLD_MAP: dict[str, str] = {
+    # British Isles
+    "co.uk": "GB",
+    "org.uk": "GB",
+    "me.uk": "GB",
+    "uk": "GB",
+    # India
+    "co.in": "IN",
+    "in": "IN",
+    # Germany
+    "de": "DE",
+    # France
+    "fr": "FR",
+    # Canada
+    "ca": "CA",
+    # Australia
+    "com.au": "AU",
+    "net.au": "AU",
+    "au": "AU",
+    # Brazil
+    "com.br": "BR",
+    "br": "BR",
+    # Netherlands
+    "nl": "NL",
+    # Sweden
+    "se": "SE",
+    # Norway
+    "no": "NO",
+    # Denmark
+    "dk": "DK",
+    # Finland
+    "fi": "FI",
+    # Singapore
+    "com.sg": "SG",
+    "sg": "SG",
+    # Japan
+    "co.jp": "JP",
+    "jp": "JP",
+    # South Korea
+    "co.kr": "KR",
+    "kr": "KR",
+    # Israel
+    "co.il": "IL",
+    "il": "IL",
+    # Spain
+    "es": "ES",
+    # Italy
+    "it": "IT",
+    # New Zealand
+    "co.nz": "NZ",
+    "nz": "NZ",
+    # Switzerland
+    "ch": "CH",
+    # Belgium
+    "be": "BE",
+    # Poland
+    "pl": "PL",
+    # Portugal
+    "pt": "PT",
+    # Mexico
+    "com.mx": "MX",
+    "mx": "MX",
+    # China
+    "cn": "CN",
+}
+
+
+def _infer_country_from_url(url: str | None) -> str | None:
+    """Return a 2-letter ISO country code inferred from the website ccTLD, or
+    None when the TLD carries no reliable geographic signal.
+
+    Tries compound suffixes (e.g. "co.uk") before single-label ones so a site
+    like ``example.co.uk`` maps to GB rather than getting no match.
+
+    This is a cheap, deterministic pre-signal used ONLY when the LLM returns
+    no explicit country.  It is intentionally conservative — generic TLDs
+    (.com, .io, .co, .ai, etc.) return None rather than guessing US.
+    """
+    if not url:
+        return None
+    try:
+        host = urlparse(url).hostname or ""
+    except Exception:
+        return None
+    host = host.lower().rstrip(".")
+    # Strip the "www." prefix so "www.example.co.uk" → "example.co.uk".
+    if host.startswith("www."):
+        host = host[4:]
+    # Build the dot-separated parts; try longest suffix first.
+    parts = host.split(".")
+    for n in (3, 2, 1):
+        if len(parts) < n + 1:
+            continue
+        suffix = ".".join(parts[-n:])
+        if suffix in _CCTLD_MAP:
+            return _CCTLD_MAP[suffix]
+    return None
 
 
 class EnrichSummary(BaseModel):
@@ -217,9 +330,12 @@ async def run_enrich_companies(
         if description.hq_state and not company.hq_state:
             company.hq_state = description.hq_state
         if description.industry and not company.industry_group:
-            company.industry_group = description.industry
-        if (company.hq_city or company.hq_state) and not company.hq_country:
-            company.hq_country = "US"
+            company.industry_group = normalize_industry(description.industry)
+        elif company.industry_group:
+            # Canonicalize an existing value on re-enrichment too, so the
+            # historical 264-value industry sprawl (M1) heals over cron runs —
+            # a pure string op, no extra LLM cost.
+            company.industry_group = normalize_industry(company.industry_group)
 
         # Eligibility judgment (spec 2026-06-12). Runs only on website_state
         # == "ok" — a parked/unrelated page supports no judgment. Unknown
@@ -228,17 +344,37 @@ async def run_enrich_companies(
         company.eligibility_checked_at = now
         if description.founded_year and not company.year_incorporated:
             company.year_incorporated = description.founded_year
+
+        # Country resolution — three-tier, conservative:
+        #   1. LLM explicit statement (highest confidence).
+        #   2. ccTLD of the company website (deterministic, no cost).
+        #   3. US state/city present → infer US.
+        # Only set US when there is positive evidence; leave NULL otherwise so
+        # the non_us exclusion can fire on a subsequent enrichment cycle once
+        # more evidence is available.
         llm_country = (description.hq_country or "").strip().upper() or None
         if llm_country:
             company.hq_country = llm_country
+        elif not company.hq_country:
+            # Try ccTLD as a cheap, zero-cost signal.
+            cctld_country = _infer_country_from_url(company.website)
+            if cctld_country:
+                company.hq_country = cctld_country
+            elif company.hq_state or company.hq_city:
+                # A US state or city from the LLM is strong enough US evidence.
+                company.hq_country = "US"
+
         if description.is_startup is False:
             company.exclusion_reason = "not_a_startup"
             company.exclusion_detail = description.not_startup_reason
             company.excluded_at = now
             summary.companies_excluded += 1
-        elif llm_country is not None and llm_country != "US":
+        elif company.hq_country is not None and company.hq_country != "US":
             company.exclusion_reason = "non_us"
-            company.exclusion_detail = f"website states HQ country {llm_country}"
+            company.exclusion_detail = (
+                f"HQ country inferred as {company.hq_country}"
+                + (f" (LLM: {llm_country})" if llm_country else " (ccTLD)")
+            )
             company.excluded_at = now
             summary.companies_excluded += 1
 

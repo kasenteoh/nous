@@ -29,6 +29,7 @@ from sqlalchemy.orm.exc import StaleDataError
 from nous.db.models import Company
 from nous.sources.homepage import HomepageClient, resolve_homepage
 from nous.util.slugify import slugify
+from nous.util.url import is_storable_website
 
 logger = logging.getLogger(__name__)
 
@@ -170,8 +171,11 @@ async def run_resolve_homepages(
             now = datetime.now(tz=UTC)
             if outcome.resolved is not None:
                 if company.website != outcome.resolved:
-                    company.website = outcome.resolved
-                    summary.websites_resolved += 1
+                    if is_storable_website(outcome.resolved):
+                        company.website = outcome.resolved
+                        summary.websites_resolved += 1
+                    # else: resolve_homepage only ever returns http(s) URLs, so a
+                    # non-storable value here is unreachable; never persist it.
                 else:
                     # website was already set to this URL
                     summary.websites_unchanged += 1

@@ -21,11 +21,13 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
     return { title: "Investor not found" };
   }
 
-  const count = investor.portfolio.length;
+  // Use portfolioCount (the denormalized total from migration 0025) for the
+  // SEO description so it matches the /investors index count.
+  const count = investor.portfolioCount;
   const description =
     investor.description ??
     (count > 0
-      ? `${investor.name} has ${count} ${count === 1 ? "company" : "companies"} indexed on nous, with funding history and recent activity.`
+      ? `${investor.name} backs ${count} ${count === 1 ? "company" : "companies"} indexed on nous, with funding history and recent activity.`
       : `${investor.name} — investor profile, portfolio, and funding activity on nous.`);
 
   return {
@@ -55,7 +57,7 @@ export default async function InvestorPage({ params }: Props) {
     notFound();
   }
 
-  const { name, type, description, website, portfolio, rounds } = investor;
+  const { name, type, description, website, portfolio, portfolioCount, rounds } = investor;
 
   // Recent activity = the most recent rounds with a known date (the rounds list
   // is already sorted newest-first, nulls last).
@@ -98,9 +100,13 @@ export default async function InvestorPage({ params }: Props) {
           )}
           <div>
             <dt className="sr-only">Portfolio size</dt>
+            {/* portfolioCount uses the denormalized column from migration 0025:
+                counts companies via EITHER company_investors OR funding rounds,
+                matching the /investors index. The portfolio cards below now show
+                that same union (company-level links + funded companies). */}
             <dd>
-              {portfolio.length.toLocaleString("en-US")}{" "}
-              {portfolio.length === 1 ? "company" : "companies"} indexed
+              Backs {portfolioCount.toLocaleString("en-US")}{" "}
+              {portfolioCount === 1 ? "company" : "companies"}
             </dd>
           </div>
           {leadCount > 0 && (

@@ -71,7 +71,11 @@ class Company(Base):
     # Location
     hq_city: Mapped[str | None]
     hq_state: Mapped[str | None]
-    hq_country: Mapped[str | None] = mapped_column(default="US")
+    # hq_country: NULL until evidenced. Do NOT set a Python-level default here;
+    # the old default="US" caused every auto-created company to read as US even
+    # when the company is foreign. Country is inferred from the website ccTLD or
+    # an explicit LLM statement during enrich-companies / judge-eligibility.
+    hq_country: Mapped[str | None]
 
     # Company metadata
     year_incorporated: Mapped[int | None]
@@ -310,6 +314,14 @@ class Investor(Base):
     type: Mapped[str] = mapped_column(String, nullable=False, server_default="unknown")
     description: Mapped[str | None]
     website: Mapped[str | None]
+    # Denormalized count of distinct non-excluded companies this investor backs,
+    # via EITHER company_investors OR funding_round_investors → funding_rounds.
+    # Maintained by refresh-investor-counts (called at the end of
+    # refresh-vc-portfolios and extract-funding) and backfilled in migration
+    # 0025. Indexed so the web investor index can ORDER BY portfolio_count DESC.
+    portfolio_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default="0", index=True
+    )
 
 
 class FundingRoundInvestor(Base):

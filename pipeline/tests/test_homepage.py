@@ -20,6 +20,7 @@ from nous.sources.homepage import (
     _is_retryable,
     resolve_homepage,
 )
+from nous.util.ssrf import BlockedAddressError
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -393,6 +394,35 @@ async def test_resolve_homepage_returns_none_when_all_404() -> None:
     async with client:
         _inject_transport(client, transport)
         result = await resolve_homepage(client, "ghostco", "Ghost Co")
+
+    assert result is None
+
+
+class BlockingTransport(httpx.AsyncBaseTransport):
+    """Transport that raises BlockedAddressError for every request.
+
+    Mirrors the production SsrfGuardedAsyncTransport's behaviour against a host
+    that resolves to (or is) an internal/unresolvable address: every hop —
+    including the robots.txt probe — is rejected before a socket opens.
+    """
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        raise BlockedAddressError(f"blocked: {request.url}")
+
+
+async def test_resolve_homepage_skips_blocked_candidates() -> None:
+    """Every candidate raises BlockedAddressError → all skipped, return None.
+
+    Regression guard: a blocked/unresolvable candidate must be treated like a
+    connection error (skip and try the next), not bubble up and error the whole
+    company.
+    """
+    transport = BlockingTransport()
+
+    client = HomepageClient(user_agent=USER_AGENT)
+    async with client:
+        _inject_transport(client, transport)
+        result = await resolve_homepage(client, "acme", "Acme Corp")
 
     assert result is None
 

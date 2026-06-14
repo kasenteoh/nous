@@ -29,8 +29,10 @@ from nous.db.upsert import (
     link_company_investor,
     upsert_investor,
 )
+from nous.pipeline.refresh_investor_counts import refresh_investor_counts
 from nous.sources.homepage import HomepageClient
 from nous.sources.vc_portfolios import ADAPTERS, FIRM_DISPLAY_NAMES, PortfolioEntry
+from nous.util.url import is_storable_website
 
 logger = logging.getLogger(__name__)
 
@@ -102,11 +104,19 @@ async def run_refresh_vc_portfolios(
 
         for entry in entries:
             summary.entries_seen += 1
+            # is_storable_website already rejects None/blank; the extra truthy
+            # check on entry.website lets the type checker narrow str | None to
+            # str so .strip() is well-typed (semantics are unchanged).
+            storable_website = (
+                entry.website.strip()
+                if entry.website and is_storable_website(entry.website)
+                else None
+            )
             try:
                 company, created = await auto_create_company(
                     session,
                     name=entry.name,
-                    website=entry.website,
+                    website=storable_website,
                     discovered_via="vc_portfolio",
                     similarity_threshold=similarity_threshold,
                 )
@@ -121,6 +131,11 @@ async def run_refresh_vc_portfolios(
                 # the company and is safe to re-run.
                 display_name = FIRM_DISPLAY_NAMES.get(entry.firm, entry.firm)
                 investor, _ = await upsert_investor(session, name=display_name)
+                # Known VC portfolio firms are always institutional investors.
+                # Set the type on insert AND on re-run (idempotent update).
+                if investor.type != "institutional":
+                    investor.type = "institutional"
+                    session.add(investor)
                 await link_company_investor(
                     session,
                     company_id=company.id,
@@ -140,5 +155,11 @@ async def run_refresh_vc_portfolios(
                 # in-flight transaction so subsequent entries get a clean
                 # session, then move on.
                 await session.rollback()
+
+    # Recompute portfolio_count for all investors now that VC portfolio links
+    # may have changed. Committed separately from the per-entry commits above
+    # so a count failure doesn't roll back the discovery work.
+    await refresh_investor_counts(session)
+    await session.commit()
 
     return summary
