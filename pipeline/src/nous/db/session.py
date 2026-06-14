@@ -64,6 +64,17 @@ def _make_session_factory() -> async_sessionmaker[AsyncSession]:
     return async_sessionmaker(bind=get_engine(), expire_on_commit=False)
 
 
+def get_session_factory() -> async_sessionmaker[AsyncSession]:
+    """Public session factory bound to the lazy engine.
+
+    Stages that need a FRESH session per work item — so each item starts on its
+    own freshly pre-pinged connection and one wedged connection cannot stall the
+    rest — take this factory rather than a single shared session (see
+    judge-eligibility).
+    """
+    return _make_session_factory()
+
+
 class _LazySessionMaker:
     """Thin proxy that creates the real async_sessionmaker on first use.
 

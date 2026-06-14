@@ -17,7 +17,7 @@ from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from nous.db.models import Company, RawPage
 from nous.db.upsert import auto_create_company
@@ -267,39 +267,48 @@ async def test_enrich_infers_us_when_state_set(
 
 
 async def test_judge_eligibility_cctld_non_us(
-    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+    committed_session_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """judge-eligibility also applies ccTLD inference: .co.uk → GB → non_us."""
-    company = Company(
-        name="UK SaaS Ltd",
-        slug="uk-saas-judge",
-        normalized_name="uk saas ltd",
-        website="https://uksaas.co.uk",
-        description_short="A UK-based SaaS company.",
-        description_long="Long text.",
-    )
-    db.add(company)
-    await db.flush()
-    db.add(
-        RawPage(
-            company_id=company.id,
-            url="https://uksaas.co.uk/",
-            content="We provide HR software to businesses across the United Kingdom. "
-            "Our platform is trusted by thousands of companies. " * 10,
+    """judge-eligibility also applies ccTLD inference: .co.uk → GB → non_us.
+
+    Uses committed_session_factory because run_judge_eligibility now opens a
+    fresh session per company (per-company-session resilience, PR #80), so the
+    fixtures must be committed for the stage's separate sessions to see them.
+    """
+    async with committed_session_factory() as s1:
+        company = Company(
+            name="UK SaaS Ltd",
+            slug="uk-saas-judge",
+            normalized_name="uk saas ltd",
+            website="https://uksaas.co.uk",
+            description_short="A UK-based SaaS company.",
+            description_long="Long text.",
         )
-    )
-    await db.flush()
-    await db.commit()
+        s1.add(company)
+        await s1.flush()
+        s1.add(
+            RawPage(
+                company_id=company.id,
+                url="https://uksaas.co.uk/",
+                content="We provide HR software to businesses across the United Kingdom. "
+                "Our platform is trusted by thousands of companies. " * 10,
+            )
+        )
+        await s1.commit()
+        company_id = company.id
 
     monkeypatch.setattr(
         "nous.pipeline.judge_eligibility.complete_json",
         AsyncMock(return_value=EligibilityJudgment(is_startup=True, hq_country=None)),
     )
 
-    summary = await run_judge_eligibility(db)
+    summary = await run_judge_eligibility(committed_session_factory)
     assert summary.companies_excluded == 1
 
-    await db.refresh(company)
-    assert company.hq_country == "GB"
-    assert company.exclusion_reason == "non_us"
-    assert "ccTLD" in (company.exclusion_detail or "")
+    async with committed_session_factory() as s3:
+        refetched = await s3.get(Company, company_id)
+    assert refetched is not None
+    assert refetched.hq_country == "GB"
+    assert refetched.exclusion_reason == "non_us"
+    assert "ccTLD" in (refetched.exclusion_detail or "")
