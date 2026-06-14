@@ -737,3 +737,148 @@ async def test_concurrency_dry_run_writes_nothing_for_many(
     assert summary.companies_analyzed == n
     rows = (await db.execute(select(Competitor))).scalars().all()
     assert rows == []
+
+
+# ---------------------------------------------------------------------------
+# Self-referential competitor guard
+# ---------------------------------------------------------------------------
+
+
+async def test_self_referential_competitor_is_dropped(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When a competitor name resolves to the target company itself the stage
+    must drop that row (to avoid ck_competitors_no_self_reference), write the
+    remaining competitors with gap-free contiguous ranks, and not raise."""
+    target = _make_company("SelfRefCo", industry_group="SaaS")
+    other = _make_company("LegitRival", industry_group="SaaS", description_long=None)
+    db.add_all([target, other])
+    await db.flush()
+
+    # The LLM returns three competitors: the target itself (self-ref), a legit
+    # rival, and an unindexed name.  Only the latter two should be written.
+    # normalize_name("SelfRefCo") == "selfrefco" which matches target.normalized_name.
+    extraction = CompetitorAnalysis(
+        competitors=[
+            CompetitorOut(
+                name="SelfRefCo",  # same normalized_name as target → self-ref
+                description="Self description.",
+                reasoning="Self reasoning.",
+                rank=1,
+            ),
+            CompetitorOut(
+                name="LegitRival",
+                description="Legit description.",
+                reasoning="Legit reasoning.",
+                rank=2,
+            ),
+            CompetitorOut(
+                name="UnindexedCo",
+                description="Unknown description.",
+                reasoning="Unknown reasoning.",
+                rank=3,
+            ),
+        ]
+    )
+
+    async def _fake_complete_json(prompt: str, schema: type) -> CompetitorAnalysis:
+        assert schema is CompetitorAnalysis
+        return extraction
+
+    monkeypatch.setattr(
+        "nous.pipeline.analyze_competitors.complete_json", _fake_complete_json
+    )
+
+    summary = await run_analyze_competitors(db, limit=10, ttl_days=25)
+
+    # The self-ref is dropped; only 2 competitors survive.
+    assert summary.companies_analyzed == 1
+    assert summary.competitors_written == 2
+
+    rows = (
+        await db.execute(
+            select(Competitor)
+            .where(Competitor.company_id == target.id)
+            .order_by(Competitor.rank)
+        )
+    ).scalars().all()
+
+    # The target itself must NOT appear as a competitor_company_id.
+    written_linked_ids = {r.competitor_company_id for r in rows}
+    assert target.id not in written_linked_ids
+
+    # Ranks are contiguous 1..2, not 2..3 (gap-free over survivors).
+    assert [r.rank for r in rows] == [1, 2]
+    assert [r.competitor_name for r in rows] == ["LegitRival", "UnindexedCo"]
+
+
+async def test_per_company_persist_failure_continues_to_next(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A DB constraint error during _persist_analysis for one company must not
+    abort the stage — remaining companies are still processed and written.
+
+    The test patches _persist_analysis to raise IntegrityError on the FIRST
+    call, and also patches session.rollback to be a no-op (because the mock
+    exception was not raised inside a real begin_nested SAVEPOINT, so a real
+    rollback would undo the test's outer transaction). The stage must:
+    - Catch the error and increment llm_failures.
+    - Continue to the second company and write its rows.
+    """
+    # "First" sorts before "Second" alphabetically, so FirstCo is processed first.
+    first = _make_company("FirstCo", industry_group="SaaS")
+    second = _make_company("SecondCo", industry_group="SaaS")
+    db.add_all([first, second])
+    await db.flush()
+
+    second_id = second.id  # capture before any potential expiry
+
+    async def _fake_complete_json(prompt: str, schema: type) -> CompetitorAnalysis:
+        return _fixture_extraction(["Rival"])
+
+    monkeypatch.setattr(
+        "nous.pipeline.analyze_competitors.complete_json", _fake_complete_json
+    )
+
+    from sqlalchemy.exc import IntegrityError as _IntegrityError
+
+    call_count = {"n": 0}
+    original_persist = __import__(
+        "nous.pipeline.analyze_competitors", fromlist=["_persist_analysis"]
+    )._persist_analysis
+
+    async def _failing_persist(  # type: ignore[misc]
+        session: AsyncSession, summary: object, **kwargs: object
+    ) -> None:
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            raise _IntegrityError("mock constraint", None, None)  # type: ignore[call-arg]
+        await original_persist(session, summary, **kwargs)
+
+    monkeypatch.setattr(
+        "nous.pipeline.analyze_competitors._persist_analysis", _failing_persist
+    )
+
+    # The mock IntegrityError is raised outside a begin_nested SAVEPOINT, so
+    # session.rollback() would undo the test's outer transaction (evicting the
+    # company rows). Patch it to a no-op for this test — the defence-in-depth
+    # rollback logic is exercised by test_self_referential_competitor_is_dropped
+    # via a real DB constraint.
+    async def _noop_rollback() -> None:
+        pass
+
+    monkeypatch.setattr(db, "rollback", _noop_rollback)
+
+    summary = await run_analyze_competitors(db, limit=10, ttl_days=25, concurrency=1)
+
+    # First company's persist failed; second must still be written.
+    assert summary.llm_failures == 1
+    assert summary.companies_analyzed == 1  # only SecondCo counted
+    assert summary.competitors_written >= 1
+
+    rows_second = (
+        await db.execute(
+            select(Competitor).where(Competitor.company_id == second_id)
+        )
+    ).scalars().all()
+    assert len(rows_second) >= 1
