@@ -358,6 +358,130 @@ async def test_different_round_type_creates_separate_round(
     assert len(rounds) == 2
 
 
+async def test_backfill_creates_multiple_distinct_rounds(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A long-lookback backfill feeds several historical articles for ONE
+    company — distinct round_type + announced_date years apart. extract-funding
+    must create one FundingRound PER round (none merged), and a second run must
+    create NO duplicates (Task A3 leans entirely on reconcile_funding_round's
+    key; no new dedup logic). This is the depth lever: multi-row histories."""
+    company = _make_company("TrajectoryCo")
+    db.add(company)
+    await db.flush()
+    # Three historical funding articles, each a distinct round in a distinct
+    # year — well outside the ±60-day proximity window, so they never merge.
+    db.add(
+        _make_article(
+            company.id,
+            url="https://news.example.com/seed-2022",
+            raw_content="TrajectoryCo raised $3M Seed in 2022. " * 20,
+            published=date(2022, 6, 1),
+        )
+    )
+    db.add(
+        _make_article(
+            company.id,
+            url="https://news.example.com/series-a-2023",
+            raw_content="TrajectoryCo raised $15M Series A in 2023. " * 20,
+            published=date(2023, 6, 1),
+        )
+    )
+    db.add(
+        _make_article(
+            company.id,
+            url="https://news.example.com/series-b-2024",
+            raw_content="TrajectoryCo raised $40M Series B in 2024. " * 20,
+            published=date(2024, 6, 1),
+        )
+    )
+    await db.flush()
+    await db.commit()
+
+    # Route the extraction by the round named in the article body.
+    def _extraction_for(text: str) -> FundingExtraction:
+        if "Seed" in text:
+            return _make_extraction(
+                round_type="Seed",
+                amount=Decimal("3000000.00"),
+                valuation=None,
+                announced=date(2022, 6, 1),
+                leads=["Acme Seed Fund"],
+                others=[],
+            )
+        if "Series A" in text:
+            return _make_extraction(
+                round_type="Series A",
+                amount=Decimal("15000000.00"),
+                valuation=None,
+                announced=date(2023, 6, 1),
+                leads=["Acme Ventures"],
+                others=[],
+            )
+        return _make_extraction(
+            round_type="Series B",
+            amount=Decimal("40000000.00"),
+            valuation=None,
+            announced=date(2024, 6, 1),
+            leads=["Big Growth"],
+            others=[],
+        )
+
+    async def _fake(prompt: str, schema: type) -> FundingExtraction:
+        return _extraction_for(prompt)
+
+    monkeypatch.setattr("nous.pipeline.extract_funding.complete_json", _fake)
+
+    s1 = await run_extract_funding(db, limit=10)
+    assert s1.funding_rounds_created == 3
+    assert s1.funding_rounds_merged == 0
+
+    rounds = (await db.execute(select(FundingRound))).scalars().all()
+    assert len(rounds) == 3
+    assert {r.round_type for r in rounds} == {"Seed", "Series A", "Series B"}
+    assert {r.announced_date for r in rounds} == {
+        date(2022, 6, 1),
+        date(2023, 6, 1),
+        date(2024, 6, 1),
+    }
+
+    # Idempotency: re-feeding the SAME three articles (e.g. a re-dispatched
+    # backfill, or fresh GN URLs for the same rounds) must merge into the
+    # existing rows, never duplicate.
+    db.add(
+        _make_article(
+            company.id,
+            url="https://news.example.com/seed-2022-dup",
+            raw_content="TrajectoryCo raised $3M Seed in 2022. " * 20,
+            published=date(2022, 6, 15),  # within ±60 days of the original
+        )
+    )
+    db.add(
+        _make_article(
+            company.id,
+            url="https://news.example.com/series-a-2023-dup",
+            raw_content="TrajectoryCo raised $15M Series A in 2023. " * 20,
+            published=date(2023, 6, 15),
+        )
+    )
+    db.add(
+        _make_article(
+            company.id,
+            url="https://news.example.com/series-b-2024-dup",
+            raw_content="TrajectoryCo raised $40M Series B in 2024. " * 20,
+            published=date(2024, 6, 15),
+        )
+    )
+    await db.commit()
+
+    s2 = await run_extract_funding(db, limit=10)
+    assert s2.funding_rounds_created == 0
+    assert s2.funding_rounds_merged == 3
+
+    rounds_after = (await db.execute(select(FundingRound))).scalars().all()
+    assert len(rounds_after) == 3  # still exactly three — no duplicates
+
+
 # ---------------------------------------------------------------------------
 # Investor link stickiness
 # ---------------------------------------------------------------------------

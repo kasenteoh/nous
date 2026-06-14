@@ -23,7 +23,7 @@ from datetime import UTC, datetime
 from uuid import UUID
 
 from pydantic import BaseModel
-from sqlalchemy import exists, select
+from sqlalchemy import exists, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from nous.db.models import Company, NewsArticle
@@ -170,6 +170,7 @@ async def run_ingest_news(
     include_techcrunch_broad: bool = True,
     max_companies: int | None = None,
     similarity_threshold: float = 0.85,
+    funded_or_notable_only: bool = False,
 ) -> IngestNewsSummary:
     """Fetch per-company Google News results + optional TechCrunch broad sweep.
 
@@ -182,6 +183,15 @@ async def run_ingest_news(
     7-day lookback window, so no announcement is missed while the per-day
     request count to Google News stays small and polite.
 
+    ``funded_or_notable_only=True`` narrows the per-company sweep to companies
+    worth a long-lookback historical backfill (Task A3): those with at least
+    one funding round (``funding_round_count > 0``) OR at least one existing
+    ``news_articles`` row. CTO call: with no Company-level news-volume column,
+    "already has news coverage" is the available "notable" proxy — the news
+    pipeline surfaced them, so a multi-year sweep is high-yield — and pairing
+    it with the funded set bounds the backfill's DeepSeek spend. Default False
+    keeps the standing rotation (every non-excluded company) unchanged.
+
     TC broad-tag path: fetch the TC venture feed; for each article whose
     title parses to a candidate company name, find-or-auto-create the
     company, then persist the article.
@@ -193,6 +203,13 @@ async def run_ingest_news(
         .where(Company.exclusion_reason.is_(None))
         .order_by(Company.news_checked_at.asc().nulls_first())
     )
+    if funded_or_notable_only:
+        company_stmt = company_stmt.where(
+            or_(
+                Company.funding_round_count > 0,
+                exists().where(NewsArticle.company_id == Company.id),
+            )
+        )
     if max_companies is not None:
         company_stmt = company_stmt.limit(max_companies)
     company_result = await session.execute(company_stmt)

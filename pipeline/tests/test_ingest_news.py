@@ -15,7 +15,7 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from nous.db.models import Company, NewsArticle
+from nous.db.models import Company, FundingRound, NewsArticle
 from nous.llm.prompts.news_company import HeadlineCompany
 from nous.pipeline.ingest_news import (
     _extract_company_from_tc_result,
@@ -558,6 +558,84 @@ async def test_queried_company_is_stamped_even_with_no_results(
 
     await db.refresh(company)
     assert company.news_checked_at is not None
+
+
+# ---------------------------------------------------------------------------
+# funded_or_notable_only targeting (historical backfill sweep — Task A3)
+# ---------------------------------------------------------------------------
+
+
+@pytestmark_db
+async def test_funded_or_notable_only_targets_funded_and_newsworthy(
+    db: AsyncSession,
+) -> None:
+    """``funded_or_notable_only=True`` restricts the per-company sweep to
+    companies worth a long-lookback backfill: those with at least one funding
+    round (funding_round_count > 0) OR at least one existing news_article
+    ('notable' — the news pipeline already surfaced them). A company with
+    neither is NOT queried, which bounds the backfill's DeepSeek spend (Task
+    A3). The TC broad sweep is off here so only the per-company path runs."""
+    # Funded: has a funding round (funding_round_count is the denormalized,
+    # indexed column reconcile_funding_round maintains in prod) → eligible.
+    funded = _make_company("Funded Co")
+    funded.funding_round_count = 1
+    db.add(funded)
+    await db.flush()
+    db.add(FundingRound(company_id=funded.id, round_type="Seed"))
+
+    # Notable: no round, but already has a news_article → eligible.
+    notable = _make_company("Notable Co")
+    db.add(notable)
+    await db.flush()
+    db.add(
+        NewsArticle(
+            company_id=notable.id,
+            url="https://news.example.com/notable-prior",
+            title="Notable Co in the news",
+            source="example.com",
+            published_date=date(2025, 1, 1),
+            raw_content="prior coverage",
+        )
+    )
+
+    # Quiet: no round, no news → excluded from the backfill sweep.
+    quiet = _make_company("Quiet Co")
+    db.add(quiet)
+    await db.flush()
+    await db.commit()
+
+    client = _QueryLoggingNewsClient()
+    await run_ingest_news(
+        db,
+        client,  # type: ignore[arg-type]
+        include_techcrunch_broad=False,
+        funded_or_notable_only=True,
+    )
+
+    assert '"Funded Co" funding' in client.queries
+    assert '"Notable Co" funding' in client.queries
+    assert '"Quiet Co" funding' not in client.queries
+
+
+@pytestmark_db
+async def test_funded_or_notable_only_false_queries_all(
+    db: AsyncSession,
+) -> None:
+    """The default (funded_or_notable_only=False) keeps the standing behavior:
+    every non-excluded company is in the rotation, funded or not."""
+    quiet = _make_company("Plain Quiet Co")
+    db.add(quiet)
+    await db.flush()
+    await db.commit()
+
+    client = _QueryLoggingNewsClient()
+    await run_ingest_news(
+        db,
+        client,  # type: ignore[arg-type]
+        include_techcrunch_broad=False,
+    )
+
+    assert '"Plain Quiet Co" funding' in client.queries
 
 
 # ---------------------------------------------------------------------------
