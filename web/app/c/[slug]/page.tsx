@@ -10,7 +10,7 @@ import {
   getInvestorNameToSlugMap,
   getRelatedCompanies,
 } from "@/lib/queries";
-import type { CompanyRow } from "@/lib/types";
+import type { CompanyRow, FundingRoundWithInvestors } from "@/lib/types";
 import {
   formatDate,
   formatEmployeeRange,
@@ -26,6 +26,7 @@ import { Investors } from "@/components/Investors";
 import { Competitors } from "@/components/Competitors";
 import { RelatedCompanies } from "@/components/RelatedCompanies";
 import { News } from "@/components/News";
+import { Sources } from "@/components/Sources";
 
 // At or above this many consecutive failed homepage scrapes, the detail page
 // shows a muted "possibly inactive" rider. Deliberately a low-confidence
@@ -133,6 +134,44 @@ function websiteHostname(url: string | null | undefined): string | null {
   }
 }
 
+/** True when the value parses as an http(s) URL. The `valuation_source` column
+ * sometimes holds a publisher NAME (e.g. "TechCrunch") rather than a link, so
+ * citation-building uses this to decide whether to cite it directly or fall
+ * back to the round's article URL. */
+function isHttpUrl(value: string | null | undefined): value is string {
+  if (!value) return false;
+  try {
+    const u = new URL(value);
+    return u.protocol === "http:" || u.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+/** Human-readable display label for a non-active company status, mirroring the
+ * StatusBadge labels. Falls back to the raw value for unknown statuses. */
+function statusLabel(status: string): string {
+  const labels: Record<string, string> = {
+    acquired: "Acquired",
+    shut_down: "Shut down",
+    ipo: "IPO",
+  };
+  return labels[status] ?? status;
+}
+
+/** Sources-list label for a funding round: "<round type> · <amount>", degrading
+ * gracefully when either piece is missing (round type alone, amount alone, or a
+ * generic "Funding round" when both are absent). The cited host is appended by
+ * the Sources component, so this is the fact description only. */
+function fundingRoundLabel(round: FundingRoundWithInvestors): string {
+  const type = round.round_type?.trim() || null;
+  const amount = round.amount_raised != null ? formatUsd(round.amount_raised) : null;
+  if (type && amount) return `${type} · ${amount}`;
+  if (type) return type;
+  if (amount) return `Funding · ${amount}`;
+  return "Funding round";
+}
+
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default async function CompanyPage({ params }: Props) {
@@ -162,9 +201,8 @@ export default async function CompanyPage({ params }: Props) {
   // rounds; stated = an article-stated cumulative total recorded by the
   // pipeline (news discovery never backfills historical rounds, so the sum
   // undercounts companies with a pre-nous funding history). The tile shows
-  // max(stated, computed); when the stated figure is what's shown (it wins
-  // ties), it is attributed to its source article. Falls back to "—" when
-  // neither exists (never fabricate).
+  // max(stated, computed). Falls back to "—" when neither exists (never
+  // fabricate).
   // The total_raised_* fields may be undefined (prod rows predate migration
   // 0021 until it runs there; select("*") omits unknown columns) — normalize
   // through `?? null` / Number() so the computed path renders unharmed.
@@ -177,22 +215,83 @@ export default async function CompanyPage({ params }: Props) {
   const statedWins = statedTotal != null && statedTotal >= computedTotal;
   const displayedTotal = statedWins ? statedTotal : computedTotal;
   const hasTotalRaised = hasComputedTotal || statedTotal != null;
-  const statedSourceUrl = company.total_raised_source_url ?? null;
-  const statedHostname = websiteHostname(statedSourceUrl);
-  // Is the total-raised figure sourced from the company's own site (self-reported)?
-  // Compare normalized hostnames the same way FundingHistory.tsx does.
-  const statedSourceHost = statedHostname; // already www-stripped via websiteHostname
-  const companyHost = websiteHostname(company.website);
-  const totalRaisedIsOwnSite =
-    statedSourceHost !== null &&
-    companyHost !== null &&
-    statedSourceHost === companyHost;
   const statedAsOf = company.total_raised_as_of ?? null;
-  const distinctNewsSources = new Set(
-    fundingRounds
-      .map((r) => r.primary_news_url)
-      .filter((u): u is string => u !== null),
-  );
+  // Citation for the displayed total: the stated figure's source article when
+  // that figure wins; otherwise the company's own site is the citation for the
+  // summed-from-rounds total (a self-reported aggregate). Per-round article
+  // URLs already appear as their own Sources entries. Per the locked rule, a
+  // self-reported figure cites the company's website (fallback when the stated
+  // source URL is null).
+  const totalRaisedSourceUrl = statedWins
+    ? (company.total_raised_source_url ?? company.website ?? null)
+    : (company.website ?? null);
+
+  // ── D2: latest-valuation tile ──────────────────────────────────────────────
+  // The most recent round (fundingRounds is already sorted announced_date desc,
+  // nulls last) that carries a post-money valuation. The tile is hidden when no
+  // round has one; its source is folded into the Sources section below.
+  const valuationRound =
+    fundingRounds.find((r) => r.valuation_post_money != null) ?? null;
+
+  // ── Sources (D1): one labeled citation per fact shown on the page ──────────
+  // Order follows the page's prominence: the header tiles (total raised, then
+  // the latest valuation) first, then each funding-history row (its article and
+  // its valuation), then leadership, then company status. The Sources component
+  // de-dupes identical URLs (first label wins, so a header-fact label survives
+  // when several facts share one article) and drops unparseable ones. Every
+  // rendered fact's provenance lives here — the cited host stands alone (no
+  // "self-reported" wording); a company-domain URL signals a self-reported
+  // figure on its own. A funding round's valuation_source is sometimes a
+  // publisher NAME ("TechCrunch") rather than a link, so we cite it only when
+  // it parses as a URL and otherwise fall back to the round's article URL —
+  // the article that reported the round also reported its valuation.
+  const citations: { label: string; url: string }[] = [];
+
+  if (hasTotalRaised && totalRaisedSourceUrl) {
+    citations.push({
+      label: `Total raised · ${formatUsd(displayedTotal)}`,
+      url: totalRaisedSourceUrl,
+    });
+  }
+  if (valuationRound?.valuation_post_money != null) {
+    const valUrl = isHttpUrl(valuationRound.valuation_source)
+      ? valuationRound.valuation_source
+      : (valuationRound.primary_news_url ?? null);
+    if (valUrl) {
+      citations.push({
+        label: `Latest valuation · ${formatUsd(valuationRound.valuation_post_money)} post-money`,
+        url: valUrl,
+      });
+    }
+  }
+  for (const round of fundingRounds) {
+    const roundLabel = fundingRoundLabel(round);
+    if (round.primary_news_url) {
+      citations.push({ label: roundLabel, url: round.primary_news_url });
+    }
+    if (round.valuation_post_money != null) {
+      const valUrl = isHttpUrl(round.valuation_source)
+        ? round.valuation_source
+        : (round.primary_news_url ?? null);
+      if (valUrl) {
+        citations.push({
+          label: `${roundLabel} · ${formatUsd(round.valuation_post_money)} valuation`,
+          url: valUrl,
+        });
+      }
+    }
+  }
+  // Leadership: every person carries the same website source_url; cite once.
+  const teamSourceUrl = people.find((p) => p.source_url)?.source_url ?? null;
+  if (teamSourceUrl) {
+    citations.push({ label: "Leadership", url: teamSourceUrl });
+  }
+  if (company.status !== "active" && company.status_source_url) {
+    citations.push({
+      label: `Status · ${statusLabel(company.status)}`,
+      url: company.status_source_url,
+    });
+  }
 
   // Per-section freshness riders: the latest dated funding round / news article.
   // Both lists arrive sorted newest-first with nulls last (see getCompanyBySlug),
@@ -327,9 +426,10 @@ export default async function CompanyPage({ params }: Props) {
         )}
 
         {/* M3 key-facts strip — anchors the page with a tangible "total raised"
-            number sourced from public news, attributed inline. Per spec §11,
-            unattributed numbers are forbidden; "from N news sources" makes the
-            attribution visible at a glance. */}
+            number and, when known, the latest post-money valuation. Provenance
+            for both lives in the consolidated Sources section at the bottom
+            (spec §11: every fact carries a visible source); only the "as of"
+            freshness riders stay inline here. */}
         <dl className="mt-6 flex flex-wrap gap-x-10 gap-y-3 text-sm">
           <div>
             <dt className="text-xs font-medium uppercase tracking-wider text-ink-muted">
@@ -340,46 +440,36 @@ export default async function CompanyPage({ params }: Props) {
             >
               {hasTotalRaised ? formatUsd(displayedTotal) : "—"}
             </dd>
-            {statedWins ? (
-              // The displayed figure is the cumulative total from a source URL.
-              // If that URL is the company's own site, label "Company-stated";
-              // otherwise link out to the news article ("via {host}"). Every
-              // rendered number must have a visible source (spec §11).
+            {/* "As of" freshness rider (not a citation) — kept inline. */}
+            {hasTotalRaised && statedAsOf && (
               <dd className="text-xs text-ink-muted">
-                {statedSourceUrl && statedHostname ? (
-                  totalRaisedIsOwnSite ? (
-                    <span title="Figure reported on the company's own website">
-                      Company-stated
-                    </span>
-                  ) : (
-                    <>
-                      via{" "}
-                      <a
-                        href={statedSourceUrl}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="underline underline-offset-2 decoration-ink-faint hover:text-ink"
-                      >
-                        {statedHostname}
-                      </a>
-                    </>
-                  )
-                ) : (
-                  "press coverage"
-                )}
-                {statedAsOf && <> · {formatDate(statedAsOf)}</>}
+                as of {formatDate(statedAsOf)}
               </dd>
-            ) : (
-              fundingRounds.length > 0 && (
-                <dd className="text-xs text-ink-muted">
-                  from {distinctNewsSources.size}{" "}
-                  {distinctNewsSources.size === 1
-                    ? "news source"
-                    : "news sources"}
-                </dd>
-              )
             )}
           </div>
+
+          {/* D2: latest-valuation tile — most recent round carrying a
+              post-money valuation, to the right of total raised. Hidden
+              entirely when no round has a valuation; its source is in the
+              Sources section. */}
+          {valuationRound?.valuation_post_money != null && (
+            <div>
+              <dt className="text-xs font-medium uppercase tracking-wider text-ink-muted">
+                Latest valuation
+              </dt>
+              <dd className="mt-1 text-base font-semibold font-mono text-money">
+                {formatUsd(valuationRound.valuation_post_money)}
+                <span className="ml-1 font-sans text-xs font-normal text-ink-muted">
+                  post-money
+                </span>
+              </dd>
+              {valuationRound.announced_date && (
+                <dd className="text-xs text-ink-muted">
+                  as of {formatDate(valuationRound.announced_date)}
+                </dd>
+              )}
+            </div>
+          )}
         </dl>
       </header>
 
@@ -408,7 +498,29 @@ export default async function CompanyPage({ params }: Props) {
         </section>
       )}
 
-      {/* ── Category + Tags ────────────────────────────────────────────── */}
+      {/* ── Leadership / founders (from the company website) ───────────── */}
+      <Team people={people} />
+
+      {/* ── Funding history (M3) ───────────────────────────────────────── */}
+      <FundingHistory rounds={fundingRounds} asOf={latestFundingDate} />
+
+      {/* ── Investors ──────────────────────────────────────────────────── */}
+      <Investors
+        investors={investors}
+        rounds={fundingRounds}
+        nameToSlug={investorNameToSlug}
+      />
+
+      {/* ── Competitors (M4) ───────────────────────────────────────────── */}
+      <Competitors competitors={competitors} />
+
+      {/* ── Related companies (relationship graph) ─────────────────────── */}
+      <RelatedCompanies similar={similar} alsoBackedBy={alsoBackedBy} />
+
+      {/* ── News ───────────────────────────────────────────────────────── */}
+      <News news={news} asOf={latestNewsDate} />
+
+      {/* ── Category + Tags (D3: moved to just before Sources) ─────────── */}
       {(company.primary_category || (company.tags && company.tags.length > 0)) && (
         <section className="mb-10">
           {company.primary_category && (
@@ -432,31 +544,8 @@ export default async function CompanyPage({ params }: Props) {
         </section>
       )}
 
-      {/* ── Leadership / founders (from the company website) ───────────── */}
-      <Team people={people} companyName={company.name} />
-
-      {/* ── Funding history (M3) ───────────────────────────────────────── */}
-      <FundingHistory
-        rounds={fundingRounds}
-        companyWebsite={company.website}
-        asOf={latestFundingDate}
-      />
-
-      {/* ── Investors ──────────────────────────────────────────────────── */}
-      <Investors
-        investors={investors}
-        rounds={fundingRounds}
-        nameToSlug={investorNameToSlug}
-      />
-
-      {/* ── Competitors (M4) ───────────────────────────────────────────── */}
-      <Competitors competitors={competitors} />
-
-      {/* ── Related companies (relationship graph) ─────────────────────── */}
-      <RelatedCompanies similar={similar} alsoBackedBy={alsoBackedBy} />
-
-      {/* ── News ───────────────────────────────────────────────────────── */}
-      <News news={news} asOf={latestNewsDate} />
+      {/* ── Sources (D1: consolidated, labeled, at the bottom) ─────────── */}
+      <Sources citations={citations} />
     </main>
   );
 }

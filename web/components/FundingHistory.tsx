@@ -7,35 +7,6 @@
 import { formatDate, formatUsd } from "@/lib/format";
 import type { FundingRoundWithInvestors } from "@/lib/types";
 
-// Inline URL → hostname helper. Strips www. for consistent comparison.
-// Kept local rather than in format.ts because nothing else needs it yet.
-function hostname(url: string | null | undefined): string | null {
-  if (!url) return null;
-  try {
-    const host = new URL(url).hostname.toLowerCase();
-    return host.startsWith("www.") ? host.slice(4) : host;
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Derives a compact provenance label for a funding figure given the source URL
- * and the company's own website. Returns "Company-stated" when the source host
- * matches the company's own domain (self-reported), or "via {host}" when it
- * comes from an independent article. Returns null when no source URL exists.
- */
-function provenanceLabel(
-  sourceUrl: string | null | undefined,
-  companyWebsite: string | null | undefined,
-): { label: string; isOwn: boolean } | null {
-  const srcHost = hostname(sourceUrl);
-  if (!srcHost) return null;
-  const coHost = hostname(companyWebsite);
-  const isOwn = coHost !== null && srcHost === coHost;
-  return { label: isOwn ? "Company-stated" : `via ${srcHost}`, isOwn };
-}
-
 const EM_DASH = "—";
 
 function joinNames(names: string[]): string {
@@ -52,15 +23,12 @@ function joinOthers(names: string[]): string {
 
 interface Props {
   rounds: FundingRoundWithInvestors[];
-  /** The company's own website URL — used to distinguish self-reported figures
-   *  from independently-reported ones (journalism vs company IR page). */
-  companyWebsite: string | null;
   /** ISO date of the most recent round shown, for the section freshness rider.
    *  Omitted/null when no round carries an announced date — the rider hides. */
   asOf?: string | null;
 }
 
-export function FundingHistory({ rounds, companyWebsite, asOf }: Props) {
+export function FundingHistory({ rounds, asOf }: Props) {
   return (
     <section className="mb-12">
       <div className="mb-4 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
@@ -121,52 +89,18 @@ export function FundingHistory({ rounds, companyWebsite, asOf }: Props) {
                     </td>
                     <td className="py-3 pr-6 text-right">
                       {round.valuation_post_money != null ? (
-                        <>
-                          <div className="font-mono text-money">
-                            {formatUsd(round.valuation_post_money)}
-                            <span className="ml-1 font-sans text-xs text-ink-muted">
-                              (post-money)
-                            </span>
-                          </div>
-                          {round.valuation_source && (
-                            <div className="mt-1 text-xs text-ink-muted">
-                              via {round.valuation_source}
-                            </div>
-                          )}
-                        </>
+                        <div className="font-mono text-money">
+                          {formatUsd(round.valuation_post_money)}
+                          <span className="ml-1 font-sans text-xs text-ink-muted">
+                            (post-money)
+                          </span>
+                        </div>
                       ) : (
                         <span className="text-ink-faint">{EM_DASH}</span>
                       )}
                     </td>
                     <td className="py-3 pr-6 text-ink-soft">
-                      <div>{joinNames(round.leadInvestors)}</div>
-                      {round.primary_news_url && (() => {
-                        const prov = provenanceLabel(round.primary_news_url, companyWebsite);
-                        if (!prov) return null;
-                        // srcHost is guaranteed non-null when prov is non-null
-                        const srcHost = hostname(round.primary_news_url)!;
-                        return (
-                          <div className="mt-1 text-xs text-ink-muted">
-                            {prov.isOwn ? (
-                              <span title="Figure reported on the company's own website">
-                                Company-stated
-                              </span>
-                            ) : (
-                              <>
-                                via{" "}
-                                <a
-                                  href={round.primary_news_url}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  className="underline underline-offset-2 hover:text-ink-soft"
-                                >
-                                  {srcHost}
-                                </a>
-                              </>
-                            )}
-                          </div>
-                        );
-                      })()}
+                      {joinNames(round.leadInvestors)}
                     </td>
                     <td className="py-3 text-ink-soft">
                       {joinOthers(round.otherInvestors)}
