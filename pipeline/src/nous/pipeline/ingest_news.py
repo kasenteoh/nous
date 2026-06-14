@@ -165,6 +165,28 @@ async def _ingest_one_article(
     summary.articles_inserted += 1
 
 
+_DISCOVERED_VIA_BY_HOST: dict[str, str] = {
+    "techcrunch.com": "techcrunch",
+    "siliconangle.com": "siliconangle",
+    "prnewswire.com": "prnewswire",
+    "news.crunchbase.com": "crunchbase_news",
+    "crunchbase.com": "crunchbase_news",
+}
+
+
+def _discovered_via_for_source(source_host: str) -> str:
+    """Clean, stable ``discovered_via`` slug for a broad-feed article source.
+
+    ``NewsArticleResult.source`` is a hostname (e.g. ``"techcrunch.com"``). The
+    ``discovered_via`` column is a web filter/badge facet whose legacy broad-sweep
+    value was the short alias ``"techcrunch"``. Map each known feed host to a
+    clean slug so the facet stays consistent instead of splitting into hostname
+    variants; unknown hosts degrade to the bare host (sans ``www.``).
+    """
+    host = source_host.lower().removeprefix("www.")
+    return _DISCOVERED_VIA_BY_HOST.get(host, host)
+
+
 async def run_ingest_news(
     session: AsyncSession,
     client: NewsClient,
@@ -343,10 +365,11 @@ async def run_ingest_news(
                     session,
                     name=candidate,
                     website=None,
-                    # Use the article's source hostname as the discovery tag so
-                    # each source is attributable in the DB (e.g. "techcrunch.com",
-                    # "siliconangle.com", "prnewswire.com", "crunchbase.com").
-                    discovered_via=result.source,
+                    # Tag discovery with a clean, stable per-source slug (e.g.
+                    # "techcrunch", "siliconangle") instead of a hostname, so the
+                    # discovered_via facet stays consistent with the legacy value
+                    # rather than splitting into "techcrunch.com"-style variants.
+                    discovered_via=_discovered_via_for_source(result.source),
                     similarity_threshold=similarity_threshold,
                 )
                 if created:

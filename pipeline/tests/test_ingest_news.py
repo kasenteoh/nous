@@ -257,10 +257,9 @@ async def test_tc_broad_auto_creates_company(
         await db.execute(select(Company).where(Company.name == "NewCo"))
     ).scalars().all()
     assert len(rows) == 1
-    # discovered_via is now the article's source hostname (e.g. "techcrunch.com")
-    # rather than the short alias "techcrunch" — more precise and consistent
-    # across all four broad-feed sources.
-    assert rows[0].discovered_via == "techcrunch.com"
+    # discovered_via is a clean per-source slug (legacy alias preserved): the
+    # techcrunch.com feed maps to "techcrunch", not the hostname.
+    assert rows[0].discovered_via == "techcrunch"
 
 
 @pytestmark_db
