@@ -68,9 +68,14 @@ on:
         required: false
         type: string
       website_funding_limit:
-        description: "Website funding gap-fill: max companies per run. Default: 100."
+        description: "Website funding gap-fill: max companies per run. Default: 300."
         required: false
         type: string
+      website_ignore_recheck:
+        description: "Website funding drain (Task A2): ignore the 180-day back-off and mine EVERY round-less company's own site once. Pair with a high website_funding_limit. Default: false."
+        required: false
+        type: boolean
+        default: false
       resolve_limit:
         description: "Resolve: max companies to attempt. Default: 100."
         required: false
@@ -89,6 +94,16 @@ on:
         type: string
       run_repair_websites:
         description: "Run the one-off repair-wrong-websites poisoned-row cleanup (Task 2.2). Default: false."
+        required: false
+        type: boolean
+        default: false
+      run_funding_backfill:
+        description: "Run backfill-funding-history (Task A3): long-lookback Google News sweep over funded/notable companies, then extract-funding, for multi-round trajectories. Default: false."
+        required: false
+        type: boolean
+        default: false
+      run_requery_totals:
+        description: "Force the extract-funding --requery-totals pass (Task A4) this run, regardless of cadence. It also runs automatically once/day on the 00:00 UTC cron. Default: false."
         required: false
         type: boolean
         default: false
@@ -224,21 +239,71 @@ jobs:
           if [ -z "$FUNDING_LIMIT" ]; then FUNDING_LIMIT=80; fi
           uv run nous extract-funding --limit "$FUNDING_LIMIT"
 
+      - name: Extract funding (re-query stated totals)
+        id: funding_requery_totals
+        if: ${{ inputs.skip_funding != true }}
+        # Periodic backfill (Task A4): re-read ALREADY-processed articles whose
+        # text states a cumulative total ("to date", "total funding", ...) for
+        # companies that still have no stated total, capping LLM spend with
+        # --limit. Idempotent (rounds reconcile, totals apply newest-wins,
+        # articles stay processed). Runs once/day on the 00:00 UTC cron — not
+        # every 3h — or on demand via run_requery_totals=true. The single cron
+        # string can't distinguish the hour, so we gate on the UTC hour here.
+        timeout-minutes: 15
+        continue-on-error: true
+        run: |
+          HOUR="$(date -u +%H)"
+          if [ "${{ inputs.run_requery_totals }}" = "true" ] || [ "$HOUR" = "00" ]; then
+            FUNDING_LIMIT="${{ inputs.funding_limit }}"
+            if [ -z "$FUNDING_LIMIT" ]; then FUNDING_LIMIT=80; fi
+            uv run nous extract-funding --limit "$FUNDING_LIMIT" --requery-totals
+          else
+            echo "Skipping --requery-totals (UTC hour=$HOUR, not 00 and not forced)."
+          fi
+
       - name: Extract funding (website fallback)
         id: funding_website
         if: ${{ inputs.skip_funding != true }}
         # Gap-fill only: companies that still have no funding rounds after the
-        # news pass. Limit raised from 15 → 100 to drain the ~2k-company backlog
-        # faster now that Actions minutes are free. At ~2s/company (scrape +
-        # LLM) 100 companies ≈ 3-4 min; raised to 20 min for ample headroom.
-        # The 180-day back-off means each company is only checked once every
+        # news pass. Standing limit raised 100 → 300 (Task A2) to drain the
+        # ~1.2k round-less backlog faster now that Actions minutes are free. At
+        # ~2s/company (scrape + LLM) 300 companies ≈ 10 min.
+        # The 180-day back-off means each company is normally checked once every
         # 6 months, so the per-run spend stays bounded once the backlog clears.
-        timeout-minutes: 20
+        # website_ignore_recheck=true (manual dispatch, Task A2) drops that
+        # back-off so a single high-limit run mines EVERY round-less company's
+        # own site once. The 45-min timeout gives that one-off drain headroom.
+        timeout-minutes: 45
         continue-on-error: true
         run: |
           WF_LIMIT="${{ inputs.website_funding_limit }}"
-          if [ -z "$WF_LIMIT" ]; then WF_LIMIT=100; fi
-          uv run nous extract-funding-website --limit "$WF_LIMIT"
+          if [ -z "$WF_LIMIT" ]; then WF_LIMIT=300; fi
+          IGNORE_RECHECK=""
+          if [ "${{ inputs.website_ignore_recheck }}" = "true" ]; then
+            IGNORE_RECHECK="--ignore-recheck"
+          fi
+          uv run nous extract-funding-website --limit "$WF_LIMIT" $IGNORE_RECHECK
+
+      - name: Backfill funding history
+        id: funding_backfill
+        if: ${{ inputs.run_funding_backfill == true }}
+        # One-off depth lever (Task A3): a ~5-year Google News sweep over
+        # funded/notable companies, then funding-extraction over the new
+        # articles, to build multi-round trajectories. Dup-safe via the
+        # reconcile key (round_type + announced_date ±60d), so a re-dispatch
+        # only re-pays the LLM for genuinely new rounds. Gated off by default;
+        # dispatch with run_funding_backfill=true. Reuses news_limit /
+        # funding_limit for the per-stage budgets (default 600 here — higher
+        # than the standing per-company news limit since this is a one-off).
+        timeout-minutes: 60
+        continue-on-error: true
+        run: |
+          BF_NEWS_LIMIT="${{ inputs.news_limit }}"
+          if [ -z "$BF_NEWS_LIMIT" ]; then BF_NEWS_LIMIT=600; fi
+          BF_FUNDING_LIMIT="${{ inputs.funding_limit }}"
+          if [ -z "$BF_FUNDING_LIMIT" ]; then BF_FUNDING_LIMIT=600; fi
+          uv run nous backfill-funding-history \
+            --news-limit "$BF_NEWS_LIMIT" --funding-limit "$BF_FUNDING_LIMIT"
 
       # ----- Descriptions (backlog drain + new companies) ---------------------
 

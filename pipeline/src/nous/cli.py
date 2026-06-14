@@ -438,6 +438,128 @@ def extract_funding(
     asyncio.run(_run())
 
 
+# ~5-year window: long enough to recover a company's full visible funding
+# trajectory (Seed → Series A → B → ...) from historical news. The reconcile
+# key (round_type + announced_date ±60d, both-null → insert) makes the long
+# sweep dup-safe, so re-runs don't duplicate (Task A3).
+_BACKFILL_LOOKBACK_DAYS = 1825
+
+
+@cli.command("backfill-funding-history")
+@click.option(
+    "--news-limit",
+    type=int,
+    default=400,
+    show_default=True,
+    help=(
+        "Max funded/notable companies to sweep for historical news this run "
+        "(per-company Google News, least-recently-checked first). Bounds the "
+        "backfill's DeepSeek + scraping spend."
+    ),
+)
+@click.option(
+    "--funding-limit",
+    type=int,
+    default=400,
+    show_default=True,
+    help="Max news_articles to run funding-extraction over after the sweep.",
+)
+@click.option(
+    "--lookback-days",
+    type=int,
+    default=_BACKFILL_LOOKBACK_DAYS,
+    show_default=True,
+    help="Historical lookback window for the Google News sweep (~5y default).",
+)
+@click.option(
+    "--include-low-confidence",
+    is_flag=True,
+    default=False,
+    help="Persist rounds the LLM tagged as low-confidence (default: skip).",
+)
+def backfill_funding_history(
+    news_limit: int,
+    funding_limit: int,
+    lookback_days: int,
+    include_low_confidence: bool,
+) -> None:
+    """Backfill multi-round funding HISTORIES for funded/notable companies.
+
+    The standing ingest-news lookback (14d) only ever captures a company's
+    latest round, so no trajectories exist (Task A3). This command sweeps a
+    long (~5y) Google News window over companies that already have a round OR
+    existing news coverage, then runs funding-extraction over the new articles.
+    It leans entirely on reconcile_funding_round for dedup — distinct rounds
+    (round_type + announced_date) insert separately; re-runs merge, never
+    duplicate. The TC broad sweep is intentionally OFF (this targets existing
+    companies' depth, not discovery of new ones).
+    """
+    import asyncio
+    from datetime import UTC, datetime
+
+    from nous.config import Settings
+    from nous.db.session import AsyncSessionLocal
+    from nous.observability import emit_run_telemetry, record_pipeline_run
+    from nous.pipeline.extract_funding import run_extract_funding
+    from nous.pipeline.ingest_news import run_ingest_news
+    from nous.sources.news import NewsClient
+
+    settings = Settings()
+
+    async def _run() -> None:
+        ingest_started = datetime.now(UTC)
+        try:
+            async with (
+                NewsClient(
+                    settings.SEC_USER_AGENT,
+                    requests_per_second_per_domain=1.0,
+                ) as news_client,
+                AsyncSessionLocal() as session,
+            ):
+                ingest_summary = await run_ingest_news(
+                    session,
+                    news_client,
+                    lookback_days=lookback_days,
+                    include_techcrunch_broad=False,
+                    max_companies=news_limit,
+                    funded_or_notable_only=True,
+                )
+                click.echo("ingest-news (backfill):")
+                click.echo(ingest_summary.model_dump_json(indent=2))
+            await record_pipeline_run(
+                "backfill-funding-history:ingest",
+                started_at=ingest_started,
+                inputs_seen=ingest_summary.articles_seen,
+                rows_written=ingest_summary.articles_inserted,
+                summary=ingest_summary,
+            )
+        finally:
+            emit_run_telemetry("backfill-funding-history:ingest")
+
+        extract_started = datetime.now(UTC)
+        try:
+            async with AsyncSessionLocal() as session:
+                extract_summary = await run_extract_funding(
+                    session,
+                    limit=funding_limit,
+                    skip_low_confidence=not include_low_confidence,
+                )
+                click.echo("extract-funding (backfill):")
+                click.echo(extract_summary.model_dump_json(indent=2))
+            await record_pipeline_run(
+                "backfill-funding-history:extract",
+                started_at=extract_started,
+                inputs_seen=extract_summary.articles_processed,
+                rows_written=extract_summary.funding_rounds_created
+                + extract_summary.funding_rounds_merged,
+                summary=extract_summary,
+            )
+        finally:
+            emit_run_telemetry("backfill-funding-history:extract")
+
+    asyncio.run(_run())
+
+
 @cli.command("extract-funding-website")
 @click.option(
     "--limit",
@@ -462,8 +584,21 @@ def extract_funding(
         "runs rotate through the backlog instead of re-processing the head."
     ),
 )
+@click.option(
+    "--ignore-recheck",
+    is_flag=True,
+    default=False,
+    help=(
+        "One-time drain (Task A2): ignore the recheck back-off and mine EVERY "
+        "round-less company's own site once, regardless of when it was last "
+        "checked. Pair with a high --limit. Idempotent — reconcile dedups."
+    ),
+)
 def extract_funding_website(
-    limit: int | None, include_low_confidence: bool, recheck_after_days: int
+    limit: int | None,
+    include_low_confidence: bool,
+    recheck_after_days: int,
+    ignore_recheck: bool,
 ) -> None:
     """Gap-fill funding from a company's own website (fallback to TechCrunch).
 
@@ -486,6 +621,7 @@ def extract_funding_website(
                     limit=limit,
                     skip_low_confidence=not include_low_confidence,
                     recheck_after_days=recheck_after_days,
+                    ignore_recheck=ignore_recheck,
                 )
                 click.echo(summary.model_dump_json(indent=2))
             await record_pipeline_run(

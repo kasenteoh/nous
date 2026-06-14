@@ -255,6 +255,62 @@ async def test_valuation_source_is_persisted_when_extracted(
     assert rounds[0].valuation_source == "TechCrunch, March 2026"
 
 
+async def test_extracts_post_money_valuation_and_total(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A4 acceptance: an article like "Series B of $40M at a $400M post-money
+    valuation, bringing total raised to $58M" lands the post-money valuation +
+    its source on the FundingRound AND the stated cumulative total on the
+    company (with a source URL). Mocked extraction — no live DeepSeek."""
+    company = _make_company("ValTotalCo")
+    db.add(company)
+    await db.flush()
+    db.add(
+        _make_article(
+            company.id,
+            url="https://news.example.com/series-b-with-val-and-total",
+            raw_content=(
+                "ValTotalCo announced a Series B of $40M at a $400M post-money "
+                "valuation, bringing total raised to $58M. " * 12
+            ),
+            published=date(2026, 6, 1),
+        )
+    )
+    await db.flush()
+    await db.commit()
+
+    async def _fake(prompt: str, schema: type) -> FundingExtraction:
+        return _make_extraction(
+            round_type="Series B",
+            amount=Decimal("40000000.00"),
+            valuation=Decimal("400000000.00"),
+            valuation_source="TechCrunch, June 2026",
+            announced=date(2026, 6, 1),
+            leads=["Acme Growth"],
+            others=[],
+            confidence="high",
+            total_raised=Decimal("58000000.00"),
+        )
+
+    monkeypatch.setattr("nous.pipeline.extract_funding.complete_json", _fake)
+
+    summary = await run_extract_funding(db, limit=10)
+    assert summary.funding_rounds_created == 1
+    assert summary.totals_recorded == 1
+
+    rounds = (await db.execute(select(FundingRound))).scalars().all()
+    assert len(rounds) == 1
+    assert rounds[0].valuation_post_money == Decimal("400000000.00")
+    assert rounds[0].valuation_source == "TechCrunch, June 2026"
+
+    await db.refresh(company)
+    assert company.total_raised_usd == Decimal("58000000.00")
+    assert (
+        company.total_raised_source_url
+        == "https://news.example.com/series-b-with-val-and-total"
+    )
+
+
 # ---------------------------------------------------------------------------
 # Reconciliation
 # ---------------------------------------------------------------------------
@@ -356,6 +412,130 @@ async def test_different_round_type_creates_separate_round(
 
     rounds = (await db.execute(select(FundingRound))).scalars().all()
     assert len(rounds) == 2
+
+
+async def test_backfill_creates_multiple_distinct_rounds(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A long-lookback backfill feeds several historical articles for ONE
+    company — distinct round_type + announced_date years apart. extract-funding
+    must create one FundingRound PER round (none merged), and a second run must
+    create NO duplicates (Task A3 leans entirely on reconcile_funding_round's
+    key; no new dedup logic). This is the depth lever: multi-row histories."""
+    company = _make_company("TrajectoryCo")
+    db.add(company)
+    await db.flush()
+    # Three historical funding articles, each a distinct round in a distinct
+    # year — well outside the ±60-day proximity window, so they never merge.
+    db.add(
+        _make_article(
+            company.id,
+            url="https://news.example.com/seed-2022",
+            raw_content="TrajectoryCo raised $3M Seed in 2022. " * 20,
+            published=date(2022, 6, 1),
+        )
+    )
+    db.add(
+        _make_article(
+            company.id,
+            url="https://news.example.com/series-a-2023",
+            raw_content="TrajectoryCo raised $15M Series A in 2023. " * 20,
+            published=date(2023, 6, 1),
+        )
+    )
+    db.add(
+        _make_article(
+            company.id,
+            url="https://news.example.com/series-b-2024",
+            raw_content="TrajectoryCo raised $40M Series B in 2024. " * 20,
+            published=date(2024, 6, 1),
+        )
+    )
+    await db.flush()
+    await db.commit()
+
+    # Route the extraction by the round named in the article body.
+    def _extraction_for(text: str) -> FundingExtraction:
+        if "Seed" in text:
+            return _make_extraction(
+                round_type="Seed",
+                amount=Decimal("3000000.00"),
+                valuation=None,
+                announced=date(2022, 6, 1),
+                leads=["Acme Seed Fund"],
+                others=[],
+            )
+        if "Series A" in text:
+            return _make_extraction(
+                round_type="Series A",
+                amount=Decimal("15000000.00"),
+                valuation=None,
+                announced=date(2023, 6, 1),
+                leads=["Acme Ventures"],
+                others=[],
+            )
+        return _make_extraction(
+            round_type="Series B",
+            amount=Decimal("40000000.00"),
+            valuation=None,
+            announced=date(2024, 6, 1),
+            leads=["Big Growth"],
+            others=[],
+        )
+
+    async def _fake(prompt: str, schema: type) -> FundingExtraction:
+        return _extraction_for(prompt)
+
+    monkeypatch.setattr("nous.pipeline.extract_funding.complete_json", _fake)
+
+    s1 = await run_extract_funding(db, limit=10)
+    assert s1.funding_rounds_created == 3
+    assert s1.funding_rounds_merged == 0
+
+    rounds = (await db.execute(select(FundingRound))).scalars().all()
+    assert len(rounds) == 3
+    assert {r.round_type for r in rounds} == {"Seed", "Series A", "Series B"}
+    assert {r.announced_date for r in rounds} == {
+        date(2022, 6, 1),
+        date(2023, 6, 1),
+        date(2024, 6, 1),
+    }
+
+    # Idempotency: re-feeding the SAME three articles (e.g. a re-dispatched
+    # backfill, or fresh GN URLs for the same rounds) must merge into the
+    # existing rows, never duplicate.
+    db.add(
+        _make_article(
+            company.id,
+            url="https://news.example.com/seed-2022-dup",
+            raw_content="TrajectoryCo raised $3M Seed in 2022. " * 20,
+            published=date(2022, 6, 15),  # within ±60 days of the original
+        )
+    )
+    db.add(
+        _make_article(
+            company.id,
+            url="https://news.example.com/series-a-2023-dup",
+            raw_content="TrajectoryCo raised $15M Series A in 2023. " * 20,
+            published=date(2023, 6, 15),
+        )
+    )
+    db.add(
+        _make_article(
+            company.id,
+            url="https://news.example.com/series-b-2024-dup",
+            raw_content="TrajectoryCo raised $40M Series B in 2024. " * 20,
+            published=date(2024, 6, 15),
+        )
+    )
+    await db.commit()
+
+    s2 = await run_extract_funding(db, limit=10)
+    assert s2.funding_rounds_created == 0
+    assert s2.funding_rounds_merged == 3
+
+    rounds_after = (await db.execute(select(FundingRound))).scalars().all()
+    assert len(rounds_after) == 3  # still exactly three — no duplicates
 
 
 # ---------------------------------------------------------------------------
@@ -579,6 +759,62 @@ async def test_website_fallback_recently_checked_is_skipped(
 
     assert summary.companies_seen == 0
     assert calls == []
+
+
+async def test_ignore_recheck_drains_recently_checked(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``ignore_recheck=True`` drops the recheck-window predicate so a one-off
+    drain mines EVERY round-less company's own site, even those checked moments
+    ago (Task A2). The same company is skipped under the default
+    ``ignore_recheck=False`` (still inside the 180-day back-off)."""
+    company = _make_company("DrainMeCo")
+    company.website = "https://drainmeco.example/"
+    # Checked just now → inside the default 180-day back-off → normally skipped.
+    company.website_funding_checked_at = datetime.now(tz=UTC)
+    db.add(company)
+    await db.flush()
+    body = "DrainMeCo raised a $5M Seed round led by Acme Capital. " * 10
+    db.add(
+        RawPage(
+            company_id=company.id,
+            url="https://drainmeco.example/about",
+            content=f"<html><body><p>{body}</p></body></html>",
+        )
+    )
+    await db.flush()
+    await db.commit()
+
+    async def _fake(prompt: str, schema: type) -> FundingExtraction:
+        return _make_extraction(
+            round_type="Seed",
+            amount=Decimal("5000000.00"),
+            valuation=None,
+            leads=["Acme Capital"],
+            others=[],
+            confidence="medium",
+        )
+
+    monkeypatch.setattr(
+        "nous.pipeline.extract_funding.complete_json", _fake
+    )
+
+    # Default: recently-checked company is skipped.
+    default_summary = await run_extract_funding_website(db, limit=10)
+    assert default_summary.companies_seen == 0
+    assert default_summary.funding_rounds_created == 0
+
+    # ignore_recheck=True: the same company is now processed and a round lands.
+    drain_summary = await run_extract_funding_website(
+        db, limit=10, ignore_recheck=True
+    )
+    assert drain_summary.companies_seen == 1
+    assert drain_summary.companies_with_funding == 1
+    assert drain_summary.funding_rounds_created == 1
+
+    rounds = (await db.execute(select(FundingRound))).scalars().all()
+    assert len(rounds) == 1
+    assert rounds[0].round_type == "Seed"
 
 
 async def test_website_fallback_stamps_attempt_even_without_funding(

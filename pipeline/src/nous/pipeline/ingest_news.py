@@ -23,29 +23,33 @@ from datetime import UTC, datetime
 from uuid import UUID
 
 from pydantic import BaseModel
-from sqlalchemy import exists, select
+from sqlalchemy import exists, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from nous.db.models import Company, NewsArticle
 from nous.db.upsert import auto_create_company
 from nous.llm.client import LLMError, LLMRateLimitError, complete_json
 from nous.llm.prompts.news_company import HeadlineCompany, build_prompt
-from nous.sources.news import NewsArticleResult, NewsClient
+from nous.sources.news import (
+    _GOOGLE_NEWS_HOST,
+    NewsArticleResult,
+    NewsClient,
+    ResolvedArticle,
+)
 from nous.sources.techcrunch import fetch_techcrunch_funding_articles
 from nous.util.url import hostname
 
 logger = logging.getLogger(__name__)
 
 # Google News RSS <link>s are opaque redirect URLs (news.google.com/rss/articles/
-# CBMi...). Fetching one returns a ~600KB consent/redirect interstitial, NEVER
-# the article body, and the real publisher URL is encoded so it needs Google's
-# batchexecute endpoint to decode — fragile and frequently broken. So for these
-# we DON'T fetch a body: the funding headline (+ snippet) carries the core facts
-# ("Ramp Raises Series F at $44 Billion Valuation"), which is enough for
-# extract-funding. Without this, every per-company Google News hit was fetched,
-# came back under MIN_BODY_CHARS, and was dropped as "thin" — so the per-company
-# funding-news source (its whole point) stored nothing.
-_GOOGLE_NEWS_HOST = "news.google.com"
+# CBMi...). ``NewsClient.resolve_article`` chases that redirect to the real
+# publisher and extracts the article body (Task A1), so extract-funding sees
+# full prose instead of a one-line headline. When resolution fails (consent
+# interstitial, robots-block, paywall stub, fetch error) we fall back to storing
+# the funding headline (+ snippet), which still carries the core facts ("Ramp
+# Raises Series F at $44 Billion Valuation") — enough for extract-funding, and
+# never silently dropped as "thin". ``_GOOGLE_NEWS_HOST`` is imported from
+# nous.sources.news (single source of truth).
 
 
 async def _extract_company_from_tc_result(result: NewsArticleResult) -> str | None:
@@ -72,6 +76,8 @@ class IngestNewsSummary(BaseModel):
     articles_kept: int = 0
     articles_inserted: int = 0
     articles_skipped_thin: int = 0
+    # Google-News redirects that resolved to a real publisher body (Task A1).
+    articles_resolved: int = 0
     auto_created_companies: int = 0
     tc_skipped_no_company: int = 0
 
@@ -104,15 +110,38 @@ async def _ingest_one_article(
 ) -> None:
     """Persist one article to news_articles. Per-row commit.
 
-    Google News redirect URLs store the headline (+ snippet) directly — no body
-    fetch (see ``_GOOGLE_NEWS_HOST``). A direct publisher link (rare in GN RSS)
-    still gets a real body fetch with the thin-body guard.
+    Google-News redirect URLs are RESOLVED to the real publisher first (Task
+    A1): on success we store the publisher URL + source + full article body, so
+    extract-funding gets rich text instead of a one-line headline. On resolution
+    failure we fall back to storing the headline (+ snippet) — the funding facts
+    survive and the row is never dropped as "thin". A direct publisher link
+    (rare in GN RSS) still gets a plain body fetch with the thin-body guard.
     """
     if await _article_already_stored(session, result.url):
         return
 
+    url = result.url
+    source = result.source
+    content: str
+
     if hostname(result.url) == _GOOGLE_NEWS_HOST:
-        content = _headline_content(result)
+        resolved: ResolvedArticle | None = await client.resolve_article(result.url)
+        if resolved is not None:
+            # The redirect resolved to a real publisher article. Prefer the
+            # publisher URL/source for attribution + dedup, and store the full
+            # body. Guard against a publisher article already stored under
+            # another Google-News link (or a direct link).
+            if resolved.url != result.url and await _article_already_stored(
+                session, resolved.url
+            ):
+                return
+            url = resolved.url
+            source = resolved.source
+            content = resolved.body
+            summary.articles_resolved += 1
+        else:
+            # Resolution failed — keep the headline (+ snippet); still useful.
+            content = _headline_content(result)
     else:
         body = await client.fetch_article_body(result.url)
         if body is None:
@@ -122,9 +151,9 @@ async def _ingest_one_article(
 
     article = NewsArticle(
         company_id=company_id,
-        url=result.url,
+        url=url,
         title=result.title,
-        source=result.source,
+        source=source,
         published_date=result.published_date,
         raw_content=content,
     )
@@ -141,6 +170,7 @@ async def run_ingest_news(
     include_techcrunch_broad: bool = True,
     max_companies: int | None = None,
     similarity_threshold: float = 0.85,
+    funded_or_notable_only: bool = False,
 ) -> IngestNewsSummary:
     """Fetch per-company Google News results + optional TechCrunch broad sweep.
 
@@ -153,6 +183,15 @@ async def run_ingest_news(
     7-day lookback window, so no announcement is missed while the per-day
     request count to Google News stays small and polite.
 
+    ``funded_or_notable_only=True`` narrows the per-company sweep to companies
+    worth a long-lookback historical backfill (Task A3): those with at least
+    one funding round (``funding_round_count > 0``) OR at least one existing
+    ``news_articles`` row. CTO call: with no Company-level news-volume column,
+    "already has news coverage" is the available "notable" proxy — the news
+    pipeline surfaced them, so a multi-year sweep is high-yield — and pairing
+    it with the funded set bounds the backfill's DeepSeek spend. Default False
+    keeps the standing rotation (every non-excluded company) unchanged.
+
     TC broad-tag path: fetch the TC venture feed; for each article whose
     title parses to a candidate company name, find-or-auto-create the
     company, then persist the article.
@@ -164,6 +203,13 @@ async def run_ingest_news(
         .where(Company.exclusion_reason.is_(None))
         .order_by(Company.news_checked_at.asc().nulls_first())
     )
+    if funded_or_notable_only:
+        company_stmt = company_stmt.where(
+            or_(
+                Company.funding_round_count > 0,
+                exists().where(NewsArticle.company_id == Company.id),
+            )
+        )
     if max_companies is not None:
         company_stmt = company_stmt.limit(max_companies)
     company_result = await session.execute(company_stmt)
