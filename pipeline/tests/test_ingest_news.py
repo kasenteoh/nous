@@ -21,7 +21,7 @@ from nous.pipeline.ingest_news import (
     _extract_company_from_tc_result,
     run_ingest_news,
 )
-from nous.sources.news import NewsArticleResult
+from nous.sources.news import NewsArticleResult, ResolvedArticle
 from nous.util.slugify import normalize_name
 
 
@@ -114,17 +114,20 @@ def _make_company(name: str, slug: str | None = None) -> Company:
 
 
 class _MockNewsClient:
-    """Stand-in for NewsClient. Records every fetch_article_body call."""
+    """Stand-in for NewsClient. Records every fetch_article_body / resolve_article call."""
 
     def __init__(
         self,
         *,
         rss_results: dict[str, list[NewsArticleResult]] | None = None,
         bodies: dict[str, str | None] | None = None,
+        resolved: dict[str, ResolvedArticle | None] | None = None,
     ) -> None:
         self._rss_results = rss_results or {}
         self._bodies = bodies or {}
+        self._resolved = resolved or {}
         self.body_fetches: list[str] = []
+        self.resolve_calls: list[str] = []
 
     async def __aenter__(self) -> _MockNewsClient:
         return self
@@ -140,6 +143,10 @@ class _MockNewsClient:
     async def fetch_article_body(self, url: str) -> str | None:
         self.body_fetches.append(url)
         return self._bodies.get(url)
+
+    async def resolve_article(self, url: str) -> ResolvedArticle | None:
+        self.resolve_calls.append(url)
+        return self._resolved.get(url)
 
 
 @pytestmark_db
@@ -317,28 +324,43 @@ async def test_skips_articles_with_thin_body(
 
 
 @pytestmark_db
-async def test_google_news_redirect_stores_headline_without_body_fetch(
+async def test_resolves_google_news_redirect_and_fetches_body(
     db: AsyncSession,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A Google News redirect URL is stored from its headline (+ snippet) with no
-    body fetch — the body sits behind Google's opaque interstitial. Without this
-    the per-company funding-news source stored nothing (every hit went 'thin')."""
+    """A Google News redirect URL is RESOLVED to its real publisher article: the
+    redirect is followed, the destination page is fetched, and the stored
+    raw_content is the full article body (>=MIN_BODY_CHARS), not the thin RSS
+    snippet. The stored URL + source reflect the resolved publisher, so the
+    funding-extraction LLM sees rich text and emits higher-confidence rounds
+    (Task A1)."""
     company = _make_company("Redirect Co")
     db.add(company)
     await db.flush()
     await db.commit()
 
+    redirect_url = "https://news.google.com/rss/articles/CBMiOPAQUE?oc=5"
+    real_body = (
+        "Redirect Co, the warehousing startup, announced today that it has "
+        "raised a $30M Series B round led by Acme Ventures, with participation "
+        "from Beta Capital and Gamma Partners. " * 12
+    )  # >> MIN_BODY_CHARS
     article = NewsArticleResult(
-        url="https://news.google.com/rss/articles/CBMiOPAQUE?oc=5",
+        url=redirect_url,
         title="Redirect Co Raises $30M Series B - Reuters",
-        source="reuters.com",
+        source="news.google.com",  # RSS source before resolution
         published_date=date(2026, 6, 1),
         raw_content="Redirect Co announced a $30M Series B led by Acme Ventures.",
     )
     client = _MockNewsClient(
         rss_results={'"Redirect Co" funding': [article]},
-        bodies={},  # any body fetch would return None → assertions below would fail
+        resolved={
+            redirect_url: ResolvedArticle(
+                url="https://realpub.com/redirect-co-series-b",
+                source="realpub.com",
+                body=real_body,
+            )
+        },
     )
 
     async def _no_tc(*args: Any, **kwargs: Any) -> list[NewsArticleResult]:
@@ -352,7 +374,8 @@ async def test_google_news_redirect_stores_headline_without_body_fetch(
 
     assert summary.articles_inserted == 1
     assert summary.articles_skipped_thin == 0
-    assert client.body_fetches == []  # no wasted ~600KB interstitial fetch
+    assert client.resolve_calls == [redirect_url]  # the redirect was resolved
+    assert client.body_fetches == []  # resolution handles the fetch itself
 
     stored = (
         (
@@ -364,8 +387,69 @@ async def test_google_news_redirect_stores_headline_without_body_fetch(
         .all()
     )
     assert len(stored) == 1
-    assert "Series B" in stored[0].raw_content  # the headline became the content
-    assert stored[0].source == "reuters.com"  # real publisher preserved for attribution
+    # The REAL article body is stored, not the thin RSS snippet.
+    assert len(stored[0].raw_content) >= 500
+    assert "participation from Beta Capital" in stored[0].raw_content
+    # The resolved publisher is preserved for attribution + dedup.
+    assert stored[0].source == "realpub.com"
+    assert stored[0].url == "https://realpub.com/redirect-co-series-b"
+
+
+@pytestmark_db
+async def test_google_news_redirect_falls_back_to_headline_when_unresolvable(
+    db: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When the Google News redirect can't be resolved (robots-block, non-HTML,
+    thin page, or fetch error → resolve_article returns None), ingest falls back
+    to storing the headline (+ snippet) so the per-company funding signal is
+    never lost. The headline still carries the company + round + amount, which
+    is enough for extract-funding."""
+    company = _make_company("Fallback Co")
+    db.add(company)
+    await db.flush()
+    await db.commit()
+
+    redirect_url = "https://news.google.com/rss/articles/CBMiFALLBACK?oc=5"
+    article = NewsArticleResult(
+        url=redirect_url,
+        title="Fallback Co Raises $12M Seed - Reuters",
+        source="reuters.com",
+        published_date=date(2026, 6, 1),
+        raw_content="Fallback Co announced a $12M Seed led by Acme Ventures.",
+    )
+    client = _MockNewsClient(
+        rss_results={'"Fallback Co" funding': [article]},
+        resolved={redirect_url: None},  # resolution failed
+    )
+
+    async def _no_tc(*args: Any, **kwargs: Any) -> list[NewsArticleResult]:
+        return []
+
+    monkeypatch.setattr(
+        "nous.pipeline.ingest_news.fetch_techcrunch_funding_articles", _no_tc
+    )
+
+    summary = await run_ingest_news(db, client, include_techcrunch_broad=False)
+
+    assert summary.articles_inserted == 1
+    assert summary.articles_skipped_thin == 0
+    assert client.resolve_calls == [redirect_url]
+    assert client.body_fetches == []  # no second wasted fetch on fallback
+
+    stored = (
+        (
+            await db.execute(
+                select(NewsArticle).where(NewsArticle.company_id == company.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert len(stored) == 1
+    assert "Seed" in stored[0].raw_content  # the headline became the content
+    assert stored[0].source == "reuters.com"  # RSS publisher preserved
+    assert stored[0].url == redirect_url  # original redirect URL kept
 
 
 @pytestmark_db

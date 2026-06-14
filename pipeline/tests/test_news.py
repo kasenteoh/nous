@@ -15,6 +15,7 @@ from nous.sources.news import (
     MIN_BODY_CHARS,
     NewsArticleResult,
     NewsClient,
+    ResolvedArticle,
     RobotsBlockedError,
     _extract_article_text,
     _is_robots_exempt,
@@ -48,12 +49,16 @@ class _Route:
         body: str = "",
         content_type: str = "text/html",
         raise_network_error: bool = False,
+        location: str | None = None,
     ) -> None:
         self.substring = substring
         self.status = status
         self.body = body
         self.content_type = content_type
         self.raise_network_error = raise_network_error
+        # When set, the route returns a redirect to this URL. httpx clients with
+        # follow_redirects=True chase the chain to the next matching route.
+        self.location = location
         self.call_count = 0
 
 
@@ -72,6 +77,12 @@ class _MockTransport(httpx.AsyncBaseTransport):
                 r.call_count += 1
                 if r.raise_network_error:
                     raise httpx.ConnectError("Connection refused")
+                if r.location is not None:
+                    # Redirect — httpx (follow_redirects=True) chases Location.
+                    return httpx.Response(
+                        r.status if r.status in (301, 302, 303, 307, 308) else 302,
+                        headers={"location": r.location},
+                    )
                 resp = httpx.Response(
                     r.status,
                     content=r.body.encode(),
@@ -501,6 +512,139 @@ async def test_fetch_article_body_returns_none_on_blocked_address() -> None:
         )
 
     assert body is None
+
+
+# ---------------------------------------------------------------------------
+# resolve_article — follow the Google News redirect, fetch the real body
+# ---------------------------------------------------------------------------
+
+_GN_REDIRECT = "https://news.google.com/rss/articles/CBMiOPAQUE?oc=5"
+_REAL_ARTICLE_HTML = (
+    "<html><body><main><p>"
+    + "Redirect Co raised a $30M Series B led by Acme Ventures. " * 25
+    + "</p></main></body></html>"
+)
+
+
+async def test_resolve_article_follows_redirect_and_returns_body() -> None:
+    """resolve_article follows the Google News redirect to the real publisher,
+    fetches that page, and returns a ResolvedArticle whose url/source point at
+    the publisher and whose body is the extracted article text."""
+    transport = _MockTransport(
+        [
+            # The Google News redirect → publisher.
+            _Route(
+                "news.google.com/rss/articles",
+                location="https://realpub.com/redirect-co-series-b",
+            ),
+            # robots for the publisher allows the fetch.
+            _Route("realpub.com/robots.txt", status=404),
+            _Route(
+                "realpub.com/redirect-co-series-b",
+                status=200,
+                body=_REAL_ARTICLE_HTML,
+            ),
+        ]
+    )
+    client = NewsClient(user_agent=USER_AGENT)
+    async with client:
+        _inject(client, transport)
+        resolved = await client.resolve_article(_GN_REDIRECT)
+
+    assert resolved is not None
+    assert isinstance(resolved, ResolvedArticle)
+    assert resolved.url == "https://realpub.com/redirect-co-series-b"
+    assert resolved.source == "realpub.com"
+    assert len(resolved.body) >= MIN_BODY_CHARS
+    assert "Series B led by Acme Ventures" in resolved.body
+
+
+async def test_resolve_article_returns_none_when_publisher_robots_blocks() -> None:
+    """robots.txt is checked on the RESOLVED publisher URL (the Google News
+    robots-exemption does NOT extend to the destination). A disallow → None."""
+    transport = _MockTransport(
+        [
+            _Route(
+                "news.google.com/rss/articles",
+                location="https://blocked-pub.com/article",
+            ),
+            _Route(
+                "blocked-pub.com/robots.txt", status=200, body=ROBOTS_DISALLOW_ALL
+            ),
+            _Route(
+                "blocked-pub.com/article", status=200, body=_REAL_ARTICLE_HTML
+            ),
+        ]
+    )
+    client = NewsClient(user_agent=USER_AGENT)
+    async with client:
+        _inject(client, transport)
+        resolved = await client.resolve_article(_GN_REDIRECT)
+
+    assert resolved is None
+
+
+async def test_resolve_article_returns_none_on_thin_body() -> None:
+    """A resolved page below MIN_BODY_CHARS (paywall stub / consent shell) → None."""
+    short_html = "<html><body><p>Subscribe to read.</p></body></html>"
+    transport = _MockTransport(
+        [
+            _Route(
+                "news.google.com/rss/articles",
+                location="https://thinpub.com/article",
+            ),
+            _Route("thinpub.com/robots.txt", status=404),
+            _Route("thinpub.com/article", status=200, body=short_html),
+        ]
+    )
+    client = NewsClient(user_agent=USER_AGENT)
+    async with client:
+        _inject(client, transport)
+        resolved = await client.resolve_article(_GN_REDIRECT)
+
+    assert resolved is None
+
+
+async def test_resolve_article_returns_none_when_no_redirect() -> None:
+    """If the Google News URL does not redirect to a publisher (it 200s with the
+    consent interstitial on news.google.com itself), there's no real article to
+    resolve — return None so the caller falls back to the headline."""
+    transport = _MockTransport(
+        [
+            _Route("news.google.com/robots.txt", status=404),
+            _Route(
+                "news.google.com/rss/articles",
+                status=200,
+                body="<html><body><p>consent interstitial</p></body></html>",
+            ),
+        ]
+    )
+    client = NewsClient(user_agent=USER_AGENT)
+    async with client:
+        _inject(client, transport)
+        resolved = await client.resolve_article(_GN_REDIRECT)
+
+    assert resolved is None
+
+
+async def test_resolve_article_returns_none_on_network_error() -> None:
+    """A network failure following the redirect → None (caller falls back)."""
+    transport = _MockTransport(
+        [
+            _Route(
+                "news.google.com/rss/articles",
+                location="https://badpub.com/article",
+            ),
+            _Route("badpub.com/robots.txt", status=404),
+            _Route("badpub.com/article", raise_network_error=True),
+        ]
+    )
+    client = NewsClient(user_agent=USER_AGENT)
+    async with client:
+        _inject(client, transport)
+        resolved = await client.resolve_article(_GN_REDIRECT)
+
+    assert resolved is None
 
 
 # ---------------------------------------------------------------------------

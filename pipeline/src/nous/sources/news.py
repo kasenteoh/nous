@@ -44,6 +44,7 @@ __all__ = [
     "MIN_BODY_CHARS",
     "NewsArticleResult",
     "NewsClient",
+    "ResolvedArticle",
     "RobotsBlockedError",
 ]
 
@@ -92,6 +93,11 @@ _WHITESPACE_RE = re.compile(r"\s+")
 
 GOOGLE_NEWS_RSS_BASE = "https://news.google.com/rss/search"
 
+# The Google-News host. RSS <link>s point at news.google.com/rss/articles/...
+# redirects; ``resolve_article`` treats a response still on this host (after
+# following redirects) as the consent interstitial — i.e. no real article.
+_GOOGLE_NEWS_HOST = "news.google.com"
+
 # Feed-syndication surfaces: endpoints a site *publishes* for programmatic
 # readers (RSS/Atom) and serves with HTTP 200 to identified clients, even
 # though the site's robots.txt ``Disallow: /`` blocks its *interactive* crawl
@@ -127,6 +133,22 @@ class NewsArticleResult(BaseModel):
     source: str  # hostname (e.g. "techcrunch.com")
     published_date: date | None
     raw_content: str
+
+
+class ResolvedArticle(BaseModel):
+    """A Google-News redirect resolved to its real publisher article.
+
+    Returned by ``NewsClient.resolve_article`` when a Google-News RSS link's
+    opaque redirect successfully chases through to a publisher page with a
+    real, robots-allowed, non-thin article body. The pipeline stores ``body``
+    as the article content (so the funding-extraction LLM sees full text, not
+    the thin RSS snippet) and ``url``/``source`` as the destination publisher
+    for attribution + dedup.
+    """
+
+    url: str  # the final publisher URL after the redirect chain
+    source: str  # publisher hostname (e.g. "reuters.com")
+    body: str  # cleaned visible article text (>= MIN_BODY_CHARS)
 
 
 def _is_retryable(exc: BaseException) -> bool:
@@ -362,6 +384,94 @@ class NewsClient:
             )
             return None
         return text
+
+    async def resolve_article(self, url: str) -> ResolvedArticle | None:
+        """Follow a Google-News redirect to its publisher and return the body.
+
+        Google-News RSS ``<link>``s are opaque redirects (news.google.com/rss/
+        articles/CBMi...). Historically the pipeline stored only the headline +
+        snippet because that link never yields a body when fetched naively. This
+        chases the redirect to the real publisher and extracts the article text,
+        so the funding-extraction LLM gets full prose instead of a one-line
+        headline — which lifts extraction confidence off the floor (Task A1).
+
+        Discipline (identical to every other fetch here):
+        - The initial GET targets the Google-News redirect, which is exempt from
+          the robots gate (``_ROBOTS_EXEMPT_PREFIXES``) but still pays the
+          per-domain throttle and carries our User-Agent.
+        - robots.txt IS enforced on the RESOLVED publisher URL — the exemption
+          does not extend to the destination. A disallow returns None.
+        - The per-domain throttle covers both the news.google.com hop and the
+          publisher hop (``_get_with_retry`` → ``_throttled_get``).
+
+        Returns None (caller falls back to the headline) when:
+        - the link does not redirect away from news.google.com (consent
+          interstitial — no real article),
+        - the resolved response is not HTML,
+        - robots.txt disallows the publisher URL,
+        - the extracted text is below MIN_BODY_CHARS (paywall / JS shell),
+        - any fetch error (4xx/5xx after retries, network error, SSRF-block).
+        """
+        try:
+            resp = await self._get_with_retry(url)
+        except httpx.HTTPStatusError as exc:
+            logger.info(
+                "HTTP %d resolving Google-News redirect: %s",
+                exc.response.status_code,
+                url,
+            )
+            return None
+        except httpx.RequestError as exc:
+            logger.info("network error resolving Google-News redirect %s: %s", url, exc)
+            return None
+        except BlockedAddressError as exc:
+            logger.info("blocked address resolving Google-News redirect %s: %s", url, exc)
+            return None
+
+        final_url = str(resp.url)
+        # No redirect off Google News → the consent/interstitial shell, not an
+        # article. Nothing to resolve; the caller keeps the headline.
+        if hostname(final_url) == _GOOGLE_NEWS_HOST:
+            logger.info("Google-News link did not redirect to a publisher: %s", url)
+            return None
+
+        content_type = resp.headers.get("content-type", "")
+        if "html" not in content_type.lower():
+            logger.info(
+                "resolved Google-News target is not HTML (%s): %s",
+                content_type or "<none>",
+                final_url,
+            )
+            return None
+
+        # robots.txt is enforced on the publisher (the Google-News exemption
+        # does NOT extend to the destination).
+        _, robots = self._assert_open()
+        try:
+            allowed = await robots.is_allowed(final_url)
+        except BlockedAddressError:
+            # Unresolvable / non-public robots host — treat as unreachable.
+            logger.info("blocked address on robots for resolved target: %s", final_url)
+            return None
+        if not allowed:
+            logger.info("robots.txt disallows resolved publisher URL: %s", final_url)
+            return None
+
+        text = _extract_article_text(resp.text)
+        if len(text) < MIN_BODY_CHARS:
+            logger.info(
+                "resolved article body too short (%d < %d): %s",
+                len(text),
+                MIN_BODY_CHARS,
+                final_url,
+            )
+            return None
+
+        return ResolvedArticle(
+            url=final_url,
+            source=hostname(final_url),
+            body=text,
+        )
 
     def _parse_rss(
         self,
