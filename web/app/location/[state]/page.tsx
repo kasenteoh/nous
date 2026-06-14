@@ -16,7 +16,9 @@ type Props = {
 
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const { state: rawState } = await params;
-  const state = decodeURIComponent(rawState);
+  // hq_state is stored as the 2-letter uppercase code, so normalize the URL
+  // segment to uppercase — otherwise /location/ca 404s while /location/CA works.
+  const state = decodeURIComponent(rawState).toUpperCase();
 
   return {
     title: `Startups in ${state}`,
@@ -27,7 +29,9 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
 
 export default async function LocationPage({ params, searchParams }: Props) {
   const [{ state: rawState }, sp] = await Promise.all([params, searchParams]);
-  const state = decodeURIComponent(rawState);
+  // Match the uppercase code stored in hq_state (see generateMetadata) so a
+  // lowercase/mixed-case URL resolves instead of 404-ing.
+  const state = decodeURIComponent(rawState).toUpperCase();
   const { page, sort } = parseFacetSearchParams(sp);
 
   return (

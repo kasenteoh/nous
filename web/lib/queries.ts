@@ -68,6 +68,9 @@ interface NestedRelatedCompany {
   description_short: string | null;
   status: string | null;
   industry_group: string | null;
+  // Excluded (junk/husk) companies 404 on /c/[slug]; carry the flag so related
+  // links to them can be dropped rather than rendered as dead links.
+  exclusion_reason?: string | null;
 }
 
 type CompanyRelationshipJoin = {
@@ -1051,7 +1054,7 @@ export async function getRelatedCompanies(
   const { data, error } = await supabase
     .from("company_relationships")
     .select(
-      "score, evidence, related_company:companies!related_company_id(slug, name, description_short, status, industry_group)",
+      "score, evidence, related_company:companies!related_company_id(slug, name, description_short, status, industry_group, exclusion_reason)",
     )
     .eq("company_id", companyId)
     .eq("relationship_type", "similar")
@@ -1067,7 +1070,9 @@ export async function getRelatedCompanies(
     const c = Array.isArray(row.related_company)
       ? row.related_company[0]
       : row.related_company;
-    if (!c?.slug || !c.name) return [];
+    // Drop unresolved joins AND excluded companies — the latter 404 on
+    // /c/[slug], so linking them produces dead "Related companies" links.
+    if (!c?.slug || !c.name || c.exclusion_reason) return [];
     return [
       {
         slug: c.slug,
@@ -1329,7 +1334,7 @@ export async function getAlsoBackedBy(
   const topIds = ranked.map(([id]) => id);
   const { data: companyRows, error: companyError } = await supabase
     .from("companies")
-    .select("id, slug, name")
+    .select("id, slug, name, exclusion_reason")
     .in("id", topIds);
 
   if (companyError) {
@@ -1345,8 +1350,11 @@ export async function getAlsoBackedBy(
     id: string | null;
     slug: string | null;
     name: string | null;
+    exclusion_reason?: string | null;
   }[]) {
-    if (r.id && r.slug && r.name) {
+    // Skip excluded companies — their /c/[slug] page 404s, so surfacing them
+    // here would be a dead link.
+    if (r.id && r.slug && r.name && !r.exclusion_reason) {
       companyById.set(r.id, { slug: r.slug, name: r.name });
     }
   }
@@ -1573,8 +1581,13 @@ export async function countNewThisWeek(days = 7): Promise<NewThisWeekCounts> {
       .or(CATALOG_BAR_OR)
       .gte("created_at", cutoff),
     supabase
+      // Inner-join companies + exclusion filter so this count matches what the
+      // /new feed actually lists. listNewThisWeekFundingRounds drops rounds for
+      // excluded/missing companies; without the same filter here the summary
+      // line overstates the rounds shown below it ("76 extracted" vs 70 listed).
       .from("funding_rounds")
-      .select("id", { count: "exact", head: true })
+      .select("id, companies!inner(exclusion_reason)", { count: "exact", head: true })
+      .is("companies.exclusion_reason", null)
       .gte("created_at", cutoff),
   ]);
 
@@ -1840,6 +1853,53 @@ export async function getInvestorBySlug(
       if (b.announced_date === null) return -1;
       return b.announced_date.localeCompare(a.announced_date);
     });
+
+  // Union the company-level portfolio with companies this investor funded via
+  // rounds, so the rendered card list reflects every connected company and the
+  // "Portfolio" section never reads "none" while Funding activity lists rounds.
+  // ("Backs N" uses the denormalized portfolio_count, which covers both paths.)
+  const haveSlugs = new Set(portfolio.map((c) => c.slug));
+  const roundOnlySlugs = [
+    ...new Set(rounds.map((r) => r.companySlug).filter((s) => !haveSlugs.has(s))),
+  ];
+  if (roundOnlySlugs.length > 0) {
+    const { data: extra, error: extraError } = await supabase
+      .from("companies")
+      .select(
+        "slug, name, hq_city, hq_state, industry_group, description_short, status, exclusion_reason",
+      )
+      .in("slug", roundOnlySlugs);
+    if (extraError) {
+      console.error(
+        "[getInvestorBySlug] round-company hydrate failed:",
+        extraError.message,
+      );
+    }
+    for (const c of (extra ?? []) as {
+      slug: string | null;
+      name: string | null;
+      hq_city: string | null;
+      hq_state: string | null;
+      industry_group: string | null;
+      description_short: string | null;
+      status: string | null;
+      exclusion_reason?: string | null;
+    }[]) {
+      if (!c.slug || !c.name || c.exclusion_reason) continue;
+      portfolio.push({
+        slug: c.slug,
+        name: c.name,
+        hq_city: c.hq_city ?? null,
+        hq_state: c.hq_state ?? null,
+        industry_group: c.industry_group ?? null,
+        description_short: c.description_short ?? null,
+        status: c.status ?? "active",
+      });
+    }
+    portfolio.sort((a, b) =>
+      a.name.localeCompare(b.name, "en-US", { sensitivity: "base" }),
+    );
+  }
 
   return {
     slug: investor.slug as string,

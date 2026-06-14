@@ -102,9 +102,8 @@ export default async function InvestorPage({ params }: Props) {
             <dt className="sr-only">Portfolio size</dt>
             {/* portfolioCount uses the denormalized column from migration 0025:
                 counts companies via EITHER company_investors OR funding rounds,
-                matching the /investors index. The rendered portfolio cards below
-                only show company_investors-linked companies (round-only companies
-                are listed in the Funding activity table instead). */}
+                matching the /investors index. The portfolio cards below now show
+                that same union (company-level links + funded companies). */}
             <dd>
               Backs {portfolioCount.toLocaleString("en-US")}{" "}
               {portfolioCount === 1 ? "company" : "companies"}
