@@ -1277,6 +1277,49 @@ def repair_wrong_websites(dry_run: bool) -> None:
     asyncio.run(_run())
 
 
+@cli.command("repair-duplicate-rounds")
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    default=False,
+    help="Log intended collapses/deletes without writing.",
+)
+def repair_duplicate_rounds(dry_run: bool) -> None:
+    """Collapse same-amount duplicate funding rounds + drop fully-empty rows.
+
+    Repairs the duplicate funding_rounds left by the historical news backfill
+    (one round re-reported from many articles, several with null round_type and
+    no date — e.g. Helion's $465M Series G as 5 rows → an inflated $2.3B total).
+    Groups each company's rounds by amount_raised and collapses rows with
+    compatible round_types (equal or null) to one survivor, folding the losers'
+    non-null fields in and repointing their investor links. Idempotent: a
+    second run finds nothing to collapse.
+    """
+    import asyncio
+    from datetime import UTC, datetime
+
+    from nous.db.session import AsyncSessionLocal
+    from nous.observability import record_pipeline_run
+    from nous.pipeline.repair_duplicate_rounds import run_repair_duplicate_rounds
+
+    async def _run() -> None:
+        started = datetime.now(UTC)
+        async with AsyncSessionLocal() as session:
+            summary = await run_repair_duplicate_rounds(session, dry_run=dry_run)
+            click.echo(summary.model_dump_json(indent=2))
+        if not dry_run:
+            await record_pipeline_run(
+                "repair-duplicate-rounds",
+                started_at=started,
+                inputs_seen=summary.companies_seen,
+                rows_written=summary.empty_rows_deleted
+                + summary.duplicate_rows_merged,
+                summary=summary,
+            )
+
+    asyncio.run(_run())
+
+
 @cli.command("exclude-company")
 @click.argument("slug")
 @click.option(
