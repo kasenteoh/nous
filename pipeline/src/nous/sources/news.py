@@ -34,6 +34,7 @@ from selectolax.parser import HTMLParser
 from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
 
 from nous.sources.robots import RobotsBlockedError, RobotsCache
+from nous.util.ssrf import BlockedAddressError, guarded_async_client
 from nous.util.url import canonical_url, hostname
 
 # Re-export so callers that did ``from nous.sources.news import RobotsBlockedError``
@@ -210,13 +211,13 @@ class NewsClient:
         self._robots: RobotsCache | None = None
 
     async def __aenter__(self) -> NewsClient:
-        self._client = httpx.AsyncClient(
+        self._client = guarded_async_client(
             headers={"User-Agent": self._user_agent},
             timeout=httpx.Timeout(30.0),
             follow_redirects=True,
         )
         self._robots = RobotsCache(
-            client=httpx.AsyncClient(
+            client=guarded_async_client(
                 headers={"User-Agent": self._user_agent},
                 timeout=httpx.Timeout(5.0),
                 follow_redirects=True,
@@ -313,7 +314,7 @@ class NewsClient:
         except RobotsBlockedError:
             logger.warning("Google News RSS blocked by robots.txt for query %r", query)
             return []
-        except (httpx.HTTPStatusError, httpx.RequestError) as exc:
+        except (httpx.HTTPStatusError, httpx.RequestError, BlockedAddressError) as exc:
             logger.warning("Google News RSS fetch failed for %r: %s", query, exc)
             return []
 
@@ -331,6 +332,7 @@ class NewsClient:
         - HTTP 4xx (after retries; 4xx is not retried)
         - HTTP 5xx (after retries are exhausted)
         - Network error (after retries)
+        - SSRF-blocked or unresolvable host (BlockedAddressError)
         - Extracted text shorter than MIN_BODY_CHARS (paywall / JS shell)
         """
         try:
@@ -343,6 +345,11 @@ class NewsClient:
             return None
         except httpx.RequestError as exc:
             logger.info("network error on article body fetch %s: %s", url, exc)
+            return None
+        except BlockedAddressError as exc:
+            # Non-public or unresolvable publisher host (SSRF guard, fails closed
+            # on DNS failure). Unreachable like a network error → return None.
+            logger.info("blocked address on article body fetch %s: %s", url, exc)
             return None
 
         text = _extract_article_text(html_text)

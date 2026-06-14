@@ -32,6 +32,7 @@ from nous.db.upsert import (
 from nous.pipeline.refresh_investor_counts import refresh_investor_counts
 from nous.sources.homepage import HomepageClient
 from nous.sources.vc_portfolios import ADAPTERS, FIRM_DISPLAY_NAMES, PortfolioEntry
+from nous.util.url import is_storable_website
 
 logger = logging.getLogger(__name__)
 
@@ -103,11 +104,19 @@ async def run_refresh_vc_portfolios(
 
         for entry in entries:
             summary.entries_seen += 1
+            # is_storable_website already rejects None/blank; the extra truthy
+            # check on entry.website lets the type checker narrow str | None to
+            # str so .strip() is well-typed (semantics are unchanged).
+            storable_website = (
+                entry.website.strip()
+                if entry.website and is_storable_website(entry.website)
+                else None
+            )
             try:
                 company, created = await auto_create_company(
                     session,
                     name=entry.name,
-                    website=entry.website,
+                    website=storable_website,
                     discovered_via="vc_portfolio",
                     similarity_threshold=similarity_threshold,
                 )

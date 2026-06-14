@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from nous.util.url import canonical_url, hostname
+from nous.util.url import canonical_url, hostname, is_storable_website
 
 
 @pytest.mark.parametrize(
@@ -69,3 +69,23 @@ def test_hostname_basic() -> None:
 
 def test_hostname_relative_returns_empty() -> None:
     assert hostname("/just/a/path") == ""
+
+
+@pytest.mark.parametrize(
+    "value,expected",
+    [
+        ("https://acme.com", True),
+        ("http://acme.com/path", True),
+        ("acme.com", True),  # scheme-less kept; scraper adds https later
+        ("//acme.com", True),
+        ("javascript:alert(1)", False),
+        ("file:///etc/passwd", False),
+        ("data:text/html,x", False),
+        ("ftp://acme.com", False),
+        ("", False),
+        ("   ", False),
+        (None, False),
+    ],
+)
+def test_is_storable_website(value: str | None, expected: bool) -> None:
+    assert is_storable_website(value) is expected

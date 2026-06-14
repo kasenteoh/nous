@@ -86,6 +86,20 @@ def canonical_url(url: str) -> str:
     return urlunsplit((scheme, netloc, path, query, fragment))
 
 
+def is_storable_website(url: str | None) -> bool:
+    """True if ``url`` is safe to store as a company website.
+
+    Conservative: rejects empty values and any explicit non-http(s) scheme
+    (``javascript:``, ``file:``, ``data:``, ``ftp:`` …). Scheme-less values
+    (e.g. ``acme.com``) are accepted — the scraper prepends ``https://`` and the
+    runtime SSRF guard re-validates at fetch time.
+    """
+    if not url or not url.strip():
+        return False
+    scheme = urlsplit(url.strip()).scheme
+    return scheme in ("", "http", "https")
+
+
 def hostname(url: str) -> str:
     """Return the lowercased hostname for ``url``, with any leading ``www.`` stripped.
 

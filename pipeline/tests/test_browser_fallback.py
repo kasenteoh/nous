@@ -110,3 +110,15 @@ async def test_threshold_boundary(
         browser.fetch_rendered_html.assert_called()
     else:
         browser.fetch_rendered_html.assert_not_called()
+
+
+async def test_rendered_fetch_blocks_internal_url() -> None:
+    """fetch_rendered_html must refuse an internal address before navigating."""
+    from nous.sources.headless_browser import HeadlessBrowserClient
+    from nous.util.ssrf import BlockedAddressError
+
+    client = HeadlessBrowserClient(user_agent="nous-test test@example.com")
+    # Not entered as a context manager -> no browser launched. The guard must
+    # still raise, proving the check precedes any browser interaction.
+    with pytest.raises(BlockedAddressError):
+        await client.fetch_rendered_html("http://169.254.169.254/")

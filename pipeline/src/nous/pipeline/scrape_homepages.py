@@ -61,6 +61,7 @@ from nous.db.models import Company, RawPage
 from nous.db.upsert import upsert_raw_page
 from nous.sources.headless_browser import HeadlessBrowserClient
 from nous.sources.homepage import FetchResult, HomepageClient, RobotsBlockedError
+from nous.util.ssrf import BlockedAddressError
 from nous.util.text import extract_visible_text
 
 # Below this many chars of extracted visible text, the page is almost
@@ -182,7 +183,7 @@ async def _fetch_one(
     client: HomepageClient, url: str
 ) -> FetchResult | str | None:
     """Fetch a single URL. Returns FetchResult on success, the string
-    "robots" on RobotsBlockedError, or None on HTTP/network failure.
+    "robots" on RobotsBlockedError, or None on HTTP/network/SSRF-block failure.
 
     The tagged-string return is deliberate: callers need to distinguish
     "site explicitly blocks us" from "site is dead/unreachable" for metric
@@ -207,6 +208,12 @@ async def _fetch_one(
             type(exc).__name__,
             exc,
         )
+        return None
+    except BlockedAddressError as exc:
+        # SSRF guard rejected this URL (internal/unresolvable host, or a
+        # redirect to one). Treat it like an unreachable site, not an
+        # unexpected error.
+        logger.info("scrape: SSRF guard blocked %s: %s", url, exc)
         return None
 
 
