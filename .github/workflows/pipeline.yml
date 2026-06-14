@@ -107,6 +107,16 @@ on:
         required: false
         type: boolean
         default: false
+      run_repair_dupes:
+        description: "Run repair-duplicate-rounds: collapse duplicate funding rounds (same company+amount, compatible type) from the news backfill. Default: false."
+        required: false
+        type: boolean
+        default: false
+      repair_dupes_apply:
+        description: "When run_repair_dupes is set: actually delete. Default false = --dry-run (log intended collapses only)."
+        required: false
+        type: boolean
+        default: false
 
 # Serialize against every other workflow that mutates the companies table (see
 # discovery.yml). resolve / enrich UPDATE company rows and ingest-news /
@@ -200,6 +210,24 @@ jobs:
         timeout-minutes: 15
         continue-on-error: true
         run: uv run nous repair-wrong-websites
+
+      - name: Repair duplicate funding rounds
+        id: repair_dupes
+        if: ${{ inputs.run_repair_dupes == true }}
+        # One-off cleanup: collapse duplicate funding rounds the historical news
+        # backfill created by re-reporting one round from many articles (e.g.
+        # Helion's $465M Series G across 5 rows). The reconcile fix now prevents
+        # new dupes; this removes the existing ones. Default is a dry-run that
+        # only logs intended collapses — dispatch with repair_dupes_apply=true to
+        # actually delete.
+        timeout-minutes: 15
+        continue-on-error: true
+        run: |
+          if [ "${{ inputs.repair_dupes_apply }}" = "true" ]; then
+            uv run nous repair-duplicate-rounds
+          else
+            uv run nous repair-duplicate-rounds --dry-run
+          fi
 
       # ----- Funding news (freshness-first) -----------------------------------
 
