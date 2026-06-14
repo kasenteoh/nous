@@ -12,6 +12,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, model_validator
 
+from nous.util.industry import CANONICAL_INDUSTRIES
+
 # Singular C-suite titles — at most one person can credibly hold each. When a
 # page's testimonials / customer logos get mis-read as leadership, the model
 # tends to stamp the SAME exec title on several names (e.g. 3x "Co-Founder, COO"
@@ -79,8 +81,8 @@ class CompanyDescription(BaseModel):
     industry: str | None = Field(
         default=None,
         description=(
-            "Coarse industry bucket (e.g. 'fintech', 'developer tools', "
-            "'AI infrastructure', 'healthcare'). Null if unclear — never guess."
+            "Coarse industry bucket chosen from the fixed canonical list given "
+            "in the prompt (exact spelling). Null if none fits — never guess."
         ),
     )
     website_state: Literal[
@@ -189,9 +191,9 @@ Rules:
   "headquartered in ..." line, or a contact/footer location). `hq_state` must
   be a 2-letter US state code; leave it null if the HQ is outside the US or the
   state is not given. Return null — do NOT guess a location the text doesn't state.
-- `industry`: a coarse industry bucket like "fintech", "developer tools",
-  "AI infrastructure", or "healthcare". Return null if the text does not make
-  the industry clear. Never fabricate one.
+- `industry`: a coarse industry bucket. Choose the closest match from this
+  fixed list, using the exact spelling: {industries}. Return null if none of
+  them clearly fits — never invent a new bucket.
 - `website_state`: classify the page itself. Use 'parked_or_for_sale' for
   domain-sale/parking/registrar placeholder pages, 'under_construction' for
   launching-soon pages with no product info, 'unrelated_site' when the text
@@ -227,4 +229,5 @@ def build_prompt(*, company_name: str, cleaned_text: str) -> str:
     return PROMPT_TEMPLATE.format(
         company_name=company_name,
         cleaned_text=cleaned_text,
+        industries=", ".join(CANONICAL_INDUSTRIES),
     )

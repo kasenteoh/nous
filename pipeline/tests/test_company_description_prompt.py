@@ -196,3 +196,10 @@ def test_prompt_tells_model_to_ignore_testimonials() -> None:
     prompt = build_prompt(company_name="Acme", cleaned_text="x").lower()
     assert "testimonial" in prompt
     assert "more than one person" in prompt
+
+
+def test_prompt_lists_canonical_industries() -> None:
+    """M1: the prompt steers `industry` toward the fixed canonical set."""
+    prompt = build_prompt(company_name="Acme", cleaned_text="x")
+    assert "crypto/web3" in prompt  # a bucket only present via the canonical list
+    assert "vertical SaaS" in prompt

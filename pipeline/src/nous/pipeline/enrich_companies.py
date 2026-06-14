@@ -32,6 +32,7 @@ from nous.llm.client import (
     complete_json,
 )
 from nous.llm.prompts.company_description import CompanyDescription, build_prompt
+from nous.util.industry import normalize_industry
 from nous.util.text import extract_visible_text, truncate_to_chars
 
 logger = logging.getLogger(__name__)
@@ -329,7 +330,12 @@ async def run_enrich_companies(
         if description.hq_state and not company.hq_state:
             company.hq_state = description.hq_state
         if description.industry and not company.industry_group:
-            company.industry_group = description.industry
+            company.industry_group = normalize_industry(description.industry)
+        elif company.industry_group:
+            # Canonicalize an existing value on re-enrichment too, so the
+            # historical 264-value industry sprawl (M1) heals over cron runs —
+            # a pure string op, no extra LLM cost.
+            company.industry_group = normalize_industry(company.industry_group)
 
         # Eligibility judgment (spec 2026-06-12). Runs only on website_state
         # == "ok" — a parked/unrelated page supports no judgment. Unknown
