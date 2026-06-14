@@ -257,6 +257,8 @@ async def test_tc_broad_auto_creates_company(
         await db.execute(select(Company).where(Company.name == "NewCo"))
     ).scalars().all()
     assert len(rows) == 1
+    # discovered_via is a clean per-source slug (legacy alias preserved): the
+    # techcrunch.com feed maps to "techcrunch", not the hostname.
     assert rows[0].discovered_via == "techcrunch"
 
 
@@ -722,4 +724,260 @@ async def test_tc_path_passes_similarity_threshold_to_auto_create(
     assert received_kwargs[0]["similarity_threshold"] == custom_threshold, (
         f"Expected threshold {custom_threshold!r}, got "
         f"{received_kwargs[0]['similarity_threshold']!r}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Broad-feed aggregation: all four sources wired + cross-source dedup
+# ---------------------------------------------------------------------------
+#
+# These are pure unit tests — no DB needed. They monkeypatch the four
+# fetch_*_funding_articles functions and the session/auto-create layer,
+# then assert on which articles reached the processing loop.
+
+
+def _broad_result(
+    url: str,
+    source: str,
+    title: str = "Company X raises $10M Series A",
+) -> NewsArticleResult:
+    return NewsArticleResult(
+        url=url,
+        title=title,
+        source=source,
+        published_date=date(2026, 6, 1),
+        raw_content="snippet",
+    )
+
+
+async def test_broad_sweep_calls_all_four_sources(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """All four fetch_*_funding_articles functions are called during the broad sweep."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    calls: list[str] = []
+
+    async def _tc(client: Any, *, lookback_days: int = 7) -> list[NewsArticleResult]:
+        calls.append("techcrunch")
+        return []
+
+    async def _sa(client: Any, *, lookback_days: int = 14) -> list[NewsArticleResult]:
+        calls.append("siliconangle")
+        return []
+
+    async def _prn(client: Any, *, lookback_days: int = 14) -> list[NewsArticleResult]:
+        calls.append("prnewswire")
+        return []
+
+    async def _cb(client: Any, *, lookback_days: int = 14) -> list[NewsArticleResult]:
+        calls.append("crunchbase_news")
+        return []
+
+    monkeypatch.setattr("nous.pipeline.ingest_news.fetch_techcrunch_funding_articles", _tc)
+    monkeypatch.setattr(
+        "nous.pipeline.ingest_news.fetch_siliconangle_funding_articles", _sa
+    )
+    monkeypatch.setattr(
+        "nous.pipeline.ingest_news.fetch_prnewswire_funding_articles", _prn
+    )
+    monkeypatch.setattr(
+        "nous.pipeline.ingest_news.fetch_crunchbase_news_funding_articles", _cb
+    )
+
+    mock_result = MagicMock()
+    mock_result.scalars.return_value.all.return_value = []
+    fake_session = MagicMock()
+    fake_session.execute = AsyncMock(return_value=mock_result)
+    fake_session.add = MagicMock()
+    fake_session.commit = AsyncMock()
+
+    client = _MockNewsClient()
+    await run_ingest_news(
+        fake_session,  # type: ignore[arg-type]
+        client,  # type: ignore[arg-type]
+        include_techcrunch_broad=True,
+    )
+
+    assert "techcrunch" in calls
+    assert "siliconangle" in calls
+    assert "prnewswire" in calls
+    assert "crunchbase_news" in calls
+
+
+async def test_broad_sweep_skipped_when_flag_false(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When include_techcrunch_broad=False none of the four feeds are called."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    calls: list[str] = []
+
+    for attr, tag in [
+        ("fetch_techcrunch_funding_articles", "techcrunch"),
+        ("fetch_siliconangle_funding_articles", "siliconangle"),
+        ("fetch_prnewswire_funding_articles", "prnewswire"),
+        ("fetch_crunchbase_news_funding_articles", "crunchbase_news"),
+    ]:
+        async def _stub(
+            client: Any, *, lookback_days: int = 14, _tag: str = tag
+        ) -> list[NewsArticleResult]:
+            calls.append(_tag)
+            return []
+
+        monkeypatch.setattr(f"nous.pipeline.ingest_news.{attr}", _stub)
+
+    mock_result = MagicMock()
+    mock_result.scalars.return_value.all.return_value = []
+    fake_session = MagicMock()
+    fake_session.execute = AsyncMock(return_value=mock_result)
+    fake_session.add = MagicMock()
+    fake_session.commit = AsyncMock()
+
+    client = _MockNewsClient()
+    await run_ingest_news(
+        fake_session,  # type: ignore[arg-type]
+        client,  # type: ignore[arg-type]
+        include_techcrunch_broad=False,
+    )
+
+    assert calls == [], f"Expected no broad-feed calls, got: {calls}"
+
+
+async def test_broad_sweep_deduplicates_cross_source(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An article URL surfaced by multiple feeds is processed exactly once.
+
+    TC and SiliconANGLE both return the same canonical URL (one has a
+    trailing slash, the other a UTM param — both strip to the same key).
+    PR Newswire has a unique URL. Crunchbase has the same canonical URL
+    as TC (different utm_ decoration). After dedup, only two articles
+    reach the processing loop: one for the shared URL (TC wins on priority)
+    and one for the PR Newswire article.
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    shared_url_tc = "https://techcrunch.com/2026/06/01/acme-raises-50m"
+    shared_url_sa = "https://techcrunch.com/2026/06/01/acme-raises-50m/"  # trailing slash
+    shared_url_cb = "https://techcrunch.com/2026/06/01/acme-raises-50m?utm_source=cb"
+    prn_url = "https://www.prnewswire.com/news/betaco-raises-20m"
+
+    tc_articles = [_broad_result(shared_url_tc, "techcrunch.com")]
+    sa_articles = [_broad_result(shared_url_sa, "siliconangle.com")]
+    prn_articles = [_broad_result(prn_url, "prnewswire.com")]
+    cb_articles = [_broad_result(shared_url_cb, "crunchbase.com")]
+
+    async def _tc(client: Any, *, lookback_days: int = 7) -> list[NewsArticleResult]:
+        return tc_articles
+
+    async def _sa(client: Any, *, lookback_days: int = 14) -> list[NewsArticleResult]:
+        return sa_articles
+
+    async def _prn(client: Any, *, lookback_days: int = 14) -> list[NewsArticleResult]:
+        return prn_articles
+
+    async def _cb(client: Any, *, lookback_days: int = 14) -> list[NewsArticleResult]:
+        return cb_articles
+
+    monkeypatch.setattr("nous.pipeline.ingest_news.fetch_techcrunch_funding_articles", _tc)
+    monkeypatch.setattr(
+        "nous.pipeline.ingest_news.fetch_siliconangle_funding_articles", _sa
+    )
+    monkeypatch.setattr(
+        "nous.pipeline.ingest_news.fetch_prnewswire_funding_articles", _prn
+    )
+    monkeypatch.setattr(
+        "nous.pipeline.ingest_news.fetch_crunchbase_news_funding_articles", _cb
+    )
+
+    # Record which URLs reach the processing loop via _article_already_stored.
+    seen_processing: list[str] = []
+
+    async def _track_and_skip(session: Any, url: str) -> bool:
+        seen_processing.append(url)
+        return True  # pretend already stored so we skip body-fetch / LLM
+
+    monkeypatch.setattr(
+        "nous.pipeline.ingest_news._article_already_stored", _track_and_skip
+    )
+
+    mock_result = MagicMock()
+    mock_result.scalars.return_value.all.return_value = []
+    fake_session = MagicMock()
+    fake_session.execute = AsyncMock(return_value=mock_result)
+    fake_session.add = MagicMock()
+    fake_session.commit = AsyncMock()
+
+    client = _MockNewsClient()
+    await run_ingest_news(
+        fake_session,  # type: ignore[arg-type]
+        client,  # type: ignore[arg-type]
+        include_techcrunch_broad=True,
+    )
+
+    # Only 2 distinct canonical URLs should have reached the loop:
+    # - shared_url_tc (TC's version, first occurrence wins)
+    # - prn_url (unique to PR Newswire)
+    assert len(seen_processing) == 2, (
+        f"Expected 2 canonical URLs after dedup, got {len(seen_processing)}: {seen_processing}"
+    )
+    assert shared_url_tc in seen_processing, "TC URL (first occurrence) should be kept"
+    assert prn_url in seen_processing, "PR Newswire URL should be kept"
+
+
+async def test_broad_sweep_one_failing_source_does_not_block_others(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """If one adapter raises an unexpected exception, the other three still run."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    calls: list[str] = []
+
+    async def _tc_fail(client: Any, *, lookback_days: int = 7) -> list[NewsArticleResult]:
+        calls.append("techcrunch")
+        raise RuntimeError("simulated TC outage")
+
+    async def _sa(client: Any, *, lookback_days: int = 14) -> list[NewsArticleResult]:
+        calls.append("siliconangle")
+        return []
+
+    async def _prn(client: Any, *, lookback_days: int = 14) -> list[NewsArticleResult]:
+        calls.append("prnewswire")
+        return []
+
+    async def _cb(client: Any, *, lookback_days: int = 14) -> list[NewsArticleResult]:
+        calls.append("crunchbase_news")
+        return []
+
+    monkeypatch.setattr(
+        "nous.pipeline.ingest_news.fetch_techcrunch_funding_articles", _tc_fail
+    )
+    monkeypatch.setattr(
+        "nous.pipeline.ingest_news.fetch_siliconangle_funding_articles", _sa
+    )
+    monkeypatch.setattr(
+        "nous.pipeline.ingest_news.fetch_prnewswire_funding_articles", _prn
+    )
+    monkeypatch.setattr(
+        "nous.pipeline.ingest_news.fetch_crunchbase_news_funding_articles", _cb
+    )
+
+    mock_result = MagicMock()
+    mock_result.scalars.return_value.all.return_value = []
+    fake_session = MagicMock()
+    fake_session.execute = AsyncMock(return_value=mock_result)
+    fake_session.add = MagicMock()
+    fake_session.commit = AsyncMock()
+
+    client = _MockNewsClient()
+    # Should not raise even though TC adapter raised.
+    await run_ingest_news(
+        fake_session,  # type: ignore[arg-type]
+        client,  # type: ignore[arg-type]
+        include_techcrunch_broad=True,
+    )
+
+    assert set(calls) == {"techcrunch", "siliconangle", "prnewswire", "crunchbase_news"}, (
+        f"Expected all four adapters called, got: {calls}"
     )

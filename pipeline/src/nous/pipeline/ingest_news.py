@@ -3,11 +3,11 @@
 For each company we already track, query Google News RSS for funding-related
 articles in the lookback window and persist them to ``news_articles`` — storing
 the funding headline (Google News links are opaque redirects whose body is
-unreachable; see ``_GOOGLE_NEWS_HOST``). Then, if requested, sweep the
-TechCrunch venture-tag
-broad feed to catch funding announcements for companies we don't yet have —
-asking the LLM to identify the funded company from each headline + snippet and
-auto-creating a row.
+unreachable; see ``_GOOGLE_NEWS_HOST``). Then, if requested, sweep four
+broad funding-news feeds (TechCrunch venture-tag, SiliconANGLE, PR Newswire,
+and Crunchbase News) to catch funding announcements for companies we don't yet
+have — asking the LLM to identify the funded company from each headline +
+snippet and auto-creating a row.
 
 Commit cadence: per-article so a mid-run crash leaves a clean state.
 
@@ -30,14 +30,17 @@ from nous.db.models import Company, NewsArticle
 from nous.db.upsert import auto_create_company
 from nous.llm.client import LLMError, LLMRateLimitError, complete_json
 from nous.llm.prompts.news_company import HeadlineCompany, build_prompt
+from nous.sources.crunchbase_news import fetch_crunchbase_news_funding_articles
 from nous.sources.news import (
     _GOOGLE_NEWS_HOST,
     NewsArticleResult,
     NewsClient,
     ResolvedArticle,
 )
+from nous.sources.prnewswire import fetch_prnewswire_funding_articles
+from nous.sources.siliconangle import fetch_siliconangle_funding_articles
 from nous.sources.techcrunch import fetch_techcrunch_funding_articles
-from nous.util.url import hostname
+from nous.util.url import canonical_url, hostname
 
 logger = logging.getLogger(__name__)
 
@@ -162,6 +165,28 @@ async def _ingest_one_article(
     summary.articles_inserted += 1
 
 
+_DISCOVERED_VIA_BY_HOST: dict[str, str] = {
+    "techcrunch.com": "techcrunch",
+    "siliconangle.com": "siliconangle",
+    "prnewswire.com": "prnewswire",
+    "news.crunchbase.com": "crunchbase_news",
+    "crunchbase.com": "crunchbase_news",
+}
+
+
+def _discovered_via_for_source(source_host: str) -> str:
+    """Clean, stable ``discovered_via`` slug for a broad-feed article source.
+
+    ``NewsArticleResult.source`` is a hostname (e.g. ``"techcrunch.com"``). The
+    ``discovered_via`` column is a web filter/badge facet whose legacy broad-sweep
+    value was the short alias ``"techcrunch"``. Map each known feed host to a
+    clean slug so the facet stays consistent instead of splitting into hostname
+    variants; unknown hosts degrade to the bare host (sans ``www.``).
+    """
+    host = source_host.lower().removeprefix("www.")
+    return _DISCOVERED_VIA_BY_HOST.get(host, host)
+
+
 async def run_ingest_news(
     session: AsyncSession,
     client: NewsClient,
@@ -172,7 +197,7 @@ async def run_ingest_news(
     similarity_threshold: float = 0.85,
     funded_or_notable_only: bool = False,
 ) -> IngestNewsSummary:
-    """Fetch per-company Google News results + optional TechCrunch broad sweep.
+    """Fetch per-company Google News results + optional broad-feed sweep.
 
     Per-company path: query Google News RSS for ``"<name>" funding``, filter
     to funding-keyword matches (done inside ``NewsClient.google_news_rss``),
@@ -192,9 +217,13 @@ async def run_ingest_news(
     it with the funded set bounds the backfill's DeepSeek spend. Default False
     keeps the standing rotation (every non-excluded company) unchanged.
 
-    TC broad-tag path: fetch the TC venture feed; for each article whose
-    title parses to a candidate company name, find-or-auto-create the
-    company, then persist the article.
+    Broad-feed path (``include_techcrunch_broad=True``): aggregate four
+    funding-news feeds — TechCrunch venture tag, SiliconANGLE, PR Newswire
+    VC feed, and Crunchbase News — dedup the combined list by canonical URL,
+    then for each article whose title parses to a candidate company name,
+    find-or-auto-create the company and persist the article.  All four sources
+    are gated by the same flag so adding new feeds never changes the
+    ``--no-techcrunch`` CLI behaviour.
     """
     summary = IngestNewsSummary()
 
@@ -236,15 +265,61 @@ async def run_ingest_news(
         await session.commit()
 
     if include_techcrunch_broad:
+        # --- Aggregate four broad funding-news feeds ---
+        # Each fetch is independent: one failing source returns [] (see adapter
+        # docstrings) and must not prevent the others from running. Sequential
+        # awaits match the file's existing style and also respect the 1 req/s
+        # per-domain throttle enforced inside NewsClient — parallel gather would
+        # defeat that throttle for the same domain if any two feeds share a host.
+
+        # 1. TechCrunch venture tag
         try:
             tc_results = await fetch_techcrunch_funding_articles(
                 client, lookback_days=lookback_days
             )
         except Exception:
-            logger.exception("techcrunch venture feed fetch failed")
+            logger.exception("TechCrunch venture feed fetch failed")
             tc_results = []
 
-        for result in tc_results:
+        # 2. SiliconANGLE
+        try:
+            sa_results = await fetch_siliconangle_funding_articles(
+                client, lookback_days=lookback_days
+            )
+        except Exception:
+            logger.exception("SiliconANGLE feed fetch failed")
+            sa_results = []
+
+        # 3. PR Newswire VC feed
+        try:
+            prn_results = await fetch_prnewswire_funding_articles(
+                client, lookback_days=lookback_days
+            )
+        except Exception:
+            logger.exception("PR Newswire VC feed fetch failed")
+            prn_results = []
+
+        # 4. Crunchbase News
+        try:
+            cb_results = await fetch_crunchbase_news_funding_articles(
+                client, lookback_days=lookback_days
+            )
+        except Exception:
+            logger.exception("Crunchbase News feed fetch failed")
+            cb_results = []
+
+        # Dedup by canonical URL before processing so the same article
+        # surfaced by multiple feeds is processed exactly once. First
+        # occurrence wins (TC → SA → PRN → CB priority).
+        seen_urls: set[str] = set()
+        broad_results: list[NewsArticleResult] = []
+        for result in tc_results + sa_results + prn_results + cb_results:
+            key = canonical_url(result.url)
+            if key not in seen_urls:
+                seen_urls.add(key)
+                broad_results.append(result)
+
+        for result in broad_results:
             summary.articles_seen += 1
             if await _article_already_stored(session, result.url):
                 continue
@@ -254,13 +329,13 @@ async def run_ingest_news(
                 # Stop making LLM calls for the rest of the sweep; the next run
                 # picks up where this left off (unstored URLs are reprocessed).
                 logger.warning(
-                    "LLM rate limit hit during TC company extraction — "
-                    "stopping the TechCrunch sweep."
+                    "LLM rate limit hit during broad-feed company extraction — "
+                    "stopping the broad sweep."
                 )
                 break
             except LLMError:
                 logger.exception(
-                    "LLM company extraction failed for TC item %r", result.title
+                    "LLM company extraction failed for broad-feed item %r", result.title
                 )
                 summary.tc_skipped_no_company += 1
                 continue
@@ -270,14 +345,14 @@ async def run_ingest_news(
                 continue
             # Fetch the body BEFORE auto-creating a company. A failed fetch
             # (robots block, 4xx, thin content) should not leave an orphan
-            # company row with discovered_via='techcrunch' and zero supporting
-            # articles. If the body succeeds the URL is dedupable next run;
-            # if not, the worst case is one wasted feed read per week.
+            # company row with zero supporting articles. If the body succeeds
+            # the URL is dedupable next run; if not, the worst case is one
+            # wasted feed read per week.
             try:
                 body = await client.fetch_article_body(result.url)
             except Exception:
                 logger.exception(
-                    "TC body fetch raised for %r (candidate=%r)",
+                    "Broad-feed body fetch raised for %r (candidate=%r)",
                     result.title,
                     candidate,
                 )
@@ -290,7 +365,11 @@ async def run_ingest_news(
                     session,
                     name=candidate,
                     website=None,
-                    discovered_via="techcrunch",
+                    # Tag discovery with a clean, stable per-source slug (e.g.
+                    # "techcrunch", "siliconangle") instead of a hostname, so the
+                    # discovered_via facet stays consistent with the legacy value
+                    # rather than splitting into "techcrunch.com"-style variants.
+                    discovered_via=_discovered_via_for_source(result.source),
                     similarity_threshold=similarity_threshold,
                 )
                 if created:
