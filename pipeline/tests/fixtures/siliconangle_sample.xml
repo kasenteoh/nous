@@ -1,0 +1,147 @@
+<?xml version="1.0" encoding="UTF-8"?><rss version="2.0"
+	xmlns:content="http://purl.org/rss/1.0/modules/content/"
+	xmlns:wfw="http://wellformedweb.org/CommentAPI/"
+	xmlns:dc="http://purl.org/dc/elements/1.1/"
+	xmlns:atom="http://www.w3.org/2005/Atom"
+	xmlns:sy="http://purl.org/rss/1.0/modules/syndication/"
+	xmlns:slash="http://purl.org/rss/1.0/modules/slash/"
+	xmlns:company="http://purl.org/rss/1.0/modules/company" >
+
+<channel>
+	<title>SiliconANGLE</title>
+	<atom:link href="https://siliconangle.com/feed/" rel="self" type="application/rss+xml" />
+	<link>https://siliconangle.com</link>
+	<description>Extracting the signal from the noise.</description>
+	<lastBuildDate>Sun, 14 Jun 2026 18:00:00 +0000</lastBuildDate>
+	<language>en-US</language>
+	<sy:updatePeriod>hourly</sy:updatePeriod>
+	<sy:updateFrequency>1</sy:updateFrequency>
+	<generator>https://wordpress.org/?v=4.9.22</generator>
+
+	<item>
+		<title>Mistral reportedly seeking $3.5B funding round amid physics AI push</title>
+		<link>https://siliconangle.com/2026/06/12/mistral-reportedly-seeking-3-5b-funding-round-amid-physics-ai-push/</link>
+		<comments>https://siliconangle.com/2026/06/12/mistral-reportedly-seeking-3-5b-funding-round-amid-physics-ai-push/#respond</comments>
+		<pubDate>Sat, 13 Jun 2026 00:03:27 +0000</pubDate>
+		<dc:creator><![CDATA[Maria Deutscher]]></dc:creator>
+		<category><![CDATA[AI]]></category>
+		<category><![CDATA[NEWS]]></category>
+		<category><![CDATA[funding round]]></category>
+		<category><![CDATA[Mistral AI]]></category>
+		<guid isPermaLink="false">https://siliconangle.com/?p=771867</guid>
+		<description><![CDATA[<p>French foundation model developer Mistral AI SAS is reportedly in talks to raise &#8364;3 billion, or about $3.5 billion, from investors. Bloomberg today cited sources as saying that the round could value the company at &#8364;20 billion.</p>]]></description>
+		<wfw:commentRss>https://siliconangle.com/2026/06/12/mistral-reportedly-seeking-3-5b-funding-round-amid-physics-ai-push/feed/</wfw:commentRss>
+		<slash:comments>0</slash:comments>
+	</item>
+
+	<item>
+		<title>ChatSee raises $6.5M to build &#8216;failure memory&#8217; for enterprise AI agents</title>
+		<link>https://siliconangle.com/2026/06/12/chatsee-raises-6-5m-build-failure-memory-enterprise-ai-agents/</link>
+		<comments>https://siliconangle.com/2026/06/12/chatsee-raises-6-5m-build-failure-memory-enterprise-ai-agents/#respond</comments>
+		<pubDate>Fri, 12 Jun 2026 15:30:12 +0000</pubDate>
+		<dc:creator><![CDATA[Kyt Dotson]]></dc:creator>
+		<category><![CDATA[AI]]></category>
+		<category><![CDATA[NEWS]]></category>
+		<category><![CDATA[startup funding]]></category>
+		<guid isPermaLink="false">https://siliconangle.com/?p=771810</guid>
+		<description><![CDATA[<p>ChatSee.AI Inc., a company that provides a failure intelligence layer for autonomous artificial intelligence systems, has raised $6.5 million in seed funding. True Ventures led the round, with participation from First Rays Venture Partners and Seven Hills Ventures.</p>]]></description>
+		<wfw:commentRss>https://siliconangle.com/2026/06/12/chatsee-raises-6-5m-build-failure-memory-enterprise-ai-agents/feed/</wfw:commentRss>
+		<slash:comments>0</slash:comments>
+	</item>
+
+	<item>
+		<title>Upriver raises $14M to automate enterprise data engineering for AI</title>
+		<link>https://siliconangle.com/2026/06/11/upriver-raises-14m-automate-enterprise-data-engineering-ai/</link>
+		<comments>https://siliconangle.com/2026/06/11/upriver-raises-14m-automate-enterprise-data-engineering-ai/#respond</comments>
+		<pubDate>Thu, 11 Jun 2026 23:02:00 +0000</pubDate>
+		<dc:creator><![CDATA[Duncan Riley]]></dc:creator>
+		<category><![CDATA[AI]]></category>
+		<category><![CDATA[NEWS]]></category>
+		<category><![CDATA[seed funding]]></category>
+		<category><![CDATA[venture capital]]></category>
+		<guid isPermaLink="false">https://siliconangle.com/?p=771713</guid>
+		<description><![CDATA[<p>Israeli data engineering startup Upriver Data Ltd. today announced it has raised $14 million in new funding to automate the data work that enterprises depend on to make artificial intelligence projects succeed.</p>]]></description>
+		<wfw:commentRss>https://siliconangle.com/2026/06/11/upriver-raises-14m-automate-enterprise-data-engineering-ai/feed/</wfw:commentRss>
+		<slash:comments>0</slash:comments>
+	</item>
+
+	<item>
+		<title>Helix launches with $10B+ in funding to build AI infrastructure</title>
+		<link>https://siliconangle.com/2026/06/11/helix-launches-10b-funding-build-ai-infrastructure/</link>
+		<comments>https://siliconangle.com/2026/06/11/helix-launches-10b-funding-build-ai-infrastructure/#respond</comments>
+		<pubDate>Thu, 11 Jun 2026 22:58:17 +0000</pubDate>
+		<dc:creator><![CDATA[Maria Deutscher]]></dc:creator>
+		<category><![CDATA[Infra]]></category>
+		<category><![CDATA[NEWS]]></category>
+		<category><![CDATA[funding round]]></category>
+		<guid isPermaLink="false">https://siliconangle.com/?p=771717</guid>
+		<description><![CDATA[<p>An investor consortium today launched a venture called Helix Digital Infrastructure Inc. to build artificial intelligence data centers for hyperscaler cloud providers. The group has provided Helix with more than $10 billion worth of long-term capital commitments.</p>]]></description>
+		<wfw:commentRss>https://siliconangle.com/2026/06/11/helix-launches-10b-funding-build-ai-infrastructure/feed/</wfw:commentRss>
+		<slash:comments>0</slash:comments>
+	</item>
+
+	<item>
+		<title>Endurance Energy raises $54M to tap geothermal power from undersea volcanoes</title>
+		<link>https://siliconangle.com/2026/06/11/endurance-energy-raises-54m-tap-geothermal-power-undersea-volcanoes/</link>
+		<comments>https://siliconangle.com/2026/06/11/endurance-energy-raises-54m-tap-geothermal-power-undersea-volcanoes/#respond</comments>
+		<pubDate>Thu, 11 Jun 2026 22:42:02 +0000</pubDate>
+		<dc:creator><![CDATA[Duncan Riley]]></dc:creator>
+		<category><![CDATA[Emerging Tech]]></category>
+		<category><![CDATA[NEWS]]></category>
+		<category><![CDATA[Series A]]></category>
+		<category><![CDATA[funding]]></category>
+		<guid isPermaLink="false">https://siliconangle.com/?p=771708</guid>
+		<description><![CDATA[<p>Endurance Energy Inc., a Seattle startup building generators that tap heat from undersea volcanoes, revealed today that it has raised $54 million in new funding to advance its plans for offshore power plants as energy demand surges.</p>]]></description>
+		<wfw:commentRss>https://siliconangle.com/2026/06/11/endurance-energy-raises-54m-tap-geothermal-power-undersea-volcanoes/feed/</wfw:commentRss>
+		<slash:comments>0</slash:comments>
+	</item>
+
+	<item>
+		<title>10 best practices for optimizing generative and agentic AI costs</title>
+		<link>https://siliconangle.com/2026/06/14/10-best-practices-optimizing-generative-agentic-ai-costs/</link>
+		<comments>https://siliconangle.com/2026/06/14/10-best-practices-optimizing-generative-agentic-ai-costs/#respond</comments>
+		<pubDate>Sun, 14 Jun 2026 18:31:00 +0000</pubDate>
+		<dc:creator><![CDATA[Arun Chandrasekaran]]></dc:creator>
+		<category><![CDATA[AI]]></category>
+		<category><![CDATA[NEWS]]></category>
+		<category><![CDATA[generative AI]]></category>
+		<guid isPermaLink="false">https://siliconangle.com/?p=771883</guid>
+		<description><![CDATA[<p>As enterprises scale initiatives, the cost of developing, deploying and operating generative artificial intelligence models rises significantly. IT leaders can adopt these 10 best practices for optimizing costs.</p>]]></description>
+		<wfw:commentRss>https://siliconangle.com/2026/06/14/10-best-practices-optimizing-generative-agentic-ai-costs/feed/</wfw:commentRss>
+		<slash:comments>0</slash:comments>
+	</item>
+
+	<item>
+		<title>Connecting the front line: How 8x8 Pulse and Resolve fix corporate blind spots</title>
+		<link>https://siliconangle.com/2026/06/12/connecting-front-line-8x8-pulse-resolve-fix-corporate-blind-spots/</link>
+		<comments>https://siliconangle.com/2026/06/12/connecting-front-line-8x8-pulse-resolve-fix-corporate-blind-spots/#respond</comments>
+		<pubDate>Fri, 12 Jun 2026 23:00:41 +0000</pubDate>
+		<dc:creator><![CDATA[Zeus Kerravala]]></dc:creator>
+		<category><![CDATA[Cloud]]></category>
+		<category><![CDATA[NEWS]]></category>
+		<category><![CDATA[communications]]></category>
+		<category><![CDATA[customer experience]]></category>
+		<guid isPermaLink="false">https://siliconangle.com/?p=771856</guid>
+		<description><![CDATA[<p>Enterprise software architecture has long suffered from what can be called an integration tax. When an organization deploys a communications platform, it rarely stops at the basic functions, such as calling and messaging.</p>]]></description>
+		<wfw:commentRss>https://siliconangle.com/2026/06/12/connecting-front-line-8x8-pulse-resolve-fix-corporate-blind-spots/feed/</wfw:commentRss>
+		<slash:comments>0</slash:comments>
+	</item>
+
+	<item>
+		<title>Adobe beats expectations but another top executive leaves, putting pressure on its stock</title>
+		<link>https://siliconangle.com/2026/06/11/adobe-beats-expectations-another-top-executive-leaves-putting-pressure-stock/</link>
+		<comments>https://siliconangle.com/2026/06/11/adobe-beats-expectations-another-top-executive-leaves-putting-pressure-stock/#respond</comments>
+		<pubDate>Fri, 12 Jun 2026 01:25:53 +0000</pubDate>
+		<dc:creator><![CDATA[Mike Wheatley]]></dc:creator>
+		<category><![CDATA[Cloud]]></category>
+		<category><![CDATA[NEWS]]></category>
+		<category><![CDATA[earnings]]></category>
+		<category><![CDATA[Adobe]]></category>
+		<guid isPermaLink="false">https://siliconangle.com/?p=771772</guid>
+		<description><![CDATA[<p>A bad day for the creative software company Adobe Inc. was made even worse after it revealed another top executive is departing, as the news overshadowed a solid earnings and revenue beat.</p>]]></description>
+		<wfw:commentRss>https://siliconangle.com/2026/06/11/adobe-beats-expectations-another-top-executive-leaves-putting-pressure-stock/feed/</wfw:commentRss>
+		<slash:comments>0</slash:comments>
+	</item>
+
+</channel>
+</rss>
