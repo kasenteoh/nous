@@ -13,6 +13,7 @@ import {
   getIndustrySummary,
   listNewestCompanies,
   listRecentFundings,
+  type TrendingCompany,
 } from "@/lib/queries";
 import { formatDate, formatUsd } from "@/lib/format";
 import { SITE_NAME, siteOrigin } from "@/lib/site";
@@ -38,6 +39,20 @@ export default async function FrontPage() {
     ]);
 
   const hasMarginNotes = fundings.length > 0 || newest.length > 0;
+
+  // "Trending now" strip — derived from the SAME spotlight pool the deck above
+  // consumes (funding-gated, scored by recent rounds + news volume), so it costs
+  // no extra query. The deck foregrounds entry #0 and rotates; the strip surfaces
+  // the next-ranked companies so it complements rather than echoes the headline.
+  // Structurally a Spotlight is a TrendingCompany (slug/name/oneLiner/facts), so
+  // we map straight across. The standalone getTrendingCompanies() helper in
+  // queries.ts exposes the same list to callers that don't already hold the pool.
+  const trending: TrendingCompany[] = spotlights.slice(1, 7).map((s) => ({
+    slug: s.slug,
+    name: s.name,
+    oneLiner: s.oneLiner,
+    facts: s.facts,
+  }));
 
   const origin = siteOrigin();
 
@@ -181,6 +196,41 @@ export default async function FrontPage() {
           </aside>
         )}
       </div>
+
+      {/* ── "Trending now" strip ──────────────────────────────────────────
+          Compact, server-rendered cards from the same funding-gated spotlight
+          pool (recent rounds + news volume). Renders nothing when the pool has
+          ≤1 entry, so it never shows a lonely or empty row. */}
+      {trending.length > 0 && (
+        <section
+          aria-label="Trending now"
+          className="border-t border-edge py-7"
+        >
+          <p className={labelClass}>Trending now</p>
+          <ul className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            {trending.map((company) => (
+              <li key={company.slug}>
+                <Link
+                  href={`/c/${company.slug}`}
+                  className="group block rounded-lg border border-edge p-4 hover:border-ink-muted transition-colors"
+                >
+                  <span className="font-semibold text-ink group-hover:underline underline-offset-2 leading-snug">
+                    {company.name}
+                  </span>
+                  <span className="mt-1.5 block text-sm text-ink-muted line-clamp-2 leading-snug">
+                    {company.oneLiner}
+                  </span>
+                  {company.facts.length > 0 && (
+                    <span className="mt-2 block font-mono text-xs text-ink-faint">
+                      {company.facts.join(" · ")}
+                    </span>
+                  )}
+                </Link>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
 
       {/* ── Bottom hairline row: top industries + browse-all ──────────── */}
       {total > 0 && (

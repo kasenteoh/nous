@@ -194,6 +194,15 @@ export default async function CompanyPage({ params }: Props) {
       .filter((u): u is string => u !== null),
   );
 
+  // Per-section freshness riders: the latest dated funding round / news article.
+  // Both lists arrive sorted newest-first with nulls last (see getCompanyBySlug),
+  // so the first entry carrying a date is the most recent. Null when no entry has
+  // a date — the rider then hides rather than printing an em dash.
+  const latestFundingDate =
+    fundingRounds.find((r) => r.announced_date !== null)?.announced_date ?? null;
+  const latestNewsDate =
+    news.find((a) => a.published_date !== null)?.published_date ?? null;
+
   return (
     <main className="flex-1 px-6 py-12 max-w-4xl mx-auto w-full">
       <JsonLd data={companyJsonLd(company)} />
@@ -427,7 +436,11 @@ export default async function CompanyPage({ params }: Props) {
       <Team people={people} companyName={company.name} />
 
       {/* ── Funding history (M3) ───────────────────────────────────────── */}
-      <FundingHistory rounds={fundingRounds} companyWebsite={company.website} />
+      <FundingHistory
+        rounds={fundingRounds}
+        companyWebsite={company.website}
+        asOf={latestFundingDate}
+      />
 
       {/* ── Investors ──────────────────────────────────────────────────── */}
       <Investors
@@ -443,7 +456,7 @@ export default async function CompanyPage({ params }: Props) {
       <RelatedCompanies similar={similar} alsoBackedBy={alsoBackedBy} />
 
       {/* ── News ───────────────────────────────────────────────────────── */}
-      <News news={news} />
+      <News news={news} asOf={latestNewsDate} />
     </main>
   );
 }

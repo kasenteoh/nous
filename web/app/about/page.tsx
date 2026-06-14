@@ -1,4 +1,11 @@
 import type { Metadata } from "next";
+import { getCoverageStats } from "@/lib/queries";
+import { formatDate } from "@/lib/format";
+
+// Static page + ISR: the coverage line is computed from the catalog but rarely
+// changes within a window, so cache it on the same 6h cadence as the rest of
+// the site rather than rendering dynamically on every request.
+export const revalidate = 21600;
 
 export const metadata: Metadata = {
   // The layout's title template appends " — nous".
@@ -8,7 +15,9 @@ export const metadata: Metadata = {
   alternates: { canonical: "/about" },
 };
 
-export default function AboutPage() {
+export default async function AboutPage() {
+  const coverage = await getCoverageStats();
+
   return (
     <main className="flex-1 px-6 py-12 max-w-3xl mx-auto w-full">
       <header className="mb-10">
@@ -20,6 +29,20 @@ export default function AboutPage() {
           public sources and refreshed on a schedule. Every figure on a company
           page traces back to a recorded source.
         </p>
+        {/* Coverage / freshness honesty line — suppressed entirely when the
+            catalog count is unavailable (missing env / query error) so we never
+            print a misleading "0 of 0". */}
+        {coverage.shown > 0 && (
+          <p className="mt-4 font-mono text-sm text-ink-muted leading-relaxed">
+            {coverage.withFunding.toLocaleString("en-US")} of{" "}
+            {coverage.shown.toLocaleString("en-US")} listed companies have
+            funding data{" "}
+            <span className="text-ink-faint">
+              · catalog refreshed every 6 hours
+              {coverage.asOf && <> · last updated {formatDate(coverage.asOf)}</>}
+            </span>
+          </p>
+        )}
       </header>
 
       <section className="mb-10">
