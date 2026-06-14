@@ -7,9 +7,20 @@ primary category, and tags.
 
 from __future__ import annotations
 
+import re
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
+
+# Singular C-suite titles — at most one person can credibly hold each. When a
+# page's testimonials / customer logos get mis-read as leadership, the model
+# tends to stamp the SAME exec title on several names (e.g. 3x "Co-Founder, COO"
+# on Shippo's page). "Founder"/"Co-Founder" are intentionally NOT here — a
+# company can have several of those.
+_SINGULAR_EXEC = re.compile(
+    r"\b(ceo|coo|cto|cfo|cmo|cro|cpo|ciso|chief\s+\w+\s+officer|president)\b",
+    re.IGNORECASE,
+)
 
 
 class PersonExtraction(BaseModel):
@@ -119,6 +130,33 @@ class CompanyDescription(BaseModel):
         ),
     )
 
+    @model_validator(mode="after")
+    def _drop_implausible_people(self) -> CompanyDescription:
+        """Drop people whose role claims a singular C-suite title that two or
+        more entries also claim. That collision is the signature of testimonial
+        / customer names mis-extracted as leadership (e.g. three "Co-Founder,
+        COO" rows on Shippo's page); we can't tell which — if any — is the real
+        holder, and the no-fabrication rule prefers omission to a wrong roster.
+        Several founders are legitimate and left untouched."""
+        if len(self.people) < 2:
+            return self
+        person_titles = [
+            {m.group(0).lower() for m in _SINGULAR_EXEC.finditer(p.role)}
+            for p in self.people
+        ]
+        counts: dict[str, int] = {}
+        for titles in person_titles:
+            for title in titles:
+                counts[title] = counts.get(title, 0) + 1
+        contested = {title for title, n in counts.items() if n >= 2}
+        if contested:
+            self.people = [
+                person
+                for person, titles in zip(self.people, person_titles, strict=True)
+                if titles.isdisjoint(contested)
+            ]
+        return self
+
 
 PROMPT_TEMPLATE = """\
 You are an analyst writing a short profile of the company below. You will read
@@ -137,10 +175,15 @@ Rules:
   "fintech", "AI infrastructure", "vertical SaaS", "consumer", "biotech tooling".
   Don't invent obscure categories.
 - `tags`: up to 8 lowercase, hyphenated technical/category tags.
-- `people`: list the founders and senior leadership (CEO, CTO, and other
-  C-level or founder roles) that the site actually names — typically from an
-  about/team/leadership page. Use the role exactly as stated. Return an EMPTY
-  list if the site does not clearly name them. Do NOT guess or fabricate names.
+- `people`: list ONLY the company's own founders and senior leadership (CEO,
+  CTO, and other C-level or founder roles) that the site actually names —
+  typically from an about/team/leadership page. Use the role exactly as stated.
+  IGNORE names that appear in testimonials, customer quotes or logos, advisory
+  boards, investor lists, press mentions, or blog-post bylines — those people
+  are NOT the company's leadership. Never assign the same singular executive
+  title (CEO, COO, CTO, ...) to more than one person. If you are not confident a
+  name is actual company leadership, omit it. Return an EMPTY list if the site
+  does not clearly name its leaders. Do NOT guess or fabricate names or roles.
 - `hq_city` / `hq_state`: the company's headquarters location, US-focused.
   Extract these ONLY when the text clearly states them (an address, a
   "headquartered in ..." line, or a contact/footer location). `hq_state` must

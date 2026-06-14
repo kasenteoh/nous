@@ -127,3 +127,72 @@ def test_company_description_rejects_missing_primary_category() -> None:
     }
     with pytest.raises(ValidationError):
         CompanyDescription.model_validate_json(json.dumps(payload))
+
+
+# ---------------------------------------------------------------------------
+# Implausible-roster guard (H2) — testimonial/customer names mis-extracted as
+# leadership tend to share one singular C-suite title across several people.
+# ---------------------------------------------------------------------------
+
+
+def test_shared_singular_exec_title_roster_dropped() -> None:
+    """Three people all 'Co-Founder, COO' (the Shippo signature) → all dropped:
+    only one COO can exist, so none of the claims is trustworthy."""
+    payload = {
+        **VALID_PAYLOAD,
+        "people": [
+            {"name": "Tiffany Jones", "role": "Co-Founder, COO"},
+            {"name": "Nancey Harris", "role": "Co-Founder, COO"},
+            {"name": "Wendy Webster", "role": "Co-Founder, COO"},
+        ],
+    }
+    obj = CompanyDescription.model_validate_json(json.dumps(payload))
+    assert obj.people == []
+
+
+def test_distinct_exec_roles_are_kept() -> None:
+    payload = {
+        **VALID_PAYLOAD,
+        "people": [
+            {"name": "Ada Lovelace", "role": "CEO"},
+            {"name": "Alan Turing", "role": "CTO"},
+            {"name": "Grace Hopper", "role": "Co-Founder"},
+        ],
+    }
+    obj = CompanyDescription.model_validate_json(json.dumps(payload))
+    assert {p.name for p in obj.people} == {"Ada Lovelace", "Alan Turing", "Grace Hopper"}
+
+
+def test_multiple_cofounders_without_singular_title_kept() -> None:
+    """Several 'Co-Founder'/'Founder' rows are legitimate — no singular C-suite
+    title is contested, so nothing is dropped."""
+    payload = {
+        **VALID_PAYLOAD,
+        "people": [
+            {"name": "A", "role": "Co-Founder"},
+            {"name": "B", "role": "Co-Founder"},
+            {"name": "C", "role": "Founder"},
+        ],
+    }
+    obj = CompanyDescription.model_validate_json(json.dumps(payload))
+    assert len(obj.people) == 3
+
+
+def test_contested_title_drops_only_claimants() -> None:
+    """A contested COO drops the COO claimants but keeps the distinct CEO."""
+    payload = {
+        **VALID_PAYLOAD,
+        "people": [
+            {"name": "Real CEO", "role": "CEO"},
+            {"name": "Fake 1", "role": "COO"},
+            {"name": "Fake 2", "role": "COO"},
+        ],
+    }
+    obj = CompanyDescription.model_validate_json(json.dumps(payload))
+    assert [p.name for p in obj.people] == ["Real CEO"]
+
+
+def test_prompt_tells_model_to_ignore_testimonials() -> None:
+    prompt = build_prompt(company_name="Acme", cleaned_text="x").lower()
+    assert "testimonial" in prompt
+    assert "more than one person" in prompt

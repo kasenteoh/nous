@@ -16,7 +16,20 @@ and hands them to `complete_json`.
 
 from __future__ import annotations
 
+import re
+
 from pydantic import BaseModel, Field, model_validator
+
+# Meta-commentary the model sometimes leaks into a competitor's reasoning /
+# description instead of just excluding the entry (e.g. "Included temporarily
+# for evaluation but should be dropped."). Such text must never reach a page, so
+# the entry is dropped entirely. Mirrors the web display guard in
+# web/components/Competitors.tsx.
+_META_LEAK = re.compile(
+    r"should be dropped|for evaluation|temporar|placeholder|"
+    r"do not (include|display|show)|not a (real )?competitor",
+    re.IGNORECASE,
+)
 
 MAX_PEERS = 50
 MAX_COMPETITORS = 6
@@ -49,6 +62,21 @@ class CompetitorAnalysis(BaseModel):
     competitors: list[Competitor] = Field(
         default_factory=list, max_length=MAX_COMPETITORS
     )
+
+    @model_validator(mode="after")
+    def _drop_meta_leak(self) -> CompetitorAnalysis:
+        """Drop competitors whose reasoning or description leaks the model's own
+        selection commentary ("...should be dropped", "for evaluation", ...).
+        The model is instructed to EXCLUDE uncertain entries rather than annotate
+        them; this is the backstop for when it does so anyway. Defined before
+        _renumber_ranks so ranks stay contiguous over the kept set."""
+        self.competitors = [
+            c
+            for c in self.competitors
+            if not _META_LEAK.search(c.reasoning)
+            and not _META_LEAK.search(c.description)
+        ]
+        return self
 
     @model_validator(mode="after")
     def _renumber_ranks(self) -> CompetitorAnalysis:
@@ -96,8 +124,12 @@ Task:
   return an empty list rather than fabricate.
 - Rank them 1..N, where 1 is the most direct competitor. Ranks must be
   consecutive integers starting at 1 with no gaps or duplicates.
-- For each competitor, write a 1–2 sentence description and a short
-  reasoning explaining why they compete with the target.
+- For each competitor, write a 1–2 sentence factual description and a short
+  reasoning about why they compete with the target. The reasoning must be about
+  the competition itself — NEVER meta-commentary about your own selection
+  process (do not write things like "included for evaluation" or "should be
+  dropped"). If you are not confident an entry belongs, EXCLUDE it rather than
+  add it with a caveat.
 
 Return JSON matching the schema.
 """
