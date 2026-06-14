@@ -28,7 +28,9 @@ from uuid import UUID
 
 from pydantic import BaseModel
 from sqlalchemy import delete, func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm.exc import StaleDataError
 
 from nous.db.models import Company, Competitor, NewsArticle
 from nous.llm.client import LLMError, LLMParseError, LLMRateLimitError, complete_json
@@ -365,10 +367,26 @@ async def _persist_analysis(
     # The CompetitorAnalysis validator already guarantees contiguous 1..N
     # ranks; this re-rank is belt-and-braces so a future relaxation of that
     # validation can't violate the unique (company_id, rank) constraint.
+    # Self-referential edges (competitor resolves to the target company itself)
+    # are dropped before rank assignment so ranks remain gap-free over survivors.
     llm_ordered = sorted(outcome.analysis.competitors, key=lambda x: x.rank)
     resolved: list[tuple[UUID | None, str, str, str, int, str, str | None]] = []
-    for contiguous_rank, c in enumerate(llm_ordered, start=1):
+    contiguous_rank = 0
+    for c in llm_ordered:
         cid = await resolve_competitor_company_id(session, name=c.name)
+        # Guard: drop self-referential edges. The LLM occasionally lists the
+        # target company among its own competitors (or a normalized_name collision
+        # maps a competitor name back to the target). Inserting such a row
+        # violates ck_competitors_no_self_reference, so we drop it here.
+        if cid is not None and cid == company.id:
+            logger.warning(
+                "Dropping self-referential competitor '%s' for company %s (%s)",
+                c.name,
+                company.name,
+                company.id,
+            )
+            continue
+        contiguous_rank += 1
         article_url = outcome.candidate_map.get(normalize_name(c.name))
         if article_url is not None:
             source, source_url = _TECHCRUNCH_SOURCE, article_url
@@ -500,13 +518,31 @@ async def run_analyze_competitors(
             if outcome.llm_failure:
                 summary.llm_failures += 1
                 continue
-            await _persist_analysis(
-                session,
-                summary,
-                company=one.company,
-                outcome=outcome,
-                dry_run=dry_run,
-            )
+            # Capture the name before the try block — accessing ORM attributes
+            # after session.rollback() expires them, causing a lazy-load attempt
+            # that fails (mirrors the StaleDataError pattern in enrich_companies).
+            company_name = one.company.name
+            try:
+                await _persist_analysis(
+                    session,
+                    summary,
+                    company=one.company,
+                    outcome=outcome,
+                    dry_run=dry_run,
+                )
+            except (IntegrityError, StaleDataError) as exc:
+                # Defense-in-depth: if a DB constraint fires despite the self-ref
+                # filter in _persist_analysis (e.g. a concurrent rename made the
+                # target's normalized_name collide with a competitor), roll back
+                # and skip this company rather than aborting the whole stage.
+                await session.rollback()
+                summary.llm_failures += 1
+                logger.warning(
+                    "DB error persisting competitors for %s — skipping. Error: %s",
+                    company_name,
+                    exc,
+                )
+                continue
 
     if stop:
         # Recorded once total (not per task): the serial loop incremented this
