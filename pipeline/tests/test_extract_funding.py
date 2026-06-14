@@ -3,11 +3,13 @@
 DB-gated integration tests. For coverage by area see the section banners
 throughout this file (Core extraction, Reconciliation, Investor link
 stickiness, Limit, CHECK constraint, Website fallback, Status events,
-Stated cumulative totals, --requery-totals one-time backfill).
+Stated cumulative totals, --requery-totals one-time backfill, Website-path
+bounded concurrency).
 """
 
 from __future__ import annotations
 
+import asyncio
 import os
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
@@ -25,6 +27,7 @@ from nous.db.models import (
     NewsArticle,
     RawPage,
 )
+from nous.llm.client import LLMRateLimitError
 from nous.llm.prompts.funding_extraction import FundingExtraction
 from nous.pipeline.extract_funding import (
     run_extract_funding,
@@ -1781,3 +1784,218 @@ async def test_website_fallback_accepts_own_domain(
     assert summary.skipped_junk_source == 0
     assert summary.companies_with_funding == 1
     assert summary.funding_rounds_created == 1
+
+
+# ---------------------------------------------------------------------------
+# Website-path bounded concurrency (parity with the sequential behavior)
+# ---------------------------------------------------------------------------
+
+
+def _make_funding_company(name: str) -> Company:
+    """A round-less company with a website + a funding-stating page — eligible
+    for the website path and guaranteed to produce a round on a high extraction."""
+    company = _make_company(name)
+    company.website = f"https://{name.lower()}.example/"
+    return company
+
+
+async def test_website_concurrency_writes_same_rounds_as_sequential(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With concurrency > 1, each eligible company gets its round persisted and
+    its checked-at stamped exactly as a sequential run would — one round per
+    company, attributed to that company's own website."""
+    n = 10
+    companies = [_make_funding_company(f"WConcCo{i:02d}") for i in range(n)]
+    db.add_all(companies)
+    await db.flush()
+    for c in companies:
+        db.add(_add_raw_page(c.id, f"{c.website}about"))
+    await db.flush()
+    await db.commit()
+
+    async def _fake(prompt: str, schema: type) -> FundingExtraction:
+        return _make_extraction(
+            round_type="Series B",
+            amount=Decimal("20000000.00"),
+            valuation=None,
+            leads=["Acme Capital"],
+            others=[],
+            confidence="medium",
+        )
+
+    monkeypatch.setattr("nous.pipeline.extract_funding.complete_json", _fake)
+
+    summary = await run_extract_funding_website(db, limit=100, concurrency=5)
+    assert summary.companies_seen == n
+    assert summary.companies_with_funding == n
+    assert summary.funding_rounds_created == n
+
+    for c in companies:
+        rounds = (
+            (
+                await db.execute(
+                    select(FundingRound).where(FundingRound.company_id == c.id)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert len(rounds) == 1
+        assert rounds[0].primary_news_url == c.website
+        await db.refresh(c)
+        assert c.website_funding_checked_at is not None
+
+
+async def test_website_concurrency_runs_llm_calls_in_parallel(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The website-funding LLM calls for a batch overlap in time (bounded by the
+    semaphore). Proven by recording the peak concurrently-in-flight calls."""
+    n = 8
+    companies = [_make_funding_company(f"WParCo{i:02d}") for i in range(n)]
+    db.add_all(companies)
+    await db.flush()
+    for c in companies:
+        db.add(_add_raw_page(c.id, f"{c.website}about"))
+    await db.flush()
+    await db.commit()
+
+    state = {"in_flight": 0, "peak": 0}
+
+    async def _fake(prompt: str, schema: type) -> FundingExtraction:
+        state["in_flight"] += 1
+        state["peak"] = max(state["peak"], state["in_flight"])
+        try:
+            await asyncio.sleep(0.02)
+            return _make_extraction(is_funding=False, leads=[], others=[])
+        finally:
+            state["in_flight"] -= 1
+
+    monkeypatch.setattr("nous.pipeline.extract_funding.complete_json", _fake)
+
+    await run_extract_funding_website(db, limit=100, concurrency=4)
+    assert state["peak"] >= 2
+    assert state["peak"] <= 4  # never exceeds the semaphore bound
+
+
+async def test_website_concurrency_one_is_strictly_sequential(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """concurrency=1 degrades to one-at-a-time: peak in-flight is never > 1."""
+    n = 5
+    companies = [_make_funding_company(f"WSeqCo{i}") for i in range(n)]
+    db.add_all(companies)
+    await db.flush()
+    for c in companies:
+        db.add(_add_raw_page(c.id, f"{c.website}about"))
+    await db.flush()
+    await db.commit()
+
+    state = {"in_flight": 0, "peak": 0}
+
+    async def _fake(prompt: str, schema: type) -> FundingExtraction:
+        state["in_flight"] += 1
+        state["peak"] = max(state["peak"], state["in_flight"])
+        try:
+            await asyncio.sleep(0.005)
+            return _make_extraction(is_funding=False, leads=[], others=[])
+        finally:
+            state["in_flight"] -= 1
+
+    monkeypatch.setattr("nous.pipeline.extract_funding.complete_json", _fake)
+
+    summary = await run_extract_funding_website(db, limit=100, concurrency=1)
+    assert summary.companies_seen == n
+    assert state["peak"] == 1
+
+
+async def test_website_concurrency_rate_limit_stops_and_does_not_stamp(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A 429 stops scheduling further batches; the rate-limited company is NOT
+    stamped (so it stays eligible next run) and later batches never hit the LLM,
+    while first-batch companies are stamped + persisted.
+
+    Companies are named so alphabetical selection order is deterministic; with
+    concurrency 3 the batches are [00,01,02] [03,04,05] [06,07,08] [09].
+    """
+    n = 10
+    companies = [_make_funding_company(f"WRlCo{i:02d}") for i in range(n)]
+    db.add_all(companies)
+    await db.flush()
+    for c in companies:
+        db.add(_add_raw_page(c.id, f"{c.website}about"))
+    await db.flush()
+    await db.commit()
+    first_batch_ids = [companies[i].id for i in range(3)]
+    rate_limited_id = companies[4].id
+
+    seen: list[str] = []
+
+    async def _fake(prompt: str, schema: type) -> FundingExtraction:
+        for i in range(n):
+            if f"WRlCo{i:02d}" in prompt:
+                seen.append(f"WRlCo{i:02d}")
+                if i == 4:
+                    raise LLMRateLimitError("429")
+                return _make_extraction(is_funding=False, leads=[], others=[])
+        raise AssertionError("unknown company in prompt")
+
+    monkeypatch.setattr("nous.pipeline.extract_funding.complete_json", _fake)
+
+    summary = await run_extract_funding_website(db, limit=100, concurrency=3)
+
+    assert summary.skipped_rate_limited == 1
+    # Third+ batches never reached the LLM.
+    for i in range(6, n):
+        assert f"WRlCo{i:02d}" not in seen
+
+    # First-batch companies are stamped (attempt completed).
+    for cid in first_batch_ids:
+        c = await db.get(Company, cid)
+        assert c is not None
+        assert c.website_funding_checked_at is not None
+
+    # The rate-limited company is deliberately NOT stamped — it keeps its slot.
+    rl = await db.get(Company, rate_limited_id)
+    assert rl is not None
+    assert rl.website_funding_checked_at is None
+
+
+async def test_website_concurrency_thin_text_skips_without_llm(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A company whose page text is below the minimum is counted under
+    skipped_no_text, never sent to the LLM, and still stamped — preserved under
+    concurrency alongside companies that do call the LLM."""
+    # One thin-text company + two with substantial funding text.
+    thin = _make_funding_company("WThinCo")
+    db.add(thin)
+    await db.flush()
+    db.add(RawPage(company_id=thin.id, url=f"{thin.website}about", content="hi"))
+
+    rich = [_make_funding_company(f"WRichCo{i}") for i in range(2)]
+    db.add_all(rich)
+    await db.flush()
+    for c in rich:
+        db.add(_add_raw_page(c.id, f"{c.website}about"))
+    await db.flush()
+    await db.commit()
+
+    calls: list[str] = []
+
+    async def _fake(prompt: str, schema: type) -> FundingExtraction:
+        calls.append(prompt)
+        return _make_extraction(is_funding=False, leads=[], others=[])
+
+    monkeypatch.setattr("nous.pipeline.extract_funding.complete_json", _fake)
+
+    summary = await run_extract_funding_website(db, limit=100, concurrency=5)
+    assert summary.companies_seen == 3
+    assert summary.skipped_no_text == 1
+    # Only the two rich companies hit the LLM.
+    assert len(calls) == 2
+
+    await db.refresh(thin)
+    assert thin.website_funding_checked_at is not None

@@ -594,11 +594,23 @@ def backfill_funding_history(
         "checked. Pair with a high --limit. Idempotent — reconcile dedups."
     ),
 )
+@click.option(
+    "--concurrency",
+    type=int,
+    default=5,
+    show_default=True,
+    help=(
+        "How many companies' website-funding LLM calls to run at once. Only "
+        "the LLM call is parallelized; DB reads/writes stay sequential on one "
+        "session. A 429 stops scheduling further work at a batch boundary."
+    ),
+)
 def extract_funding_website(
     limit: int | None,
     include_low_confidence: bool,
     recheck_after_days: int,
     ignore_recheck: bool,
+    concurrency: int,
 ) -> None:
     """Gap-fill funding from a company's own website (fallback to TechCrunch).
 
@@ -622,6 +634,7 @@ def extract_funding_website(
                     skip_low_confidence=not include_low_confidence,
                     recheck_after_days=recheck_after_days,
                     ignore_recheck=ignore_recheck,
+                    concurrency=concurrency,
                 )
                 click.echo(summary.model_dump_json(indent=2))
             await record_pipeline_run(
@@ -666,7 +679,20 @@ def extract_funding_website(
     default=False,
     help="Run eligibility + LLM calls but skip the DB write.",
 )
-def analyze_competitors(limit: int, ttl_days: int, dry_run: bool) -> None:
+@click.option(
+    "--concurrency",
+    type=int,
+    default=5,
+    show_default=True,
+    help=(
+        "How many companies' LLM passes to run at once (2 DeepSeek calls each). "
+        "Only the LLM work is parallelized; DB reads/writes stay sequential on "
+        "one session. A 429 stops scheduling further work at a batch boundary."
+    ),
+)
+def analyze_competitors(
+    limit: int, ttl_days: int, dry_run: bool, concurrency: int
+) -> None:
     """Run the competitor-analysis LLM over eligible companies."""
     import asyncio
     from datetime import UTC, datetime
@@ -684,6 +710,7 @@ def analyze_competitors(limit: int, ttl_days: int, dry_run: bool) -> None:
                     limit=limit,
                     ttl_days=ttl_days,
                     dry_run=dry_run,
+                    concurrency=concurrency,
                 )
                 click.echo(summary.model_dump_json(indent=2))
             if not dry_run:

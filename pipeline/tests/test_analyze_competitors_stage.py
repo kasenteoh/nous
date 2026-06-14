@@ -7,10 +7,13 @@ DB-gated integration tests covering:
 - Replace-style write inside one transaction.
 - Main loop happy path with a mocked LLM.
 - Rate-limit, parse-error, TTL-gate, dry-run behaviors.
+- Bounded-concurrency parity: same rows + deterministic order as sequential,
+  genuine parallel LLM dispatch, and 429 stops scheduling further work.
 """
 
 from __future__ import annotations
 
+import asyncio
 import os
 from datetime import UTC, datetime, timedelta
 
@@ -553,3 +556,184 @@ async def test_ttl_gate_skips_recently_analyzed(
     summary = await run_analyze_competitors(db, limit=10, ttl_days=25)
     assert called["n"] == 0
     assert summary.companies_analyzed == 0
+
+
+# ---------------------------------------------------------------------------
+# Bounded concurrency (parity with the sequential behavior)
+# ---------------------------------------------------------------------------
+
+
+async def test_concurrency_writes_same_rows_as_sequential(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With concurrency > 1, every eligible company is analyzed and its
+    competitor rows are written exactly as a sequential run would — one set per
+    company, ranked, with the resolved FK on the matching peer."""
+    n = 12
+    targets = [_make_company(f"CoTarget{i:02d}", industry_group="SaaS") for i in range(n)]
+    # A resolvable rival per target; ineligible (no description_long) so it is
+    # only a resolution target, never analyzed itself.
+    rivals = [
+        _make_company(f"CoRival{i:02d}", industry_group="SaaS", description_long=None)
+        for i in range(n)
+    ]
+    db.add_all([*targets, *rivals])
+    await db.flush()
+
+    async def _fake(prompt: str, schema: type) -> CompetitorAnalysis:
+        # Route by the target header so each company gets its own rival linked.
+        for i in range(n):
+            if f"Name: CoTarget{i:02d}" in prompt:
+                return _fixture_extraction([f"CoRival{i:02d}", "Unlinked"])
+        raise AssertionError("prompt did not name a known target")
+
+    monkeypatch.setattr("nous.pipeline.analyze_competitors.complete_json", _fake)
+
+    summary = await run_analyze_competitors(db, limit=100, ttl_days=25, concurrency=5)
+
+    assert summary.companies_analyzed == n
+    assert summary.competitors_written == 2 * n
+    assert summary.competitors_linked == n  # one resolvable rival each
+    assert summary.competitors_unlinked == n  # the "Unlinked" pick each
+
+    for i, target in enumerate(targets):
+        rows = (
+            (
+                await db.execute(
+                    select(Competitor)
+                    .where(Competitor.company_id == target.id)
+                    .order_by(Competitor.rank)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert [r.competitor_name for r in rows] == [f"CoRival{i:02d}", "Unlinked"]
+        assert rows[0].competitor_company_id == rivals[i].id
+        assert rows[1].competitor_company_id is None
+
+
+async def test_concurrency_runs_llm_calls_in_parallel(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The LLM passes for a batch overlap in time (bounded by the semaphore),
+    rather than running strictly one-at-a-time. Proven by recording the max
+    number of concurrently-in-flight ``complete_json`` calls."""
+    n = 8
+    targets = [_make_company(f"ParCo{i:02d}", industry_group="SaaS") for i in range(n)]
+    db.add_all(targets)
+    await db.flush()
+
+    state = {"in_flight": 0, "peak": 0}
+
+    async def _fake(prompt: str, schema: type) -> CompetitorAnalysis:
+        state["in_flight"] += 1
+        state["peak"] = max(state["peak"], state["in_flight"])
+        try:
+            # Yield to the loop so siblings can pile up before we return.
+            await asyncio.sleep(0.02)
+            return _fixture_extraction(["Rival"])
+        finally:
+            state["in_flight"] -= 1
+
+    monkeypatch.setattr("nous.pipeline.analyze_competitors.complete_json", _fake)
+
+    await run_analyze_competitors(db, limit=100, ttl_days=25, concurrency=4)
+
+    # No TC articles → exactly one analysis call per company. With concurrency=4
+    # at least two should have been in flight together.
+    assert state["peak"] >= 2
+    assert state["peak"] <= 4  # never exceeds the semaphore bound
+
+
+async def test_concurrency_one_is_strictly_sequential(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """concurrency=1 degrades to one-at-a-time: peak in-flight is never > 1.
+    This is the safety floor and the parity baseline."""
+    n = 5
+    db.add_all([_make_company(f"SeqCo{i}", industry_group="SaaS") for i in range(n)])
+    await db.flush()
+
+    state = {"in_flight": 0, "peak": 0}
+
+    async def _fake(prompt: str, schema: type) -> CompetitorAnalysis:
+        state["in_flight"] += 1
+        state["peak"] = max(state["peak"], state["in_flight"])
+        try:
+            await asyncio.sleep(0.005)
+            return _fixture_extraction(["Rival"])
+        finally:
+            state["in_flight"] -= 1
+
+    monkeypatch.setattr("nous.pipeline.analyze_competitors.complete_json", _fake)
+
+    summary = await run_analyze_competitors(db, limit=100, ttl_days=25, concurrency=1)
+    assert summary.companies_analyzed == n
+    assert state["peak"] == 1
+
+
+async def test_concurrency_rate_limit_stops_scheduling_further_batches(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A 429 stops the run at a batch boundary: companies in later batches are
+    never sent to the LLM, and ``skipped_rate_limited`` is recorded exactly
+    once (not per task). First-batch companies are still written."""
+    # 10 companies, concurrency 3 → batches [0,1,2] [3,4,5] [6,7,8] [9].
+    n = 10
+    targets = [_make_company(f"RlCo{i:02d}", industry_group="SaaS") for i in range(n)]
+    db.add_all(targets)
+    await db.flush()
+    first_batch_ids = {targets[i].id for i in range(3)}
+
+    seen: list[str] = []
+
+    async def _fake(prompt: str, schema: type) -> CompetitorAnalysis:
+        # Raise on the second-batch company "RlCo04"; everything else succeeds.
+        for i in range(n):
+            if f"Name: RlCo{i:02d}" in prompt:
+                seen.append(f"RlCo{i:02d}")
+                if i == 4:
+                    raise LLMRateLimitError("429")
+                return _fixture_extraction(["Rival"])
+        raise AssertionError("unknown target")
+
+    monkeypatch.setattr("nous.pipeline.analyze_competitors.complete_json", _fake)
+
+    summary = await run_analyze_competitors(db, limit=100, ttl_days=25, concurrency=3)
+
+    # Recorded exactly once regardless of how many tasks raced.
+    assert summary.skipped_rate_limited == 1
+    # The third+ batches (RlCo06..RlCo09) must never have hit the LLM.
+    for i in range(6, n):
+        assert f"RlCo{i:02d}" not in seen
+
+    # Every first-batch company is fully written (a 429 keeps prior work).
+    written_company_ids = set(
+        (await db.execute(select(Competitor.company_id))).scalars().all()
+    )
+    assert first_batch_ids <= written_company_ids
+
+
+async def test_concurrency_dry_run_writes_nothing_for_many(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """dry_run under concurrency still writes zero rows while counting every
+    company as analyzed."""
+    n = 7
+    db.add_all(
+        [_make_company(f"DryCo{i}", industry_group="SaaS") for i in range(n)]
+    )
+    await db.flush()
+
+    async def _fake(prompt: str, schema: type) -> CompetitorAnalysis:
+        return _fixture_extraction(["Rival"])
+
+    monkeypatch.setattr("nous.pipeline.analyze_competitors.complete_json", _fake)
+
+    summary = await run_analyze_competitors(
+        db, limit=100, ttl_days=25, dry_run=True, concurrency=5
+    )
+    assert summary.companies_analyzed == n
+    rows = (await db.execute(select(Competitor))).scalars().all()
+    assert rows == []
