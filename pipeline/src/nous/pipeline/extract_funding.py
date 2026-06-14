@@ -62,6 +62,7 @@ from nous.llm.prompts.funding_extraction import (
     build_website_prompt,
 )
 from nous.pipeline.refresh_investor_counts import refresh_investor_counts
+from nous.pipeline.refresh_latest_round import refresh_latest_round
 from nous.sources.reject_hosts import is_aggregator_url
 from nous.util.text import extract_visible_text, truncate_to_chars
 
@@ -456,6 +457,12 @@ async def run_extract_funding(
     await refresh_investor_counts(session)
     await session.commit()
 
+    # Recompute the denormalized latest_round_* columns now that rounds may have
+    # been created/merged, so the web browse sorts/filters stay fresh. Set-based
+    # + idempotent; its own commit for the same isolation reason as above.
+    await refresh_latest_round(session)
+    await session.commit()
+
     return summary
 
 
@@ -645,5 +652,11 @@ async def run_extract_funding_website(
         company.website_funding_checked_at = datetime.now(tz=UTC)
         session.add(company)
         await session.commit()
+
+    # Recompute the denormalized latest_round_* columns now that website-sourced
+    # rounds may have been created/merged, so the web browse sorts/filters stay
+    # fresh. Set-based + idempotent; committed in its own transaction.
+    await refresh_latest_round(session)
+    await session.commit()
 
     return summary

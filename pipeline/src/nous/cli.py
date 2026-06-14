@@ -734,6 +734,40 @@ def refresh_investor_counts_cmd() -> None:
     asyncio.run(_run())
 
 
+@cli.command("refresh-latest-round")
+def refresh_latest_round_cmd() -> None:
+    """Recompute the denormalized latest_round_* columns on companies.
+
+    Flattens each company's most-recent funding round (greatest announced_date,
+    NULLS LAST) onto companies.latest_round_amount / latest_round_date /
+    latest_round_type so the web browse page can sort/filter without a
+    cross-table aggregate. Set-based and idempotent: a full recompute that also
+    clears stale values for companies whose last round was removed.
+    """
+    import asyncio
+    from datetime import UTC, datetime
+
+    from nous.db.session import AsyncSessionLocal
+    from nous.observability import record_pipeline_run
+    from nous.pipeline.refresh_latest_round import refresh_latest_round
+
+    async def _run() -> None:
+        started = datetime.now(UTC)
+        async with AsyncSessionLocal() as session:
+            summary = await refresh_latest_round(session)
+            await session.commit()
+            click.echo(summary.model_dump_json(indent=2))
+        await record_pipeline_run(
+            "refresh-latest-round",
+            started_at=started,
+            inputs_seen=0,
+            rows_written=summary.companies_with_round,
+            summary=summary,
+        )
+
+    asyncio.run(_run())
+
+
 @cli.command("dedup-investors")
 def dedup_investors_cmd() -> None:
     """Collapse duplicate investor rows by canonical name (alias-applied).

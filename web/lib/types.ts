@@ -53,6 +53,14 @@ export interface CompanyRow {
   // Denormalized count(funding_rounds) (migration 0022) backing the catalog
   // bar. Same optionality caveat as above.
   funding_round_count?: number | null;
+  // Denormalized most-recent funding round (migration 0028), maintained by the
+  // refresh-latest-round stage; backs the browse-page funding/recency sorts and
+  // the stage / funded-since filters. Optional for the same reason as the
+  // total_raised_* fields above: prod rows lack these columns until the
+  // migration runs there, and select("*") omits unknown columns.
+  latest_round_amount?: number | null;
+  latest_round_date?: string | null; // ISO date (YYYY-MM-DD) or null
+  latest_round_type?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -274,4 +282,47 @@ export interface CompanyDetail {
   competitors: CompetitorWithResolved[]; // sorted by rank ascending
   investors: CompanyInvestorRow[]; // company-level investors (VC firms)
   news: NewsArticleRow[]; // recent news articles, newest first
+}
+
+// ─── Compare view (Task C5) ───────────────────────────────────────────────────
+
+/**
+ * One company column in the /compare table. A flat, display-ready projection
+ * built by {@link getCompaniesForCompare} — just the fields the side-by-side
+ * comparison renders, so the page needs no per-company fan-out.
+ */
+export interface CompareCompany {
+  slug: string;
+  name: string;
+  website: string | null;
+  industryGroup: string | null;
+  hqCity: string | null;
+  hqState: string | null;
+  status: string;
+  yearIncorporated: number | null;
+  employeeCountMin: number | null;
+  employeeCountMax: number | null;
+  /** Hybrid total: max(stated total_raised_usd, sum of known round amounts). */
+  totalRaised: number | null;
+  roundCount: number;
+  latestRoundType: string | null;
+  latestRoundAmount: number | null;
+  latestRoundDate: string | null; // ISO date or null
+  /** Distinct investor names (company-level + round-level), sorted, capped. */
+  investors: string[];
+  /** Top competitor names by rank, capped. */
+  competitors: string[];
+}
+
+// ─── Co-investor signal (Task C5) ─────────────────────────────────────────────
+
+/**
+ * Another investor that frequently appears on the same funding rounds as the
+ * investor being viewed, computed read-time in {@link getCoInvestors}.
+ * `sharedRounds` is the number of rounds both backed (the co-investment count).
+ */
+export interface CoInvestor {
+  slug: string;
+  name: string;
+  sharedRounds: number;
 }

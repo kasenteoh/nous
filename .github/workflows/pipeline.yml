@@ -305,6 +305,18 @@ jobs:
           uv run nous backfill-funding-history \
             --news-limit "$BF_NEWS_LIMIT" --funding-limit "$BF_FUNDING_LIMIT"
 
+      - name: Refresh latest round
+        id: refresh_latest_round
+        # Recompute the denormalized companies.latest_round_* columns the web
+        # browse page sorts/filters on (Task C0). The extract-funding stages
+        # already call this internally, but it also runs here as a cheap (one
+        # set-based UPDATE, no LLM) standalone so the columns stay fresh even on
+        # a descriptions-only dispatch that skips both funding stages. Always
+        # runs; idempotent.
+        timeout-minutes: 5
+        continue-on-error: true
+        run: uv run nous refresh-latest-round
+
       # ----- Descriptions (backlog drain + new companies) ---------------------
 
       - name: Resolve homepages

@@ -209,6 +209,25 @@ class Company(Base):
         Integer, nullable=False, server_default="0", index=True
     )
 
+    # Denormalized "most recent funding round" fields (migration 0028),
+    # maintained by the refresh-latest-round stage (called at the end of the
+    # extract-funding paths). "Most recent" = the round with the greatest
+    # announced_date (NULLS LAST). They exist so the web browse page can sort by
+    # funding amount / recency without a cross-table aggregate — PostgREST can't
+    # ORDER BY an aggregate over a one-to-many embed. amount/date are indexed
+    # (they back the funding_desc / recently_funded sorts and the funded-since /
+    # raise-range filters); latest_round_type is a small free-text label used by
+    # the stage filter (eq), and is indexed because it appears in that WHERE.
+    latest_round_amount: Mapped[Decimal | None] = mapped_column(
+        Numeric(20, 2), nullable=True, index=True
+    )
+    latest_round_date: Mapped[date | None] = mapped_column(
+        Date, nullable=True, index=True
+    )
+    latest_round_type: Mapped[str | None] = mapped_column(
+        String, nullable=True, index=True
+    )
+
 
 class RawPage(Base):
     """Scraped-page cache for homepage / about / product pages.
