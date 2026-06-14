@@ -1,0 +1,120 @@
+<?xml version="1.0" encoding="UTF-8"?><rss version="2.0"
+	xmlns:content="http://purl.org/rss/1.0/modules/content/"
+	xmlns:wfw="http://wellformedweb.org/CommentAPI/"
+	xmlns:dc="http://purl.org/dc/elements/1.1/"
+	xmlns:atom="http://www.w3.org/2005/Atom"
+	xmlns:sy="http://purl.org/rss/1.0/modules/syndication/"
+	xmlns:slash="http://purl.org/rss/1.0/modules/slash/"
+	>
+
+<channel>
+	<title>Crunchbase News</title>
+	<atom:link href="https://news.crunchbase.com/feed/" rel="self" type="application/rss+xml" />
+	<link>https://news.crunchbase.com/</link>
+	<description>Data-driven reporting on private markets, startups, founders, and investors</description>
+	<lastBuildDate>Fri, 12 Jun 2026 20:25:30 +0000</lastBuildDate>
+	<language>en-US</language>
+	<sy:updatePeriod>
+	hourly	</sy:updatePeriod>
+	<sy:updateFrequency>
+	1	</sy:updateFrequency>
+	<generator>https://wordpress.org/?v=6.8.5</generator>
+
+	<!-- FUNDING: item 1 — triggers on "funding rounds" in title -->
+	<item>
+		<title>The Week&#8217;s 10 Biggest Funding Rounds: NinjaOne Leads With $400M As Large Deals Also Go To Blockchain, Cloud Infrastructure, Biotech And Robotics</title>
+		<link>https://news.crunchbase.com/venture/biggest-funding-rounds-ai-biotech-healthcare-ninjaone-leads/</link>
+		<dc:creator><![CDATA[Joanna Glasner]]></dc:creator>
+		<pubDate>Fri, 12 Jun 2026 18:48:32 +0000</pubDate>
+		<category><![CDATA[Venture]]></category>
+		<guid isPermaLink="false">https://news.crunchbase.com/?p=93684</guid>
+		<description><![CDATA[NinjaOne raised $400M in a Series E led by Iconiq Growth, bringing its valuation to $5B.]]></description>
+		<content:encoded><![CDATA[NinjaOne raised $400M in a Series E led by Iconiq Growth, bringing its valuation to $5B.]]></content:encoded>
+	</item>
+
+	<!-- FUNDING: item 2 — triggers on "closes" + dollar amount -->
+	<item>
+		<title>Base10 Partners Closes 2 Funds Totaling $850M To Invest In Real Economy Automation</title>
+		<link>https://news.crunchbase.com/venture/base10-partners-invests-real-economy-automation-funds/</link>
+		<dc:creator><![CDATA[Joanna Glasner]]></dc:creator>
+		<pubDate>Thu, 11 Jun 2026 16:45:18 +0000</pubDate>
+		<category><![CDATA[Venture]]></category>
+		<guid isPermaLink="false">https://news.crunchbase.com/?p=93601</guid>
+		<description><![CDATA[Base10 Partners closes two funds — a $650M growth fund and a $200M seed fund — targeting real economy automation.]]></description>
+		<content:encoded><![CDATA[Base10 Partners closes two funds — a $650M growth fund and a $200M seed fund — targeting real economy automation.]]></content:encoded>
+	</item>
+
+	<!-- FUNDING: item 3 — triggers on "funding" in title -->
+	<item>
+		<title>Sector Snapshot: Semiconductor Startup Funding Still Running Hot</title>
+		<link>https://news.crunchbase.com/semiconductors-and-5g/chip-startup-funding-snapshot-2026/</link>
+		<dc:creator><![CDATA[Gené Teare]]></dc:creator>
+		<pubDate>Wed, 10 Jun 2026 11:00:39 +0000</pubDate>
+		<category><![CDATA[Semiconductors]]></category>
+		<guid isPermaLink="false">https://news.crunchbase.com/?p=93522</guid>
+		<description><![CDATA[Chip startups raised $4B in Q1 2026, a record for the sector, led by AI inference hardware companies.]]></description>
+		<content:encoded><![CDATA[Chip startups raised $4B in Q1 2026, a record for the sector, led by AI inference hardware companies.]]></content:encoded>
+	</item>
+
+	<!-- FUNDING: item 4 — triggers on "funding rounds" in title -->
+	<item>
+		<title>The Week&#8217;s 10 Biggest Funding Rounds: Megarounds Proliferate, Led By Enterprise Software, AI, And Space</title>
+		<link>https://news.crunchbase.com/venture/biggest-funding-rounds-june-5-2026/</link>
+		<dc:creator><![CDATA[Joanna Glasner]]></dc:creator>
+		<pubDate>Fri, 05 Jun 2026 15:49:12 +0000</pubDate>
+		<category><![CDATA[Venture]]></category>
+		<guid isPermaLink="false">https://news.crunchbase.com/?p=93398</guid>
+		<description><![CDATA[This week&#8217;s biggest funding rounds were led by enterprise software, AI, and space companies.]]></description>
+		<content:encoded><![CDATA[This week's biggest funding rounds were led by enterprise software, AI, and space companies.]]></content:encoded>
+	</item>
+
+	<!-- NON-FUNDING: item 5 — IPO/exit news, no funding keywords -->
+	<item>
+		<title>SpaceX Shares Close Up 19% After Largest IPO Of All Time</title>
+		<link>https://news.crunchbase.com/public/spacex-record-breaking-ipo-spcx/</link>
+		<dc:creator><![CDATA[Chris Metinko]]></dc:creator>
+		<pubDate>Fri, 12 Jun 2026 13:00:25 +0000</pubDate>
+		<category><![CDATA[Public]]></category>
+		<guid isPermaLink="false">https://news.crunchbase.com/?p=93672</guid>
+		<description><![CDATA[SpaceX shares surged 19% on opening day of trading after its record-breaking IPO priced at $185 per share.]]></description>
+		<content:encoded><![CDATA[SpaceX shares surged 19% on opening day of trading after its record-breaking IPO priced at $185 per share.]]></content:encoded>
+	</item>
+
+	<!-- NON-FUNDING: item 6 — editorial commentary -->
+	<item>
+		<title>Before You Cheer The IPO Window, Watch Where The Money Goes</title>
+		<link>https://news.crunchbase.com/public/ipo-window-liquid-money-ma-schroder/</link>
+		<dc:creator><![CDATA[Gené Teare]]></dc:creator>
+		<pubDate>Thu, 11 Jun 2026 17:41:42 +0000</pubDate>
+		<category><![CDATA[Opinion]]></category>
+		<guid isPermaLink="false">https://news.crunchbase.com/?p=93612</guid>
+		<description><![CDATA[The reopening IPO window is exciting, but founders and investors should pay attention to where liquidity ultimately flows.]]></description>
+		<content:encoded><![CDATA[The reopening IPO window is exciting, but founders and investors should pay attention to where liquidity ultimately flows.]]></content:encoded>
+	</item>
+
+	<!-- NON-FUNDING: item 7 — layoffs tracker -->
+	<item>
+		<title>The Crunchbase Tech Layoffs Tracker</title>
+		<link>https://news.crunchbase.com/startups/tech-layoffs/</link>
+		<dc:creator><![CDATA[Joanna Glasner]]></dc:creator>
+		<pubDate>Wed, 10 Jun 2026 17:45:30 +0000</pubDate>
+		<category><![CDATA[Startups]]></category>
+		<guid isPermaLink="false">https://news.crunchbase.com/?p=93537</guid>
+		<description><![CDATA[Thousands of tech employees have been laid off in 2026. Crunchbase News is tracking the major layoff announcements.]]></description>
+		<content:encoded><![CDATA[Thousands of tech employees have been laid off in 2026. Crunchbase News is tracking the major layoff announcements.]]></content:encoded>
+	</item>
+
+	<!-- NON-FUNDING: item 8 — market analysis without funding signal -->
+	<item>
+		<title>How Bigger ACVs Are Bringing Direct Sales Back To Vertical AI</title>
+		<link>https://news.crunchbase.com/ai/bigger-acvs-bring-direct-sales-vertical-ai/</link>
+		<dc:creator><![CDATA[Gené Teare]]></dc:creator>
+		<pubDate>Mon, 08 Jun 2026 11:00:27 +0000</pubDate>
+		<category><![CDATA[Artificial intelligence]]></category>
+		<guid isPermaLink="false">https://news.crunchbase.com/?p=93454</guid>
+		<description><![CDATA[As vertical AI companies command higher annual contract values, enterprise sales motions are making a comeback.]]></description>
+		<content:encoded><![CDATA[As vertical AI companies command higher annual contract values, enterprise sales motions are making a comeback.]]></content:encoded>
+	</item>
+
+</channel>
+</rss>
