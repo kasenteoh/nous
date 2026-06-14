@@ -75,3 +75,15 @@ jobs:
 
       - name: Build (also typechecks)
         run: npm run build
+
+      # Release-blocking route smoke (Task B3 / Phase 7.2). CI has no Supabase
+      # secrets, so SMOKE_HAS_DATA is intentionally unset: the harness runs its
+      # structural block only (routes return 200/404, masthead + landmarks
+      # render, excluded/unknown slugs 404) and skips the data-backed checks.
+      # This guards the Phase-1 web states (pagination clamp, excluded-404)
+      # without needing prod credentials.
+      - name: Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Smoke test (Playwright)
+        run: npm run test:e2e
