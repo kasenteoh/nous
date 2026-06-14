@@ -7,12 +7,22 @@ import type { NewsArticleRow } from "@/lib/types";
 
 interface Props {
   news: NewsArticleRow[];
+  /** ISO date of the most recent article shown, for the section freshness rider.
+   *  Omitted/null when no article carries a published date — the rider hides. */
+  asOf?: string | null;
 }
 
-export function News({ news }: Props) {
+export function News({ news, asOf }: Props) {
   return (
     <section className="mb-12">
-      <h2 className="text-lg font-semibold text-ink mb-4">News</h2>
+      <div className="mb-4 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+        <h2 className="text-lg font-semibold text-ink">News</h2>
+        {asOf && (
+          <p className="font-mono text-xs text-ink-faint">
+            latest {formatDate(asOf)}
+          </p>
+        )}
+      </div>
 
       {news.length === 0 ? (
         <p className="text-sm text-ink-muted">No news yet.</p>

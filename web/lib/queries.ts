@@ -3,6 +3,7 @@
 // role key to be present in the server environment.
 
 import { createSupabaseServerClient } from "@/lib/db";
+import { buildSpotlightPool, type Spotlight } from "@/lib/spotlight";
 import type {
   AlsoBackedByCompany,
   CompanyDetail,
@@ -1990,4 +1991,127 @@ export async function countInvestors(): Promise<number> {
     return 0;
   }
   return count ?? 0;
+}
+
+// ─── Coverage / freshness (Task B2) ───────────────────────────────────────────
+
+/**
+ * Catalog-coverage summary for the /about page honesty line:
+ * - `shown`       — listed companies (not excluded AND passing the catalog bar).
+ * - `withFunding` — of those, how many carry ≥1 recorded funding round
+ *                   (`funding_round_count > 0`).
+ * - `asOf`        — the most recent `updated_at` across listed companies (the
+ *                   freshest the catalog has been touched), or null if unknown.
+ *
+ * `shown`/`withFunding` are head-only exact counts (no rows pulled). `asOf` is a
+ * single ordered row. Returns zeros + null on missing env or any error so the
+ * page still renders (the line is simply suppressed when `shown` is 0).
+ *
+ * Note `withFunding` re-applies the same `exclusion_reason IS NULL` + catalog
+ * bar as `shown`, then ANDs `funding_round_count.gt.0`. The catalog bar is
+ * itself an `.or(description_short.not.is.null, funding_round_count.gt.0)`, so
+ * any company with a funding round already passes the bar — the extra
+ * `funding_round_count.gt.0` just narrows the count to the funded subset.
+ */
+export interface CoverageStats {
+  shown: number;
+  withFunding: number;
+  asOf: string | null;
+}
+
+export async function getCoverageStats(): Promise<CoverageStats> {
+  let supabase: ReturnType<typeof createSupabaseServerClient>;
+  try {
+    supabase = createSupabaseServerClient();
+  } catch (err) {
+    console.warn(
+      "[getCoverageStats] Supabase not configured:",
+      (err as Error).message,
+    );
+    return { shown: 0, withFunding: 0, asOf: null };
+  }
+
+  const [shownResult, fundedResult, asOfResult] = await Promise.all([
+    supabase
+      .from("companies")
+      .select("id", { count: "exact", head: true })
+      .is("exclusion_reason", null)
+      .or(CATALOG_BAR_OR),
+    supabase
+      .from("companies")
+      .select("id", { count: "exact", head: true })
+      .is("exclusion_reason", null)
+      .or(CATALOG_BAR_OR)
+      .gt("funding_round_count", 0),
+    supabase
+      .from("companies")
+      .select("updated_at")
+      .is("exclusion_reason", null)
+      .or(CATALOG_BAR_OR)
+      .not("updated_at", "is", null)
+      .order("updated_at", { ascending: false })
+      .limit(1),
+  ]);
+
+  if (shownResult.error) {
+    console.error(
+      "[getCoverageStats] shown count failed:",
+      shownResult.error.message,
+    );
+  }
+  if (fundedResult.error) {
+    console.error(
+      "[getCoverageStats] funded count failed:",
+      fundedResult.error.message,
+    );
+  }
+  if (asOfResult.error) {
+    console.error(
+      "[getCoverageStats] asOf query failed:",
+      asOfResult.error.message,
+    );
+  }
+
+  const asOfRow = (asOfResult.data ?? [])[0] as
+    | { updated_at: string | null }
+    | undefined;
+
+  return {
+    shown: shownResult.count ?? 0,
+    withFunding: fundedResult.count ?? 0,
+    asOf: asOfRow?.updated_at ?? null,
+  };
+}
+
+/** One compact card in the homepage "Trending now" strip. */
+export interface TrendingCompany {
+  slug: string;
+  name: string;
+  oneLiner: string;
+  facts: string[];
+}
+
+/**
+ * Companies trending right now for the homepage strip. Reuses the existing
+ * spotlight scoring ({@link buildSpotlightPool}) rather than inventing a second
+ * ranking: that pool is already funding-gated (every entry has ≥1 round) and
+ * scored by funding recency + amount + recent news volume + freshness, which is
+ * exactly the "most recent rounds / highest recent news volume" signal this
+ * strip wants.
+ *
+ * The spotlight deck consumes one entry at a time at the same UTC-day seed, so
+ * taking the first `limit` of the (already shuffled) pool gives a stable strip
+ * that rotates daily in lockstep with the deck, without re-querying. Returns []
+ * on missing env / empty pool — the homepage renders nothing in that case.
+ */
+export async function getTrendingCompanies(
+  limit = 6,
+): Promise<TrendingCompany[]> {
+  const pool: Spotlight[] = await buildSpotlightPool();
+  return pool.slice(0, Math.max(0, limit)).map((s) => ({
+    slug: s.slug,
+    name: s.name,
+    oneLiner: s.oneLiner,
+    facts: s.facts,
+  }));
 }
