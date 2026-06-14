@@ -42,6 +42,9 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
     lastModified: i.updated_at ?? undefined,
   }));
 
+  // `tags` is already the de-thinned list — listAllTags returns only tags
+  // applying to ≥ MIN_TAG_COMPANY_COUNT companies — so the sitemap is no longer
+  // dominated by one-company tag pages. No further filtering needed here.
   const tagEntries: MetadataRoute.Sitemap = tags.map((tag) => ({
     url: `${origin}/tag/${encodeURIComponent(tag)}`,
   }));
