@@ -462,8 +462,21 @@ def extract_funding(
         "runs rotate through the backlog instead of re-processing the head."
     ),
 )
+@click.option(
+    "--ignore-recheck",
+    is_flag=True,
+    default=False,
+    help=(
+        "One-time drain (Task A2): ignore the recheck back-off and mine EVERY "
+        "round-less company's own site once, regardless of when it was last "
+        "checked. Pair with a high --limit. Idempotent — reconcile dedups."
+    ),
+)
 def extract_funding_website(
-    limit: int | None, include_low_confidence: bool, recheck_after_days: int
+    limit: int | None,
+    include_low_confidence: bool,
+    recheck_after_days: int,
+    ignore_recheck: bool,
 ) -> None:
     """Gap-fill funding from a company's own website (fallback to TechCrunch).
 
@@ -486,6 +499,7 @@ def extract_funding_website(
                     limit=limit,
                     skip_low_confidence=not include_low_confidence,
                     recheck_after_days=recheck_after_days,
+                    ignore_recheck=ignore_recheck,
                 )
                 click.echo(summary.model_dump_json(indent=2))
             await record_pipeline_run(

@@ -68,9 +68,14 @@ on:
         required: false
         type: string
       website_funding_limit:
-        description: "Website funding gap-fill: max companies per run. Default: 100."
+        description: "Website funding gap-fill: max companies per run. Default: 300."
         required: false
         type: string
+      website_ignore_recheck:
+        description: "Website funding drain (Task A2): ignore the 180-day back-off and mine EVERY round-less company's own site once. Pair with a high website_funding_limit. Default: false."
+        required: false
+        type: boolean
+        default: false
       resolve_limit:
         description: "Resolve: max companies to attempt. Default: 100."
         required: false
@@ -228,17 +233,24 @@ jobs:
         id: funding_website
         if: ${{ inputs.skip_funding != true }}
         # Gap-fill only: companies that still have no funding rounds after the
-        # news pass. Limit raised from 15 → 100 to drain the ~2k-company backlog
-        # faster now that Actions minutes are free. At ~2s/company (scrape +
-        # LLM) 100 companies ≈ 3-4 min; raised to 20 min for ample headroom.
-        # The 180-day back-off means each company is only checked once every
+        # news pass. Standing limit raised 100 → 300 (Task A2) to drain the
+        # ~1.2k round-less backlog faster now that Actions minutes are free. At
+        # ~2s/company (scrape + LLM) 300 companies ≈ 10 min.
+        # The 180-day back-off means each company is normally checked once every
         # 6 months, so the per-run spend stays bounded once the backlog clears.
-        timeout-minutes: 20
+        # website_ignore_recheck=true (manual dispatch, Task A2) drops that
+        # back-off so a single high-limit run mines EVERY round-less company's
+        # own site once. The 45-min timeout gives that one-off drain headroom.
+        timeout-minutes: 45
         continue-on-error: true
         run: |
           WF_LIMIT="${{ inputs.website_funding_limit }}"
-          if [ -z "$WF_LIMIT" ]; then WF_LIMIT=100; fi
-          uv run nous extract-funding-website --limit "$WF_LIMIT"
+          if [ -z "$WF_LIMIT" ]; then WF_LIMIT=300; fi
+          IGNORE_RECHECK=""
+          if [ "${{ inputs.website_ignore_recheck }}" = "true" ]; then
+            IGNORE_RECHECK="--ignore-recheck"
+          fi
+          uv run nous extract-funding-website --limit "$WF_LIMIT" $IGNORE_RECHECK
 
       # ----- Descriptions (backlog drain + new companies) ---------------------
 

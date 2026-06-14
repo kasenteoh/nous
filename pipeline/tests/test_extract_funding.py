@@ -581,6 +581,62 @@ async def test_website_fallback_recently_checked_is_skipped(
     assert calls == []
 
 
+async def test_ignore_recheck_drains_recently_checked(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``ignore_recheck=True`` drops the recheck-window predicate so a one-off
+    drain mines EVERY round-less company's own site, even those checked moments
+    ago (Task A2). The same company is skipped under the default
+    ``ignore_recheck=False`` (still inside the 180-day back-off)."""
+    company = _make_company("DrainMeCo")
+    company.website = "https://drainmeco.example/"
+    # Checked just now → inside the default 180-day back-off → normally skipped.
+    company.website_funding_checked_at = datetime.now(tz=UTC)
+    db.add(company)
+    await db.flush()
+    body = "DrainMeCo raised a $5M Seed round led by Acme Capital. " * 10
+    db.add(
+        RawPage(
+            company_id=company.id,
+            url="https://drainmeco.example/about",
+            content=f"<html><body><p>{body}</p></body></html>",
+        )
+    )
+    await db.flush()
+    await db.commit()
+
+    async def _fake(prompt: str, schema: type) -> FundingExtraction:
+        return _make_extraction(
+            round_type="Seed",
+            amount=Decimal("5000000.00"),
+            valuation=None,
+            leads=["Acme Capital"],
+            others=[],
+            confidence="medium",
+        )
+
+    monkeypatch.setattr(
+        "nous.pipeline.extract_funding.complete_json", _fake
+    )
+
+    # Default: recently-checked company is skipped.
+    default_summary = await run_extract_funding_website(db, limit=10)
+    assert default_summary.companies_seen == 0
+    assert default_summary.funding_rounds_created == 0
+
+    # ignore_recheck=True: the same company is now processed and a round lands.
+    drain_summary = await run_extract_funding_website(
+        db, limit=10, ignore_recheck=True
+    )
+    assert drain_summary.companies_seen == 1
+    assert drain_summary.companies_with_funding == 1
+    assert drain_summary.funding_rounds_created == 1
+
+    rounds = (await db.execute(select(FundingRound))).scalars().all()
+    assert len(rounds) == 1
+    assert rounds[0].round_type == "Seed"
+
+
 async def test_website_fallback_stamps_attempt_even_without_funding(
     db: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:

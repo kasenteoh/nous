@@ -484,6 +484,7 @@ async def run_extract_funding_website(
     skip_low_confidence: bool = True,
     proximity_days: int = 60,
     recheck_after_days: int = 180,
+    ignore_recheck: bool = False,
 ) -> ExtractFundingWebsiteSummary:
     """Gap-fill funding from a company's own scraped website.
 
@@ -499,6 +500,13 @@ async def run_extract_funding_website(
     daily run re-LLM's the same head of the list every day. The long default
     back-off is deliberate: marketing sites rarely gain funding pages, and the
     news path remains the primary detector for new rounds.
+
+    ``ignore_recheck=True`` drops the recheck-window predicate for a one-time
+    drain (Task A2): every round-less company is eligible regardless of when it
+    was last checked, so a single high-limit dispatch can mine each company's
+    own site once. The pass still stamps ``website_funding_checked_at`` and
+    stays idempotent (reconcile dedups), so re-running the drain only re-pays
+    the LLM for companies not yet given a round. No behavior change when false.
     """
     summary = ExtractFundingWebsiteSummary()
 
@@ -508,18 +516,21 @@ async def run_extract_funding_website(
         select(Company)
         .where(exists().where(RawPage.company_id == Company.id))
         .where(~exists().where(FundingRound.company_id == Company.id))
-        .where(
-            or_(
-                Company.website_funding_checked_at.is_(None),
-                Company.website_funding_checked_at < recheck_cutoff,
-            )
-        )
         .where(Company.exclusion_reason.is_(None))
         .order_by(
             Company.website_funding_checked_at.asc().nulls_first(),
             Company.name.asc(),
         )
     )
+    if not ignore_recheck:
+        # Standing runs honour the back-off so a bounded daily run rotates the
+        # backlog instead of re-LLM'ing the same head. The drain skips this.
+        stmt = stmt.where(
+            or_(
+                Company.website_funding_checked_at.is_(None),
+                Company.website_funding_checked_at < recheck_cutoff,
+            )
+        )
     if limit is not None:
         stmt = stmt.limit(limit)
 
