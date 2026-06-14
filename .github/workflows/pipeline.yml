@@ -199,6 +199,20 @@ jobs:
         continue-on-error: true
         run: uv run nous repair-catalog
 
+      - name: Normalize taxonomy
+        id: normalize_taxonomy
+        # Recanonicalize the two free-text taxonomy columns (primary_category +
+        # industry_group) onto the committed canonical maps — a pure set-based
+        # string op, no LLM. Idempotent: once every value is canonical a run
+        # rewrites zero rows, so it's safe in the recurring cron. Runs here so
+        # the browse filters / category pages heal in one pass instead of only
+        # as the enrich stage happens to re-touch each company. A successful run
+        # is id'd, so a remap that actually changes data triggers the Vercel
+        # redeploy below (the dropdown is statically rendered).
+        timeout-minutes: 15
+        continue-on-error: true
+        run: uv run nous normalize-taxonomy
+
       - name: Repair wrong websites
         id: repair_websites
         if: ${{ inputs.run_repair_websites == true }}
