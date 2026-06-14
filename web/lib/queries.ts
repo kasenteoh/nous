@@ -365,12 +365,27 @@ export async function listCompanies(
 }
 
 /**
- * Distinct, non-null `industry_group` values for the index filter dropdown,
- * deduped in-process from a full keyset scan via {@link scanCompanies}. A flat
- * select is silently capped at 1000 rows by PostgREST (`.limit(5000)` does not
- * override the server cap), which dropped every group that only occurs outside
- * that arbitrary unordered sample. `discovered_via` is a small fixed enum, so
- * the page hardcodes those options rather than querying for them.
+ * Minimum number of catalog companies an `industry_group` must apply to before
+ * it appears in the /companies filter dropdown. The LLM emits ~227 distinct
+ * groups, ~64% of which apply to a single company, so the unfiltered dropdown
+ * was an unusable wall of near-duplicate singletons. Requiring ≥3 companies
+ * keeps only industries that actually group the catalog. Mirrors the analogous
+ * {@link MIN_TAG_COMPANY_COUNT} threshold for tags. Raise/lower in one place here.
+ */
+const MIN_INDUSTRY_COMPANY_COUNT = 3;
+
+/**
+ * Non-null `industry_group` values that apply to at least
+ * {@link MIN_INDUSTRY_COMPANY_COUNT} catalog companies, sorted, for the index
+ * filter dropdown. Tallied in-process from a full keyset scan via
+ * {@link scanCompanies}: a flat select is silently capped at 1000 rows by
+ * PostgREST (`.limit(5000)` does not override the server cap), which dropped
+ * every group that only occurs outside that arbitrary unordered sample. Counting
+ * over the whole catalog also lets us drop singleton/near-singleton groups so
+ * the dropdown isn't dominated by one-company entries. The page renders an "All
+ * industries" default option independently of this list, so trimming it never
+ * removes the unfiltered choice. `discovered_via` is a small fixed enum, so the
+ * page hardcodes those options rather than querying for them.
  */
 export async function listIndustryGroups(): Promise<string[]> {
   const rows = await scanCompanies(
@@ -381,12 +396,16 @@ export async function listIndustryGroups(): Promise<string[]> {
   );
   if (rows === null) return [];
 
-  const seen = new Set<string>();
+  const counts = new Map<string, number>();
   for (const row of rows) {
     const value = row.industry_group as string | null;
-    if (value) seen.add(value);
+    if (value) counts.set(value, (counts.get(value) ?? 0) + 1);
   }
-  return [...seen].sort((a, b) => a.localeCompare(b));
+
+  return [...counts.entries()]
+    .filter(([, count]) => count >= MIN_INDUSTRY_COMPANY_COUNT)
+    .map(([value]) => value)
+    .sort((a, b) => a.localeCompare(b));
 }
 
 /**
