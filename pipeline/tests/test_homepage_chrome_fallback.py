@@ -182,3 +182,64 @@ async def test_fetch_propagates_network_error_without_fallback(
         await open_client.fetch("https://example.com/")
 
     chrome_mock.assert_not_called()
+
+
+async def test_chrome_fallback_blocks_internal_url() -> None:
+    """The curl_cffi fallback must refuse an internal address before fetching."""
+    from nous.sources.homepage import HomepageClient
+    from nous.util.ssrf import BlockedAddressError
+
+    client = HomepageClient(user_agent="nous-test test@example.com")
+    async with client:
+        with pytest.raises(BlockedAddressError):
+            await client._fetch_with_chrome_impersonation(
+                "http://169.254.169.254/latest/meta-data/"
+            )
+
+
+class _FakeCurlResponse:
+    """Minimal stand-in for a curl_cffi response: an endless 302 redirect."""
+
+    def __init__(self, url: str) -> None:
+        self.status_code = 302
+        # Always points elsewhere so the manual redirect loop keeps going until
+        # it hits _MAX_FALLBACK_REDIRECTS.
+        self.headers = {"location": "/next", "content-type": "text/html"}
+        self.content = b"<html>redirecting</html>"
+        self.text = "<html>redirecting</html>"
+        self.url = url
+
+
+class _FakeCurlSession:
+    """Async-context-manager session whose .get() always 302-redirects."""
+
+    async def __aenter__(self) -> _FakeCurlSession:
+        return self
+
+    async def __aexit__(self, *args: object) -> None:
+        return None
+
+    async def get(self, url: str, **kwargs: object) -> _FakeCurlResponse:
+        return _FakeCurlResponse(url)
+
+
+async def test_chrome_fallback_raises_when_redirect_cap_hit(
+    open_client: HomepageClient,
+) -> None:
+    """A redirect chain that never resolves must raise, not return the 3xx.
+
+    Regression guard for the SSRF redirect-cap fix: when the manual redirect
+    loop exhausts _MAX_FALLBACK_REDIRECTS while the response is still a 3xx,
+    the method must signal a failed fetch (httpx.RequestError) rather than hand
+    a redirect response back to the caller as if it were a page.
+    """
+    # Neutralize the SSRF check so the synthetic redirect targets don't hit DNS;
+    # this test is about the redirect-cap branch, which test_ssrf.py guards.
+    with patch(
+        "nous.sources.homepage.assert_public_url",
+        new=AsyncMock(return_value=None),
+    ), patch(
+        "curl_cffi.requests.AsyncSession",
+        new=lambda *a, **k: _FakeCurlSession(),
+    ), pytest.raises(httpx.RequestError):
+        await open_client._fetch_with_chrome_impersonation("https://example.com/")

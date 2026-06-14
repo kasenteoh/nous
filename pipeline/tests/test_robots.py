@@ -9,6 +9,7 @@ import pytest
 
 import nous.sources.robots as robots_module
 from nous.sources.robots import RobotsCache
+from nous.util.ssrf import BlockedAddressError
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -152,3 +153,30 @@ async def test_cache_refetches_after_ttl_expiry(monkeypatch: pytest.MonkeyPatch)
     # Second fetch — cache entry is now considered expired
     await cache.is_allowed("https://example.com/page2")
     assert transport.fetch_count == 2
+
+
+# ---------------------------------------------------------------------------
+# is_allowed: SSRF-blocked / unresolvable robots host → fail-open (allow)
+# ---------------------------------------------------------------------------
+
+
+async def test_is_allowed_when_robots_host_blocked_by_ssrf_guard() -> None:
+    """A blocked/unresolvable robots.txt host must be handled like a network
+    error: fail open (allow) without propagating BlockedAddressError.
+
+    The RobotsCache client is a guarded_async_client, so the robots.txt probe
+    can raise BlockedAddressError when the host is non-public or (since the
+    guard fails closed on DNS failure) unresolvable. That must not escape
+    is_allowed and crash the caller — robots is shared infra for both
+    HomepageClient and NewsClient.
+    """
+
+    class BlockingTransport(httpx.AsyncBaseTransport):
+        async def handle_async_request(
+            self, request: httpx.Request
+        ) -> httpx.Response:
+            raise BlockedAddressError(f"blocked: {request.url}")
+
+    cache = _make_cache(BlockingTransport())
+
+    assert await cache.is_allowed("https://blocked.example.com/page") is True

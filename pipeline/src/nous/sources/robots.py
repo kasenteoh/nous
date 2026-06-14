@@ -12,6 +12,8 @@ from urllib.robotparser import RobotFileParser
 
 import httpx
 
+from nous.util.ssrf import BlockedAddressError
+
 # 24h TTL — per Open Questions §1 in plan
 ROBOTS_CACHE_TTL_SECONDS: int = 86400
 
@@ -73,8 +75,10 @@ class RobotsCache:
                     timeout=5.0,
                     follow_redirects=True,
                 )
-            except (httpx.RequestError, httpx.HTTPStatusError):
-                # Network error or explicit error response → allow
+            except (httpx.RequestError, httpx.HTTPStatusError, BlockedAddressError):
+                # Network error, explicit error response, or an SSRF-blocked /
+                # unresolvable robots host (the client is a guarded_async_client)
+                # → allow. Same fail-open convention as a network error.
                 return None
 
             if resp.status_code == 404:

@@ -13,7 +13,7 @@ import asyncio
 import logging
 import time
 from collections.abc import Iterable
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 import httpx
 from pydantic import BaseModel
@@ -24,6 +24,11 @@ from nous.sources.duckduckgo import DuckDuckGoSearch, is_aggregator
 from nous.sources.parked import looks_parked
 from nous.sources.reject_hosts import is_aggregator_url
 from nous.sources.robots import RobotsBlockedError, RobotsCache
+from nous.util.ssrf import (
+    BlockedAddressError,
+    assert_public_url,
+    guarded_async_client,
+)
 from nous.util.url import canonical_domain
 
 # Re-export for backwards compatibility — callers that did
@@ -44,6 +49,10 @@ CANDIDATE_TLDS: tuple[str, ...] = (".com", ".io", ".ai", ".co")
 CANDIDATE_PATHS: tuple[str, ...] = (
     "/", "/about", "/about-us", "/product", "/products", "/company", "/team",
 )
+
+# The curl_cffi fallback follows redirects manually (so each hop can be
+# SSRF-validated). Cap the chain to avoid redirect loops / tar-pits.
+_MAX_FALLBACK_REDIRECTS = 5
 
 
 def _name_in_strong_position(html: str, slug_base: str, company_name: str) -> bool:
@@ -122,13 +131,13 @@ class HomepageClient:
         self._search_client: DuckDuckGoSearch | None = None
 
     async def __aenter__(self) -> HomepageClient:
-        self._client = httpx.AsyncClient(
+        self._client = guarded_async_client(
             headers={"User-Agent": self._user_agent},
             timeout=httpx.Timeout(30.0),
             follow_redirects=True,
         )
         self._robots = RobotsCache(
-            client=httpx.AsyncClient(
+            client=guarded_async_client(
                 headers={"User-Agent": self._user_agent},
                 timeout=httpx.Timeout(5.0),
                 follow_redirects=True,
@@ -276,14 +285,43 @@ class HomepageClient:
             if wait > 0:
                 await asyncio.sleep(wait)
 
+            await assert_public_url(url)
             async with AsyncSession() as session:
                 resp = await session.get(
                     url,
                     impersonate="chrome120",
                     timeout=30,
-                    allow_redirects=True,
+                    allow_redirects=False,
                 )
+                hops = 0
+                while (
+                    resp.status_code in (301, 302, 303, 307, 308)
+                    and hops < _MAX_FALLBACK_REDIRECTS
+                ):
+                    location = resp.headers.get("location")
+                    if not location:
+                        break
+                    url = urljoin(url, location)
+                    await assert_public_url(url)  # re-validate the redirect target
+                    resp = await session.get(
+                        url,
+                        impersonate="chrome120",
+                        timeout=30,
+                        allow_redirects=False,
+                    )
+                    hops += 1
             self._domain_last_request[domain] = time.monotonic()
+
+        if resp.status_code in (301, 302, 303, 307, 308):
+            # The manual redirect loop above exhausted _MAX_FALLBACK_REDIRECTS
+            # (or hit a Location-less redirect) and never reached a final
+            # response. Don't hand a 3xx back as page content — signal a failed
+            # fetch the same way httpx would for an over-long redirect chain
+            # (httpx.TooManyRedirects is an httpx.RequestError), which every
+            # caller already handles.
+            raise httpx.RequestError(
+                f"too many redirects in chrome fallback for {url}"
+            )
 
         if resp.status_code >= 400:
             # Synthesize an httpx-like exception so the caller's except chain
@@ -375,6 +413,11 @@ async def resolve_homepage(
             continue
         except httpx.RequestError:
             continue
+        except BlockedAddressError:
+            # SSRF guard rejected this candidate (internal/unresolvable host or
+            # a redirect to one). Skip it like a connection error and try the
+            # next TLD — never error the whole company.
+            continue
 
         # A parked page always mentions the domain name, so this check MUST
         # run before the name-mention acceptance below.
@@ -419,7 +462,12 @@ async def resolve_homepage(
             continue
         try:
             result = await client.fetch(candidate_url)
-        except (RobotsBlockedError, httpx.HTTPStatusError, httpx.RequestError):
+        except (
+            RobotsBlockedError,
+            httpx.HTTPStatusError,
+            httpx.RequestError,
+            BlockedAddressError,
+        ):
             continue
         if looks_parked(result.content):
             continue
