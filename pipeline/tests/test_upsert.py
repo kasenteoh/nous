@@ -354,6 +354,229 @@ async def test_reconcile_matching_type_and_date_still_merges(db: AsyncSession) -
     assert company.funding_round_count == 1
 
 
+# ---------------------------------------------------------------------------
+# reconcile_funding_round — amount-based merging (duplicate-rounds fix)
+# ---------------------------------------------------------------------------
+
+
+async def test_reconcile_amount_match_merges_helion_case(db: AsyncSession) -> None:
+    """The Helion case: a company-site extraction with round_type + date, then a
+    Google-News extraction with the SAME amount but null round_type AND null
+    date, must MERGE into one row (equal amount is a same-round signal). The
+    survivor keeps the informative round_type + date.
+    """
+    company = _make_quality_company("Helion Energy", "helion-energy")
+    db.add(company)
+    await db.flush()
+
+    typed_dated = FundingExtraction(
+        is_funding_announcement=True,
+        round_type="Series G",
+        amount_raised_usd=465_000_000,
+        announced_date=date(2025, 1, 20),
+        confidence="high",
+    )
+    null_null_same_amount = FundingExtraction(
+        is_funding_announcement=True,
+        round_type=None,
+        announced_date=None,
+        amount_raised_usd=465_000_000,
+        confidence="low",
+    )
+
+    _, created1 = await reconcile_funding_round(
+        db,
+        company_id=company.id,
+        extraction=typed_dated,
+        primary_news_url="https://helion.com/series-g",
+    )
+    assert created1 is True
+
+    row2, created2 = await reconcile_funding_round(
+        db,
+        company_id=company.id,
+        extraction=null_null_same_amount,
+        primary_news_url="https://news.google.com/articles/abc",
+    )
+    assert created2 is False, "same-amount null/null extraction must merge, not insert"
+
+    result = await db.execute(
+        select(FundingRound).where(FundingRound.company_id == company.id)
+    )
+    rows = result.scalars().all()
+    assert len(rows) == 1, (
+        "Helion case: 1 typed+dated round and a same-amount null/null round "
+        f"must collapse to ONE row; got {len(rows)}"
+    )
+    survivor = rows[0]
+    assert survivor.round_type == "Series G"  # informative type retained
+    assert survivor.announced_date == date(2025, 1, 20)  # informative date retained
+    assert survivor.amount_raised == 465_000_000
+    # First-write-wins on the attribution URL.
+    assert survivor.primary_news_url == "https://helion.com/series-g"
+
+    await db.refresh(company)
+    assert company.funding_round_count == 1
+
+
+async def test_reconcile_amount_match_merges_when_first_was_null_null(
+    db: AsyncSession,
+) -> None:
+    """Order-independence: a null/null extraction lands first, then a typed+dated
+    extraction with the SAME amount arrives. They must still merge to one row,
+    with the typed/dated values upgrading the survivor.
+    """
+    company = _make_quality_company("Orderless Co", "orderless-co")
+    db.add(company)
+    await db.flush()
+
+    null_null_first = FundingExtraction(
+        is_funding_announcement=True,
+        round_type=None,
+        announced_date=None,
+        amount_raised_usd=100_000_000,
+        confidence="low",
+    )
+    typed_dated_second = FundingExtraction(
+        is_funding_announcement=True,
+        round_type="Series C",
+        announced_date=date(2026, 2, 1),
+        amount_raised_usd=100_000_000,
+        confidence="high",
+    )
+
+    _, created1 = await reconcile_funding_round(
+        db,
+        company_id=company.id,
+        extraction=null_null_first,
+        primary_news_url="https://news.google.com/articles/xyz",
+    )
+    assert created1 is True
+
+    row2, created2 = await reconcile_funding_round(
+        db,
+        company_id=company.id,
+        extraction=typed_dated_second,
+        primary_news_url="https://techcrunch.com/series-c",
+    )
+    assert created2 is False  # equal amount + compatible (null) type → merge
+
+    result = await db.execute(
+        select(FundingRound).where(FundingRound.company_id == company.id)
+    )
+    rows = result.scalars().all()
+    assert len(rows) == 1
+    survivor = rows[0]
+    # The null-typed survivor is upgraded with the later round_type + date.
+    assert survivor.round_type == "Series C"
+    assert survivor.announced_date == date(2026, 2, 1)
+    assert survivor.extraction_confidence == "high"  # upgraded, never downgraded
+    # First-write-wins: the original (null/null) attribution URL stays.
+    assert survivor.primary_news_url == "https://news.google.com/articles/xyz"
+
+
+async def test_reconcile_distinct_amounts_stay_separate(db: AsyncSession) -> None:
+    """Two extractions with DIFFERENT amounts (both null type/date) must remain
+    two rows — amount equality is the merge signal, so distinct amounts don't
+    merge.
+    """
+    company = _make_quality_company("Two Rounds Co", "two-rounds-co")
+    db.add(company)
+    await db.flush()
+
+    first = FundingExtraction(
+        is_funding_announcement=True,
+        round_type=None,
+        announced_date=None,
+        amount_raised_usd=10_000_000,
+        confidence="medium",
+    )
+    second = FundingExtraction(
+        is_funding_announcement=True,
+        round_type=None,
+        announced_date=None,
+        amount_raised_usd=50_000_000,  # different amount
+        confidence="medium",
+    )
+
+    _, created1 = await reconcile_funding_round(
+        db,
+        company_id=company.id,
+        extraction=first,
+        primary_news_url="https://example.com/round-1",
+    )
+    _, created2 = await reconcile_funding_round(
+        db,
+        company_id=company.id,
+        extraction=second,
+        primary_news_url="https://example.com/round-2",
+    )
+    assert created1 is True
+    assert created2 is True, "distinct amounts must NOT merge"
+
+    result = await db.execute(
+        select(FundingRound).where(FundingRound.company_id == company.id)
+    )
+    rows = result.scalars().all()
+    assert len(rows) == 2
+
+    await db.refresh(company)
+    assert company.funding_round_count == 2
+
+
+async def test_reconcile_same_amount_contradicting_types_stay_separate(
+    db: AsyncSession,
+) -> None:
+    """Two extractions with the SAME amount but DIFFERENT non-null round_types
+    ("Seed" vs "Series C") are different rounds and must NOT merge, even though
+    the amounts coincide.
+    """
+    company = _make_quality_company("Coincident Co", "coincident-co")
+    db.add(company)
+    await db.flush()
+
+    seed = FundingExtraction(
+        is_funding_announcement=True,
+        round_type="Seed",
+        amount_raised_usd=20_000_000,
+        announced_date=date(2024, 1, 1),
+        confidence="high",
+    )
+    series_c = FundingExtraction(
+        is_funding_announcement=True,
+        round_type="Series C",
+        amount_raised_usd=20_000_000,  # same amount, contradicting type
+        announced_date=date(2026, 1, 1),
+        confidence="high",
+    )
+
+    _, created1 = await reconcile_funding_round(
+        db,
+        company_id=company.id,
+        extraction=seed,
+        primary_news_url="https://example.com/seed",
+    )
+    _, created2 = await reconcile_funding_round(
+        db,
+        company_id=company.id,
+        extraction=series_c,
+        primary_news_url="https://example.com/series-c",
+    )
+    assert created1 is True
+    assert created2 is True, (
+        "same amount but contradicting non-null round_types must stay separate"
+    )
+
+    result = await db.execute(
+        select(FundingRound).where(FundingRound.company_id == company.id)
+    )
+    rows = result.scalars().all()
+    assert len(rows) == 2
+
+    await db.refresh(company)
+    assert company.funding_round_count == 2
+
+
 async def test_merge_companies_refreshes_survivor_count(db: AsyncSession) -> None:
     survivor = _make_quality_company("Survivor Co", "survivor-co")
     loser = _make_quality_company("Loser Co", "loser-co")

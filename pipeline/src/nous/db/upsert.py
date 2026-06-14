@@ -7,6 +7,7 @@ for committing.
 from __future__ import annotations
 
 from datetime import timedelta
+from decimal import Decimal
 from uuid import UUID
 
 from sqlalchemy import and_, delete, func, or_, select, update
@@ -327,6 +328,56 @@ def _is_more_confident(new: str | None, existing: str | None) -> bool:
     return _CONFIDENCE_RANK.get(new, -1) > _CONFIDENCE_RANK.get(existing, -1)
 
 
+def _round_types_compatible(a: str | None, b: str | None) -> bool:
+    """True when two round-type labels could name the SAME round.
+
+    Compatible when they are equal case-insensitively, OR when at least one
+    side is None (an unknown type doesn't contradict a known one). Two distinct
+    NON-None labels ("Seed" vs "Series C") are NOT compatible — even if the
+    amounts coincide, they are different rounds and must never merge.
+    """
+    if a is None or b is None:
+        return True
+    return a.strip().lower() == b.strip().lower()
+
+
+def _merge_extraction_into_round(
+    existing: FundingRound, extraction: FundingExtraction
+) -> None:
+    """Fold a new extraction into an existing round, preferring the more
+    informative value field-by-field.
+
+    - round_type / announced_date: a real (non-null) value upgrades a null one;
+      a null new value never clears an existing real one.
+    - amount_raised / valuation_post_money / valuation_source: gap-fill only
+      (populate when the existing row lacks them).
+    - extraction_confidence: keep the higher (low < medium < high); never
+      downgrade.
+    - primary_news_url: untouched — first-write-wins (the earliest attribution
+      is the most stable reference).
+
+    The amount-match path can pair a null-typed survivor with a typed extraction
+    (or vice versa), so round_type is upgraded here rather than only gap-filled
+    on the existing valuation columns.
+    """
+    if existing.round_type is None and extraction.round_type is not None:
+        existing.round_type = extraction.round_type
+    if existing.amount_raised is None and extraction.amount_raised_usd is not None:
+        existing.amount_raised = extraction.amount_raised_usd
+    if (
+        existing.valuation_post_money is None
+        and extraction.valuation_post_money_usd is not None
+    ):
+        existing.valuation_post_money = extraction.valuation_post_money_usd
+    if existing.valuation_source is None and extraction.valuation_source is not None:
+        existing.valuation_source = extraction.valuation_source
+    if existing.announced_date is None and extraction.announced_date is not None:
+        existing.announced_date = extraction.announced_date
+    if _is_more_confident(extraction.confidence, existing.extraction_confidence):
+        existing.extraction_confidence = extraction.confidence
+    # primary_news_url: first-write-wins; do not overwrite.
+
+
 async def refresh_funding_round_count(
     session: AsyncSession, company_id: UUID
 ) -> None:
@@ -348,6 +399,45 @@ async def refresh_funding_round_count(
     )
 
 
+async def _find_amount_match(
+    session: AsyncSession,
+    *,
+    company_id: UUID,
+    amount: Decimal,
+    round_type: str | None,
+) -> FundingRound | None:
+    """Return an existing round for ``company_id`` whose ``amount_raised`` equals
+    ``amount`` and whose round_type is *compatible* with ``round_type``, else None.
+
+    Equal amounts are an extremely strong identity signal for the same round —
+    the historical news backfill re-reports one round (e.g. Helion's $465M
+    Series G) from many articles, some with a null round_type and no date, so
+    type+date proximity alone leaves them as separate rows. Amount equality
+    catches those. Compatibility (equal-or-null types) prevents merging two
+    genuinely different rounds that happen to share a headline figure.
+
+    The amount equality is evaluated in SQL (Numeric == Numeric); type
+    compatibility is filtered in Python so the equal-or-null rule stays in one
+    place (_round_types_compatible).
+    """
+    rows = (
+        (
+            await session.execute(
+                select(FundingRound).where(
+                    FundingRound.company_id == company_id,
+                    FundingRound.amount_raised == amount,
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    for row in rows:
+        if _round_types_compatible(row.round_type, round_type):
+            return row
+    return None
+
+
 async def reconcile_funding_round(
     session: AsyncSession,
     *,
@@ -366,28 +456,50 @@ async def reconcile_funding_round(
     - announced_date matches when both sides are non-None and within the
       window. Both None also matches. Mismatched null-ness does not match
       (one side knows the date, the other doesn't — too uncertain to merge).
-    - **None+None guard**: when BOTH round_type and announced_date are null we
-      require at least one non-null discriminator before attempting to merge.
+    - **None+None guard**: when BOTH round_type and announced_date are null the
+      type+date key carries no signal, so we do NOT attempt a type+date merge.
       Two vague headlines ("Company X raises funding") for the same company
-      carry zero identity signal beyond the company itself and should each
-      produce their own row rather than collapsing into one — otherwise a
-      second article silently swallows the first (the count stays at 1 instead
-      of growing to 2). We always INSERT in this case.
+      would otherwise collapse into one — a second article silently swallowing
+      the first. We fall through to the INSERT path in that case *unless* an
+      amount match applies (below).
+    - **Amount match (added 2026-06-14)**: equal ``amount_raised`` (both
+      non-null) is a strong same-round signal on its own — the historical news
+      backfill re-reports one round (e.g. Helion's $465M Series G) from many
+      articles, several with a null round_type and no specific date, so type+
+      date proximity leaves them as duplicate rows. When the new amount equals
+      an existing round's amount AND the round_types are COMPATIBLE
+      (equal case-insensitively, or at least one null), we MERGE rather than
+      insert. Two genuinely different rounds that share a headline figure are
+      NOT merged because their non-null round_types contradict. The amount path
+      is tried both inside the None+None branch and after a type+date miss.
 
-    Merge behavior on match:
-    - Fill nulls: amount_raised, valuation_post_money, valuation_source,
-      announced_date are populated when the existing row lacks them.
+    Merge behavior on match (see :func:`_merge_extraction_into_round`):
+    - round_type / announced_date: a real value upgrades a null one; a null new
+      value never clears an existing real one.
+    - amount_raised / valuation_post_money / valuation_source: gap-fill only.
     - Confidence: keep the higher (low < medium < high). Never downgrade.
     - primary_news_url: first one wins — don't overwrite. The earliest
       attribution is the most stable reference.
 
     Returns ``(row, created)`` where ``created`` is True on insert.
     """
-    # None+None guard: without at least one discriminator (round_type OR
-    # announced_date) every "unknown round" for the same company collapses into
-    # a single row, silently losing coverage data.  Skip the query entirely and
-    # fall through to the INSERT path.
+    # None+None guard: without a type OR date discriminator the type+date key is
+    # useless, so we don't run it. But an equal-amount match is still a valid
+    # same-round signal, so try that before inserting — this is what collapses
+    # the Helion-style dup set (null type, null date, same $465M) instead of
+    # appending yet another row.
     if extraction.round_type is None and extraction.announced_date is None:
+        if extraction.amount_raised_usd is not None:
+            amount_match = await _find_amount_match(
+                session,
+                company_id=company_id,
+                amount=extraction.amount_raised_usd,
+                round_type=extraction.round_type,
+            )
+            if amount_match is not None:
+                _merge_extraction_into_round(amount_match, extraction)
+                session.add(amount_match)
+                return amount_match, False
         new_round = FundingRound(
             company_id=company_id,
             round_type=None,
@@ -429,25 +541,25 @@ async def reconcile_funding_round(
     existing = existing_result.scalar_one_or_none()
 
     if existing is not None:
-        if existing.amount_raised is None and extraction.amount_raised_usd is not None:
-            existing.amount_raised = extraction.amount_raised_usd
-        if (
-            existing.valuation_post_money is None
-            and extraction.valuation_post_money_usd is not None
-        ):
-            existing.valuation_post_money = extraction.valuation_post_money_usd
-        if (
-            existing.valuation_source is None
-            and extraction.valuation_source is not None
-        ):
-            existing.valuation_source = extraction.valuation_source
-        if existing.announced_date is None and extraction.announced_date is not None:
-            existing.announced_date = extraction.announced_date
-        if _is_more_confident(extraction.confidence, existing.extraction_confidence):
-            existing.extraction_confidence = extraction.confidence
-        # primary_news_url: first-write-wins; do not overwrite.
+        _merge_extraction_into_round(existing, extraction)
         session.add(existing)
         return existing, False
+
+    # Type+date miss — but an existing round with the SAME amount and a
+    # compatible type is still the same round (e.g. an early article had no
+    # date, a later one names the round_type but the dated row already exists).
+    # Catch it before inserting a duplicate.
+    if extraction.amount_raised_usd is not None:
+        amount_match = await _find_amount_match(
+            session,
+            company_id=company_id,
+            amount=extraction.amount_raised_usd,
+            round_type=extraction.round_type,
+        )
+        if amount_match is not None:
+            _merge_extraction_into_round(amount_match, extraction)
+            session.add(amount_match)
+            return amount_match, False
 
     new_round = FundingRound(
         company_id=company_id,
