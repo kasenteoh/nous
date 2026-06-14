@@ -1378,26 +1378,49 @@ export async function getAlsoBackedBy(
 // ─── Tag / location SEO queries ───────────────────────────────────────────────
 
 /**
- * All distinct, non-null tag values across the companies table, sorted.
+ * Minimum number of catalog companies a tag must apply to before it earns a
+ * /tag/<tag> page (and a sitemap entry). Of the ~7,370 tags the LLM emits, the
+ * overwhelming majority apply to a single company, so per-tag pages were thin,
+ * near-duplicate SEO doorways. Requiring ≥3 companies keeps only tags that
+ * actually group the catalog. Raise/lower in one place here.
+ */
+const MIN_TAG_COMPANY_COUNT = 3;
+
+/**
+ * Non-null tag values that apply to at least {@link MIN_TAG_COMPANY_COUNT}
+ * catalog companies, sorted. Singleton/near-singleton tags are dropped so the
+ * tag/sitemap surface isn't dominated by thin one-company pages.
+ *
  * PostgREST has no native `unnest` (nor DISTINCT) and caps every response at
  * 1000 rows, so a flat select would silently sample ~1/4 of the ~4,200-row
  * catalog. Instead we keyset-scan the whole table via {@link scanCompanies},
- * then flatten + deduplicate the `tags` arrays in-process.
+ * then tally `tags` occurrences in-process and keep those meeting the
+ * threshold. Each company contributes at most once per distinct tag (a tags
+ * array shouldn't repeat a value, but dedupe per row so it can't inflate a
+ * count past the bar on its own).
  */
 export async function listAllTags(): Promise<string[]> {
   const rows = await scanCompanies("listAllTags", "slug, tags", "tags", true);
   if (rows === null) return [];
 
-  const seen = new Set<string>();
+  const counts = new Map<string, number>();
   for (const row of rows) {
     const tags = row.tags as string[] | null;
-    if (Array.isArray(tags)) {
-      for (const t of tags) {
-        if (t) seen.add(t);
-      }
+    if (!Array.isArray(tags)) continue;
+    // Per-row dedupe: count each distinct tag once per company.
+    const distinct = new Set<string>();
+    for (const t of tags) {
+      if (t) distinct.add(t);
+    }
+    for (const t of distinct) {
+      counts.set(t, (counts.get(t) ?? 0) + 1);
     }
   }
-  return [...seen].sort((a, b) => a.localeCompare(b));
+
+  return [...counts.entries()]
+    .filter(([, count]) => count >= MIN_TAG_COMPANY_COUNT)
+    .map(([tag]) => tag)
+    .sort((a, b) => a.localeCompare(b));
 }
 
 /**

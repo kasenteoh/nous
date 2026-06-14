@@ -912,6 +912,40 @@ def snapshot_companies(week: str | None) -> None:
     asyncio.run(_run())
 
 
+@cli.command("normalize-taxonomy")
+def normalize_taxonomy_cmd() -> None:
+    """Recanonicalize companies.primary_category in place (zero LLM).
+
+    Applies nous.util.category.normalize_category to the existing
+    primary_category column so the historical free-text spelling sprawl
+    (ad-tech / adtech / advertising technology; biotech / biotech tooling; ...)
+    collapses onto the canonical category set — the same way industry_group is
+    canonicalized on enrich. Set-based per distinct value and idempotent: a
+    second run finds nothing to change. No schema change (string update only).
+    """
+    import asyncio
+    from datetime import UTC, datetime
+
+    from nous.db.session import AsyncSessionLocal
+    from nous.observability import record_pipeline_run
+    from nous.pipeline.normalize_taxonomy import run_normalize_taxonomy
+
+    async def _run() -> None:
+        started = datetime.now(UTC)
+        async with AsyncSessionLocal() as session:
+            summary = await run_normalize_taxonomy(session)
+            click.echo(summary.model_dump_json(indent=2))
+        await record_pipeline_run(
+            "normalize-taxonomy",
+            started_at=started,
+            inputs_seen=summary.distinct_values_seen,
+            rows_written=summary.rows_updated,
+            summary=summary,
+        )
+
+    asyncio.run(_run())
+
+
 @cli.command("link-competitors")
 @click.option(
     "--limit",
