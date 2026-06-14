@@ -20,7 +20,9 @@ Quota discipline (spec §11):
 
 from __future__ import annotations
 
+import asyncio
 import logging
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
@@ -49,6 +51,14 @@ logger = logging.getLogger(__name__)
 
 _TECHCRUNCH_SOURCE = "techcrunch"
 _LLM_SOURCE = "llm_inferred"
+
+# How many companies' LLM work to run at once. Each company makes up to two
+# DeepSeek calls (candidate pass + analysis pass), both network-bound; fanning a
+# batch out collapses wall-clock roughly ``concurrency``-fold. Only the LLM work
+# is parallelized — every DB read/write stays strictly sequential on the single
+# passed-in session, so there is no added DB concurrency and the existing
+# per-company commit cadence / idempotency is unchanged.
+_DEFAULT_CONCURRENCY: int = 5
 
 
 class AnalyzeCompetitorsSummary(BaseModel):
@@ -194,8 +204,224 @@ async def resolve_competitor_company_id(
 
 
 # ---------------------------------------------------------------------------
+# Per-company LLM work (no DB access — safe to run concurrently)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(slots=True)
+class _CompanyInputs:
+    """DB-derived inputs for one company's LLM passes, gathered sequentially on
+    the single session BEFORE any concurrent work begins."""
+
+    company: Company
+    tc_articles: list[TechCrunchArticle]
+    peers: list[Peer]
+
+
+@dataclass(slots=True)
+class _AnalysisOutcome:
+    """LLM-only result for one company (no DB access).
+
+    Exactly one of the status flags is meaningful per outcome:
+    - ``rate_limited``: a 429 was seen; the scheduler stops issuing more work.
+    - ``llm_failure``: a parse/other LLM error — count + skip this company.
+    - otherwise (``analysis`` is set): success; Phase 3 resolves + writes it.
+
+    ``analysis`` / ``candidate_map`` / ``candidate_names`` carry forward the LLM
+    output so Phase 3 can resolve names + persist with no further LLM calls.
+    """
+
+    candidate_map: dict[str, str]
+    candidate_names: list[str]
+    analysis: CompetitorAnalysis | None
+    rate_limited: bool
+    llm_failure: bool
+
+
+async def _analyze_one(inputs: _CompanyInputs) -> _AnalysisOutcome:
+    """Run a company's two LLM passes. No DB access, so a batch of these is safe
+    to run concurrently against the shared LLM client. Returns a result object
+    that Phase 3 turns into sequential DB writes.
+
+    Mirrors the original serial control flow exactly:
+    - Pass 1 (candidates) runs only when the company has TechCrunch coverage; a
+      parse/other error there degrades to LLM-only competitors, a 429 aborts.
+    - Pass 2 (analysis) always runs; a 429 aborts, a parse/other error skips.
+    """
+    company = inputs.company
+
+    # --- Pass 1: pull competitor candidates from the company's TC coverage.
+    # candidate_map: normalized competitor name -> source TechCrunch URL.
+    candidate_map: dict[str, str] = {}
+    candidate_names: list[str] = []
+    if inputs.tc_articles:
+        cand_prompt = build_candidates_prompt(
+            target_name=company.name, articles=inputs.tc_articles
+        )
+        try:
+            cand_result: CompetitorCandidates = await complete_json(
+                cand_prompt, CompetitorCandidates
+            )
+        except LLMRateLimitError:
+            logger.warning(
+                "LLM rate limit hit during competitor-candidate extraction "
+                "for %s — stopping loop.",
+                company.name,
+            )
+            return _AnalysisOutcome(
+                candidate_map={},
+                candidate_names=[],
+                analysis=None,
+                rate_limited=True,
+                llm_failure=False,
+            )
+        except (LLMParseError, LLMError) as exc:
+            # Degrade gracefully: proceed with LLM-only competitors.
+            logger.warning(
+                "LLM error extracting TC competitor candidates for %s: %s",
+                company.name,
+                exc,
+            )
+            cand_result = CompetitorCandidates()
+        for mention in cand_result.candidates:
+            norm = normalize_name(mention.name)
+            if not norm or norm in candidate_map:
+                continue
+            candidate_map[norm] = mention.article_url
+            candidate_names.append(mention.name)
+
+    # --- Pass 2: revalidate candidates + combine with LLM-inferred peers.
+    target = Target(
+        name=company.name,
+        description_short=company.description_short or "",
+        description_long=company.description_long or "",
+        industry_group=company.industry_group or "",
+    )
+    prompt = build_prompt(
+        target=target, peers=inputs.peers, tc_candidates=candidate_names
+    )
+
+    try:
+        analysis: CompetitorAnalysis = await complete_json(prompt, CompetitorAnalysis)
+    except LLMRateLimitError:
+        logger.warning(
+            "LLM rate limit hit while analyzing competitors for %s — "
+            "stopping loop to avoid further quota exhaustion.",
+            company.name,
+        )
+        return _AnalysisOutcome(
+            candidate_map={},
+            candidate_names=[],
+            analysis=None,
+            rate_limited=True,
+            llm_failure=False,
+        )
+    except (LLMParseError, LLMError) as exc:
+        logger.warning(
+            "LLM error analyzing competitors for %s: %s", company.name, exc
+        )
+        return _AnalysisOutcome(
+            candidate_map={},
+            candidate_names=[],
+            analysis=None,
+            rate_limited=False,
+            llm_failure=True,
+        )
+
+    return _AnalysisOutcome(
+        candidate_map=candidate_map,
+        candidate_names=candidate_names,
+        analysis=analysis,
+        rate_limited=False,
+        llm_failure=False,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Main loop
 # ---------------------------------------------------------------------------
+
+
+async def _persist_analysis(
+    session: AsyncSession,
+    summary: AnalyzeCompetitorsSummary,
+    *,
+    company: Company,
+    outcome: _AnalysisOutcome,
+    dry_run: bool,
+) -> None:
+    """Resolve an analysis outcome's competitor names + apply the replace-style
+    write for one company. Runs sequentially on the single session — never from
+    a concurrent task. Preserves the original resolution + write + commit logic
+    byte-for-byte (only its inputs now arrive from a precomputed outcome)."""
+    assert outcome.analysis is not None  # caller guards on success
+    summary.companies_analyzed += 1
+
+    # Resolve each competitor name to a company_id (None if unmatched) and
+    # determine provenance: a competitor whose normalized name came from the
+    # TechCrunch candidates is sourced to that article; everything else the
+    # model added is "llm_inferred" (rendered as a *potential* competitor).
+    # Resolve each competitor and collect in LLM order (sorted by rank).
+    # The CompetitorAnalysis validator already guarantees contiguous 1..N
+    # ranks; this re-rank is belt-and-braces so a future relaxation of that
+    # validation can't violate the unique (company_id, rank) constraint.
+    llm_ordered = sorted(outcome.analysis.competitors, key=lambda x: x.rank)
+    resolved: list[tuple[UUID | None, str, str, str, int, str, str | None]] = []
+    for contiguous_rank, c in enumerate(llm_ordered, start=1):
+        cid = await resolve_competitor_company_id(session, name=c.name)
+        article_url = outcome.candidate_map.get(normalize_name(c.name))
+        if article_url is not None:
+            source, source_url = _TECHCRUNCH_SOURCE, article_url
+        else:
+            source, source_url = _LLM_SOURCE, None
+        resolved.append(
+            (cid, c.name, c.description, c.reasoning, contiguous_rank, source, source_url)
+        )
+
+    if dry_run:
+        for *_, source, _su in resolved:
+            if source == _TECHCRUNCH_SOURCE:
+                summary.competitors_from_techcrunch += 1
+            else:
+                summary.competitors_from_llm += 1
+        return
+
+    # Replace-style write, committed PER COMPANY. The SAVEPOINT via
+    # begin_nested() isolates a single company's write failure; the commit
+    # then persists it incrementally — crash-safe + resumable, and a later
+    # rate-limit break keeps everything written so far. (A previous version
+    # only flushed here and never committed; since the CLI opens a plain
+    # AsyncSessionLocal() with no auto-commit, every run was rolled back on
+    # close and the competitors table stayed empty.)
+    async with session.begin_nested():
+        await session.execute(
+            delete(Competitor).where(Competitor.company_id == company.id)
+        )
+        now = datetime.now(UTC)
+        for cid, name, desc, reasoning, rank, source, source_url in resolved:
+            session.add(
+                Competitor(
+                    company_id=company.id,
+                    competitor_company_id=cid,
+                    competitor_name=name,
+                    description=desc,
+                    reasoning=reasoning,
+                    rank=rank,
+                    source=source,
+                    source_url=source_url,
+                    updated_at=now,
+                )
+            )
+            summary.competitors_written += 1
+            if cid is not None:
+                summary.competitors_linked += 1
+            else:
+                summary.competitors_unlinked += 1
+            if source == _TECHCRUNCH_SOURCE:
+                summary.competitors_from_techcrunch += 1
+            else:
+                summary.competitors_from_llm += 1
+    await session.commit()
 
 
 async def run_analyze_competitors(
@@ -204,145 +430,88 @@ async def run_analyze_competitors(
     limit: int = 500,
     ttl_days: int = 25,
     dry_run: bool = False,
+    concurrency: int = _DEFAULT_CONCURRENCY,
 ) -> AnalyzeCompetitorsSummary:
+    """Analyze competitors for eligible companies, fanning the per-company LLM
+    work out with bounded concurrency.
+
+    Three phases keep the single AsyncSession concurrency-safe:
+    1. Sequentially gather each company's DB-derived LLM inputs (TechCrunch
+       articles + peer list) on the session.
+    2. Run the two LLM passes per company concurrently, bounded by a
+       ``concurrency``-wide semaphore. These tasks never touch the session.
+    3. Sequentially resolve competitor names + apply the replace-style write +
+       commit per company, in the deterministic eligibility order.
+
+    Rate-limit handling matches the original serial loop: the FIRST 429 stops
+    further LLM scheduling, everything already extracted is still written, and
+    ``skipped_rate_limited`` is recorded once. Companies that didn't run because
+    of the stop stay eligible next run (no rows written, TTL gate unchanged).
+    Per-company parse/other LLM errors are counted and skipped individually.
+    """
     summary = AnalyzeCompetitorsSummary()
 
     companies = await fetch_eligible_companies(
         session, limit=limit, ttl_days=ttl_days
     )
+    if not companies:
+        return summary
 
+    # Phase 1: gather every company's LLM inputs sequentially on the session.
+    # (DB reads — must not happen inside the concurrent tasks below, since a
+    # single AsyncSession is not concurrency-safe.)
+    inputs: list[_CompanyInputs] = []
     for company in companies:
-        # --- Pass 1: pull competitor candidates from the company's TC coverage.
-        # candidate_map: normalized competitor name -> source TechCrunch URL.
         tc_articles = await fetch_techcrunch_articles(session, company_id=company.id)
-        candidate_map: dict[str, str] = {}
-        candidate_names: list[str] = []
-        if tc_articles:
-            cand_prompt = build_candidates_prompt(
-                target_name=company.name, articles=tc_articles
-            )
-            try:
-                cand_result: CompetitorCandidates = await complete_json(
-                    cand_prompt, CompetitorCandidates
-                )
-            except LLMRateLimitError:
-                logger.warning(
-                    "LLM rate limit hit during competitor-candidate extraction "
-                    "for %s — stopping loop.",
-                    company.name,
-                )
-                summary.skipped_rate_limited += 1
-                break
-            except (LLMParseError, LLMError) as exc:
-                # Degrade gracefully: proceed with LLM-only competitors.
-                logger.warning(
-                    "LLM error extracting TC competitor candidates for %s: %s",
-                    company.name,
-                    exc,
-                )
-                cand_result = CompetitorCandidates()
-            for mention in cand_result.candidates:
-                norm = normalize_name(mention.name)
-                if not norm or norm in candidate_map:
-                    continue
-                candidate_map[norm] = mention.article_url
-                candidate_names.append(mention.name)
-
-        # --- Pass 2: revalidate candidates + combine with LLM-inferred peers.
         peers = await fetch_peers(session, target=company)
-        target = Target(
-            name=company.name,
-            description_short=company.description_short or "",
-            description_long=company.description_long or "",
-            industry_group=company.industry_group or "",
+        inputs.append(
+            _CompanyInputs(company=company, tc_articles=tc_articles, peers=peers)
         )
-        prompt = build_prompt(target=target, peers=peers, tc_candidates=candidate_names)
 
-        try:
-            analysis: CompetitorAnalysis = await complete_json(
-                prompt, CompetitorAnalysis
-            )
-        except LLMRateLimitError:
-            logger.warning(
-                "LLM rate limit hit while analyzing competitors for %s — "
-                "stopping loop to avoid further quota exhaustion.",
-                company.name,
-            )
-            summary.skipped_rate_limited += 1
+    semaphore = asyncio.Semaphore(max(1, concurrency))
+
+    async def _bounded(one: _CompanyInputs) -> _AnalysisOutcome:
+        async with semaphore:
+            return await _analyze_one(one)
+
+    # Phases 2 + 3, batched. Processing in batches lets a 429 stop scheduling
+    # the REMAINING batches promptly (instead of fanning out every company's
+    # LLM call up front), preserving the serial loop's "stop on first rate
+    # limit" cost discipline while still parallelizing within a batch.
+    batch_size = max(1, concurrency)
+    stop = False
+    for start in range(0, len(inputs), batch_size):
+        if stop:
             break
-        except (LLMParseError, LLMError) as exc:
-            logger.warning(
-                "LLM error analyzing competitors for %s: %s", company.name, exc
-            )
-            summary.llm_failures += 1
-            continue
+        batch = inputs[start : start + batch_size]
 
-        summary.companies_analyzed += 1
+        # Phase 2: run this batch's LLM work concurrently (no DB access).
+        outcomes = await asyncio.gather(*(_bounded(one) for one in batch))
 
-        # Resolve each competitor name to a company_id (None if unmatched) and
-        # determine provenance: a competitor whose normalized name came from the
-        # TechCrunch candidates is sourced to that article; everything else the
-        # model added is "llm_inferred" (rendered as a *potential* competitor).
-        # Resolve each competitor and collect in LLM order (sorted by rank).
-        # The CompetitorAnalysis validator already guarantees contiguous 1..N
-        # ranks; this re-rank is belt-and-braces so a future relaxation of that
-        # validation can't violate the unique (company_id, rank) constraint.
-        llm_ordered = sorted(analysis.competitors, key=lambda x: x.rank)
-        resolved: list[tuple[UUID | None, str, str, str, int, str, str | None]] = []
-        for contiguous_rank, c in enumerate(llm_ordered, start=1):
-            cid = await resolve_competitor_company_id(session, name=c.name)
-            article_url = candidate_map.get(normalize_name(c.name))
-            if article_url is not None:
-                source, source_url = _TECHCRUNCH_SOURCE, article_url
-            else:
-                source, source_url = _LLM_SOURCE, None
-            resolved.append(
-                (cid, c.name, c.description, c.reasoning, contiguous_rank, source, source_url)
+        # Phase 3: apply results sequentially on the single session, in
+        # eligibility order. A 429 anywhere in the batch stops scheduling
+        # further batches; outcomes that completed before/alongside it are
+        # still persisted (matching the serial "keep everything written so
+        # far" guarantee).
+        for one, outcome in zip(batch, outcomes, strict=True):
+            if outcome.rate_limited:
+                stop = True
+                continue
+            if outcome.llm_failure:
+                summary.llm_failures += 1
+                continue
+            await _persist_analysis(
+                session,
+                summary,
+                company=one.company,
+                outcome=outcome,
+                dry_run=dry_run,
             )
 
-        if dry_run:
-            for *_, source, _su in resolved:
-                if source == _TECHCRUNCH_SOURCE:
-                    summary.competitors_from_techcrunch += 1
-                else:
-                    summary.competitors_from_llm += 1
-            continue
-
-        # Replace-style write, committed PER COMPANY. The SAVEPOINT via
-        # begin_nested() isolates a single company's write failure; the commit
-        # then persists it incrementally — crash-safe + resumable, and a later
-        # rate-limit break keeps everything written so far. (A previous version
-        # only flushed here and never committed; since the CLI opens a plain
-        # AsyncSessionLocal() with no auto-commit, every run was rolled back on
-        # close and the competitors table stayed empty.)
-        async with session.begin_nested():
-            await session.execute(
-                delete(Competitor).where(Competitor.company_id == company.id)
-            )
-            now = datetime.now(UTC)
-            for cid, name, desc, reasoning, rank, source, source_url in resolved:
-                session.add(
-                    Competitor(
-                        company_id=company.id,
-                        competitor_company_id=cid,
-                        competitor_name=name,
-                        description=desc,
-                        reasoning=reasoning,
-                        rank=rank,
-                        source=source,
-                        source_url=source_url,
-                        updated_at=now,
-                    )
-                )
-                summary.competitors_written += 1
-                if cid is not None:
-                    summary.competitors_linked += 1
-                else:
-                    summary.competitors_unlinked += 1
-                if source == _TECHCRUNCH_SOURCE:
-                    summary.competitors_from_techcrunch += 1
-                else:
-                    summary.competitors_from_llm += 1
-        await session.commit()
+    if stop:
+        # Recorded once total (not per task): the serial loop incremented this
+        # exactly once before breaking, and the summary field is a "we stopped
+        # for a rate limit" signal, not a per-company tally.
+        summary.skipped_rate_limited = 1
 
     return summary

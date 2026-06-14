@@ -33,7 +33,9 @@ Quota discipline (spec §11):
 
 from __future__ import annotations
 
+import asyncio
 import logging
+from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from typing import Literal
 from urllib.parse import urlparse
@@ -70,6 +72,15 @@ logger = logging.getLogger(__name__)
 
 # Minimum cleaned website text length to bother extracting from.
 _MIN_TEXT_CHARS = 200
+
+# How many companies' website-funding LLM calls to run at once. One DeepSeek
+# call per company, network-bound; fanning a batch out collapses wall-clock
+# roughly ``concurrency``-fold. Only the LLM call is parallelized — every DB
+# read (page fetch) and write (round reconcile + checked-at stamp + commit)
+# stays strictly sequential on the single passed-in session, so there is no
+# added DB concurrency and the existing per-company commit cadence /
+# idempotency is unchanged.
+_DEFAULT_WEBSITE_CONCURRENCY: int = 5
 
 # Image / media-hosting hosts whose URLs must never be accepted as a funding
 # source.  These are not in AGGREGATOR_HOSTS (which covers directories and
@@ -484,6 +495,187 @@ class ExtractFundingWebsiteSummary(_RoundPersistCounts):
     totals_recorded: int = 0
 
 
+@dataclass(slots=True)
+class _WebsiteInputs:
+    """DB-derived inputs for one company's website-funding LLM pass, gathered
+    sequentially on the single session BEFORE any concurrent work begins.
+
+    ``source_url`` is the company's website (or its first page URL) — the
+    attribution target, computed here so Phase 3 needs no further page reads.
+    ``cleaned`` is the truncated, concatenated visible text; an empty/too-thin
+    value means "no LLM call" (the skipped_no_text path).
+    """
+
+    company: Company
+    cleaned: str
+    source_url: str | None
+
+
+@dataclass(slots=True)
+class _WebsiteOutcome:
+    """LLM-only result for one company's website pass (no DB access).
+
+    Status flags (at most one true):
+    - ``rate_limited``: a 429 was seen; the scheduler stops issuing more work
+      and this company is NOT stamped (matches the serial deliberate-no-stamp).
+    - ``llm_failure``: a parse/other LLM error — counted; the company is still
+      stamped so the rotation advances.
+    - ``skipped_no_text``: the page text was too thin to call the LLM at all.
+    Otherwise ``extraction`` carries the result for Phase 3 to apply + persist.
+    """
+
+    extraction: FundingExtraction | None
+    rate_limited: bool
+    llm_failure: bool
+    skipped_no_text: bool
+
+
+async def _extract_website_one(inputs: _WebsiteInputs) -> _WebsiteOutcome:
+    """Run one company's website-funding LLM call. No DB access, so a batch of
+    these is safe to run concurrently against the shared LLM client. Returns a
+    result object Phase 3 turns into sequential DB writes.
+
+    Mirrors the serial control flow: thin text short-circuits (no LLM call), a
+    429 aborts the run, a parse/other error is a per-company failure.
+    """
+    if len(inputs.cleaned) < _MIN_TEXT_CHARS:
+        return _WebsiteOutcome(
+            extraction=None,
+            rate_limited=False,
+            llm_failure=False,
+            skipped_no_text=True,
+        )
+
+    prompt = build_website_prompt(
+        company_name=inputs.company.name, page_text=inputs.cleaned
+    )
+    try:
+        extraction: FundingExtraction = await complete_json(prompt, FundingExtraction)
+    except LLMRateLimitError:
+        logger.warning(
+            "LLM rate limit hit while extracting website funding for %s —"
+            " stopping loop to avoid further quota exhaustion.",
+            inputs.company.name,
+        )
+        return _WebsiteOutcome(
+            extraction=None,
+            rate_limited=True,
+            llm_failure=False,
+            skipped_no_text=False,
+        )
+    except (LLMParseError, LLMError) as exc:
+        logger.warning(
+            "LLM error extracting website funding for %s: %s",
+            inputs.company.name,
+            exc,
+        )
+        return _WebsiteOutcome(
+            extraction=None,
+            rate_limited=False,
+            llm_failure=True,
+            skipped_no_text=False,
+        )
+
+    return _WebsiteOutcome(
+        extraction=extraction,
+        rate_limited=False,
+        llm_failure=False,
+        skipped_no_text=False,
+    )
+
+
+async def _apply_website_outcome(
+    session: AsyncSession,
+    summary: ExtractFundingWebsiteSummary,
+    *,
+    inputs: _WebsiteInputs,
+    outcome: _WebsiteOutcome,
+    skip_low_confidence: bool,
+    proximity_days: int,
+) -> None:
+    """Apply one company's website-funding outcome sequentially on the single
+    session, then stamp website_funding_checked_at and commit.
+
+    This is the EXACT per-company body of the original serial loop (status
+    event, stated total, round persist with junk-source guard, end-of-loop
+    stamp + commit) — only its LLM result now arrives precomputed. Never called
+    for a rate-limited outcome (that path deliberately skips the stamp)."""
+    company = inputs.company
+    source_url = inputs.source_url
+
+    if outcome.skipped_no_text:
+        summary.skipped_no_text += 1
+    else:
+        extraction = outcome.extraction
+        if extraction is None:
+            # llm_failure: counted here so the tally matches the serial loop's
+            # in-line increment; the company is still stamped below.
+            summary.llm_failures += 1
+        else:
+            # Own-site status notices ("we've been acquired by X", "we are
+            # winding down") apply regardless of whether the page states
+            # funding. The prompt caps status_confidence at 'medium', which
+            # still passes the helper's medium/high gate. The end-of-loop stamp
+            # commit persists the change.
+            status_outcome = _apply_status_event(
+                company,
+                extraction,
+                source_url=source_url,
+            )
+            if status_outcome == "changed":
+                summary.status_changes_applied += 1
+            elif status_outcome == "backfilled":
+                summary.status_sources_backfilled += 1
+
+            # Own-site stated totals ("we've raised $X to date") apply
+            # regardless of whether the page states a round. as_of is today — a
+            # live page asserts its claim now, and there is no publication date
+            # to prefer. The end-of-loop stamp commit persists the change.
+            if _apply_total_raised(
+                company,
+                extraction,
+                source_url=source_url,
+                as_of=datetime.now(tz=UTC).date(),
+            ):
+                summary.totals_recorded += 1
+
+            if not extraction.is_funding_announcement:
+                summary.skipped_not_funding += 1
+            elif skip_low_confidence and extraction.confidence == "low":
+                summary.skipped_low_confidence += 1
+            else:
+                # Attribute the round to the company's website (the source of
+                # the text).
+                if source_url and _is_junk_source_url(source_url):
+                    # Reject rounds whose attributed URL is an image host, CDN,
+                    # or aggregator directory. A company's own domain is never
+                    # rejected here — only third-party junk URLs.
+                    logger.warning(
+                        "Skipping website funding for %r: source URL is a "
+                        "junk/aggregator host (%s)",
+                        company.name,
+                        source_url,
+                    )
+                    summary.skipped_junk_source += 1
+                else:
+                    await _persist_round_and_investors(
+                        session,
+                        summary,
+                        company_id=company.id,
+                        extraction=extraction,
+                        primary_news_url=source_url or "",
+                        proximity_days=proximity_days,
+                    )
+                    summary.companies_with_funding += 1
+
+    # Stamp the attempt on every completed path (funding found, nothing found,
+    # thin text, or LLM failure) so the rotation advances. One commit per
+    # company; this also commits the round persisted above.
+    company.website_funding_checked_at = datetime.now(tz=UTC)
+    session.add(company)
+    await session.commit()
+
+
 async def run_extract_funding_website(
     session: AsyncSession,
     *,
@@ -492,6 +684,7 @@ async def run_extract_funding_website(
     proximity_days: int = 60,
     recheck_after_days: int = 180,
     ignore_recheck: bool = False,
+    concurrency: int = _DEFAULT_WEBSITE_CONCURRENCY,
 ) -> ExtractFundingWebsiteSummary:
     """Gap-fill funding from a company's own scraped website.
 
@@ -514,6 +707,15 @@ async def run_extract_funding_website(
     own site once. The pass still stamps ``website_funding_checked_at`` and
     stays idempotent (reconcile dedups), so re-running the drain only re-pays
     the LLM for companies not yet given a round. No behavior change when false.
+
+    ``concurrency`` controls how many companies' website-funding LLM calls run
+    at once. Only the LLM call is parallelized; every DB read (page fetch) and
+    write (round reconcile + checked-at stamp + commit) stays strictly
+    sequential on the single passed-in session, so there is no added DB
+    concurrency and the per-company commit cadence / idempotency is unchanged.
+    Rate-limit handling matches the serial loop: the FIRST 429 stops further
+    LLM scheduling, the rate-limited company is NOT stamped, and everything
+    already extracted is still applied + stamped.
     """
     summary = ExtractFundingWebsiteSummary()
 
@@ -544,9 +746,11 @@ async def run_extract_funding_website(
     result = await session.execute(stmt)
     companies = result.scalars().all()
 
+    # Phase 1: gather each company's page text + attribution URL sequentially on
+    # the session (DB reads — must not happen inside the concurrent tasks below,
+    # since a single AsyncSession is not concurrency-safe). Ordering preserved.
+    inputs: list[_WebsiteInputs] = []
     for company in companies:
-        summary.companies_seen += 1
-
         pages_result = await session.execute(
             select(RawPage)
             .where(RawPage.company_id == company.id)
@@ -558,100 +762,58 @@ async def run_extract_funding_website(
         combined = "\n\n".join(p for p in parts if p)
         cleaned = truncate_to_chars(combined, MAX_PROMPT_INPUT_CHARS)
 
-        if len(cleaned) >= _MIN_TEXT_CHARS:
-            prompt = build_website_prompt(company_name=company.name, page_text=cleaned)
+        # The attribution target, computed exactly as the serial loop did for
+        # the status/total paths (None when neither a website nor a page exists);
+        # the round path applies its own ``or ""`` fallback in the helper.
+        source_url = company.website or (pages[0].url if pages else None)
+        inputs.append(
+            _WebsiteInputs(company=company, cleaned=cleaned, source_url=source_url)
+        )
 
-            try:
-                extraction: FundingExtraction = await complete_json(
-                    prompt, FundingExtraction
-                )
-            except LLMRateLimitError:
-                logger.warning(
-                    "LLM rate limit hit while extracting website funding for %s —"
-                    " stopping loop to avoid further quota exhaustion.",
-                    company.name,
-                )
+    semaphore = asyncio.Semaphore(max(1, concurrency))
+
+    async def _bounded(one: _WebsiteInputs) -> _WebsiteOutcome:
+        async with semaphore:
+            return await _extract_website_one(one)
+
+    # Phases 2 + 3, batched. Batching lets a 429 stop scheduling the REMAINING
+    # batches promptly (instead of fanning out every company's LLM call up
+    # front), preserving the serial loop's "stop on first rate limit" cost
+    # discipline while still parallelizing within a batch.
+    batch_size = max(1, concurrency)
+    stop = False
+    for start in range(0, len(inputs), batch_size):
+        if stop:
+            break
+        batch = inputs[start : start + batch_size]
+
+        # Phase 2: run this batch's LLM calls concurrently (no DB access).
+        outcomes = await asyncio.gather(*(_bounded(one) for one in batch))
+
+        # Phase 3: apply results sequentially on the single session, in
+        # selection order. A 429 stops scheduling further batches; the
+        # rate-limited company is counted but NOT stamped (deliberate — a
+        # transient provider limit shouldn't cost it its whole recheck window),
+        # exactly as the serial loop's pre-stamp ``break``. Outcomes that
+        # completed before/alongside it are still applied + stamped.
+        for one, outcome in zip(batch, outcomes, strict=True):
+            # Count as "seen" before the rate-limit check: the serial loop
+            # incremented companies_seen at the top of the iteration, so the
+            # company that hit the 429 is itself counted (only later companies,
+            # never reached, are not).
+            summary.companies_seen += 1
+            if outcome.rate_limited:
                 summary.skipped_rate_limited += 1
-                # Deliberately NOT stamped: the attempt never completed, and a
-                # transient provider limit shouldn't cost the company its slot
-                # for the whole recheck window.
+                stop = True
                 break
-            except (LLMParseError, LLMError) as exc:
-                logger.warning(
-                    "LLM error extracting website funding for %s: %s",
-                    company.name,
-                    exc,
-                )
-                summary.llm_failures += 1
-            else:
-                # Own-site status notices ("we've been acquired by X", "we are
-                # winding down") apply regardless of whether the page states
-                # funding. The prompt caps status_confidence at 'medium',
-                # which still passes the helper's medium/high gate. The
-                # end-of-loop stamp commit persists the change.
-                status_outcome = _apply_status_event(
-                    company,
-                    extraction,
-                    source_url=company.website
-                    or (pages[0].url if pages else None),
-                )
-                if status_outcome == "changed":
-                    summary.status_changes_applied += 1
-                elif status_outcome == "backfilled":
-                    summary.status_sources_backfilled += 1
-
-                # Own-site stated totals ("we've raised $X to date") apply
-                # regardless of whether the page states a round. as_of is
-                # today — a live page asserts its claim now, and there is no
-                # publication date to prefer. The end-of-loop stamp commit
-                # persists the change.
-                if _apply_total_raised(
-                    company,
-                    extraction,
-                    source_url=company.website
-                    or (pages[0].url if pages else None),
-                    as_of=datetime.now(tz=UTC).date(),
-                ):
-                    summary.totals_recorded += 1
-
-                if not extraction.is_funding_announcement:
-                    summary.skipped_not_funding += 1
-                elif skip_low_confidence and extraction.confidence == "low":
-                    summary.skipped_low_confidence += 1
-                else:
-                    # Attribute the round to the company's website (the source
-                    # of the text).
-                    source_url = company.website or (pages[0].url if pages else "")
-                    if source_url and _is_junk_source_url(source_url):
-                        # Reject rounds whose attributed URL is an image host,
-                        # CDN, or aggregator directory.  A company's own domain
-                        # is never rejected here — only third-party junk URLs.
-                        logger.warning(
-                            "Skipping website funding for %r: source URL is a "
-                            "junk/aggregator host (%s)",
-                            company.name,
-                            source_url,
-                        )
-                        summary.skipped_junk_source += 1
-                    else:
-                        await _persist_round_and_investors(
-                            session,
-                            summary,
-                            company_id=company.id,
-                            extraction=extraction,
-                            primary_news_url=source_url,
-                            proximity_days=proximity_days,
-                        )
-                        summary.companies_with_funding += 1
-        else:
-            summary.skipped_no_text += 1
-
-        # Stamp the attempt on every completed path (funding found, nothing
-        # found, thin text, or LLM failure) so the rotation advances. One
-        # commit per company; this also commits the round persisted above.
-        company.website_funding_checked_at = datetime.now(tz=UTC)
-        session.add(company)
-        await session.commit()
+            await _apply_website_outcome(
+                session,
+                summary,
+                inputs=one,
+                outcome=outcome,
+                skip_low_confidence=skip_low_confidence,
+                proximity_days=proximity_days,
+            )
 
     # Recompute the denormalized latest_round_* columns now that website-sourced
     # rounds may have been created/merged, so the web browse sorts/filters stay
