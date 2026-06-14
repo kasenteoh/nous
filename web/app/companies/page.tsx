@@ -8,9 +8,11 @@ import {
   listIndustryGroups,
   listDiscoveredViaValues,
   searchHuskFallback,
+  type CompanyListOptions,
   type CompanyListSort,
 } from "@/lib/queries";
 import { CompanyCard } from "@/components/CompanyCard";
+import { SaveSearch } from "@/components/SaveSearch";
 
 export const metadata: Metadata = {
   // The layout's title template appends " — nous".
@@ -28,6 +30,32 @@ const SORT_OPTIONS: { value: CompanyListSort; label: string }[] = [
   { value: "name_asc", label: "Name (A–Z)" },
   { value: "name_desc", label: "Name (Z–A)" },
   { value: "recent", label: "Recently added" },
+  { value: "funding_desc", label: "Largest raise" },
+  { value: "recently_funded", label: "Recently funded" },
+  { value: "headcount_desc", label: "Headcount (high→low)" },
+];
+
+// Funding-stage options for the filter dropdown. Values match the free-text
+// latest_round_type written by extract-funding; the canonical ladder covers the
+// common cases. Odd/unknown stages still surface via the other sorts/filters —
+// this is a convenience scope, not an enum.
+const STAGE_OPTIONS = [
+  "Pre-Seed",
+  "Seed",
+  "Series A",
+  "Series B",
+  "Series C",
+  "Series D",
+  "Series E",
+] as const;
+
+// "Funded since" presets (days). 0 = any time (no filter).
+const FUNDED_SINCE_OPTIONS: { value: number; label: string }[] = [
+  { value: 0, label: "Any time" },
+  { value: 90, label: "Last 90 days" },
+  { value: 180, label: "Last 180 days" },
+  { value: 365, label: "Last year" },
+  { value: 730, label: "Last 2 years" },
 ];
 
 // Human-readable labels for discovered_via values. Unknown keys fall back to
@@ -48,11 +76,31 @@ type SearchParams = {
   source?: string | string[];
   sort?: string | string[];
   page?: string | string[];
+  // Advanced VC filters (Task C2).
+  min_raised?: string | string[];
+  max_raised?: string | string[];
+  founded_after?: string | string[];
+  founded_before?: string | string[];
+  emp_min?: string | string[];
+  emp_max?: string | string[];
+  stage?: string | string[];
+  funded_since_days?: string | string[];
 };
 
 function firstStr(value: string | string[] | undefined): string {
   if (Array.isArray(value)) return value[0] ?? "";
   return value ?? "";
+}
+
+/**
+ * Parse a search-param value as a non-negative number. Returns undefined for
+ * empty/NaN/negative input so the corresponding filter is simply omitted.
+ */
+function firstNum(value: string | string[] | undefined): number | undefined {
+  const raw = firstStr(value).trim();
+  if (!raw) return undefined;
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= 0 ? n : undefined;
 }
 
 export default async function CompaniesPage({
@@ -70,6 +118,41 @@ export default async function CompaniesPage({
     ? (sortRaw as CompanyListSort)
     : "name_asc";
 
+  // Advanced filters (Task C2). Numbers parsed defensively; stage validated
+  // against the known ladder so an arbitrary ?stage= can't inject odd values.
+  const minRaised = firstNum(sp.min_raised);
+  const maxRaised = firstNum(sp.max_raised);
+  const foundedAfter = firstNum(sp.founded_after);
+  const foundedBefore = firstNum(sp.founded_before);
+  const empMin = firstNum(sp.emp_min);
+  const empMax = firstNum(sp.emp_max);
+  const stageRaw = firstStr(sp.stage);
+  const stage = (STAGE_OPTIONS as readonly string[]).includes(stageRaw)
+    ? stageRaw
+    : "";
+  const fundedSinceRaw = firstNum(sp.funded_since_days) ?? 0;
+  const fundedSinceDays = FUNDED_SINCE_OPTIONS.some(
+    (o) => o.value === fundedSinceRaw,
+  )
+    ? fundedSinceRaw
+    : 0;
+
+  // The column-scoped filters, built once and reused for both the listing fetch
+  // and any clamped re-fetch.
+  const filters: CompanyListOptions = {
+    search: q || undefined,
+    industry_group: industry || undefined,
+    discovered_via: source || undefined,
+    min_raised: minRaised,
+    max_raised: maxRaised,
+    founded_after: foundedAfter,
+    founded_before: foundedBefore,
+    emp_min: empMin,
+    emp_max: empMax,
+    stage: stage || undefined,
+    funded_since_days: fundedSinceDays || undefined,
+  };
+
   // Parse requested page (NaN / negative → 1).
   const parsedPage = Math.max(1, Number.parseInt(firstStr(sp.page), 10) || 1);
 
@@ -79,14 +162,7 @@ export default async function CompaniesPage({
   const offset = (parsedPage - 1) * PAGE_SIZE;
 
   const [firstResult, industries, discoveredViaValues] = await Promise.all([
-    listCompanies({
-      search: q || undefined,
-      industry_group: industry || undefined,
-      discovered_via: source || undefined,
-      sort,
-      limit: PAGE_SIZE,
-      offset,
-    }),
+    listCompanies({ ...filters, sort, limit: PAGE_SIZE, offset }),
     listIndustryGroups(),
     listDiscoveredViaValues(),
   ]);
@@ -102,9 +178,7 @@ export default async function CompaniesPage({
   if (page !== parsedPage && companies.length === 0 && total > 0) {
     const clampedOffset = (page - 1) * PAGE_SIZE;
     const refetch = await listCompanies({
-      search: q || undefined,
-      industry_group: industry || undefined,
-      discovered_via: source || undefined,
+      ...filters,
       sort,
       limit: PAGE_SIZE,
       offset: clampedOffset,
@@ -112,7 +186,19 @@ export default async function CompaniesPage({
     companies = refetch.rows;
   }
 
-  const hasFilters = Boolean(q || industry || source);
+  const hasFilters = Boolean(
+    q ||
+      industry ||
+      source ||
+      minRaised != null ||
+      maxRaised != null ||
+      foundedAfter != null ||
+      foundedBefore != null ||
+      empMin != null ||
+      empMax != null ||
+      stage ||
+      fundedSinceDays,
+  );
   const effectiveOffset = (page - 1) * PAGE_SIZE;
   const firstShown = total === 0 ? 0 : effectiveOffset + 1;
   const lastShown = Math.min(effectiveOffset + companies.length, total);
@@ -121,25 +207,51 @@ export default async function CompaniesPage({
   // query, look for name-matching husks (companies with no description that
   // passed exclusion but failed the catalog bar).
   const huskFallback =
-    companies.length === 0 && q
-      ? await searchHuskFallback(q)
-      : [];
+    companies.length === 0 && q ? await searchHuskFallback(q) : [];
 
-  // Build a /companies?… href for a target page, preserving the active
-  // filters/sort.
-  const hrefForPage = (target: number): string => {
+  // The active filter/sort set as URLSearchParams (WITHOUT page). Single source
+  // of truth reused by pagination links, the Save-Search button, and the CSV
+  // export link so all three carry the exact same shortlist.
+  const baseParams = (): URLSearchParams => {
     const params = new URLSearchParams();
     if (q) params.set("q", q);
     if (industry) params.set("industry", industry);
     if (source) params.set("source", source);
     if (sort !== "name_asc") params.set("sort", sort);
+    if (minRaised != null) params.set("min_raised", String(minRaised));
+    if (maxRaised != null) params.set("max_raised", String(maxRaised));
+    if (foundedAfter != null) params.set("founded_after", String(foundedAfter));
+    if (foundedBefore != null) {
+      params.set("founded_before", String(foundedBefore));
+    }
+    if (empMin != null) params.set("emp_min", String(empMin));
+    if (empMax != null) params.set("emp_max", String(empMax));
+    if (stage) params.set("stage", stage);
+    if (fundedSinceDays) {
+      params.set("funded_since_days", String(fundedSinceDays));
+    }
+    return params;
+  };
+
+  // Build a /companies?… href for a target page, preserving filters/sort.
+  const hrefForPage = (target: number): string => {
+    const params = baseParams();
     if (target > 1) params.set("page", String(target));
     const qs = params.toString();
     return qs ? `/companies?${qs}` : "/companies";
   };
 
+  // Querystring (no leading "?") that the current filter set maps to — for the
+  // Save-Search localStorage entry and the CSV export route.
+  const currentQuery = baseParams().toString();
+  const exportHref = currentQuery
+    ? `/api/export?${currentQuery}`
+    : "/api/export";
+
   const selectClass =
     "rounded-md border border-edge bg-canvas px-3 py-2 text-sm text-ink-soft focus:outline-none focus:ring-2 focus:ring-accent/40";
+  const numInputClass =
+    "w-28 rounded-md border border-edge bg-canvas px-3 py-2 text-sm text-ink placeholder:text-ink-muted focus:outline-none focus:ring-2 focus:ring-accent/40";
 
   return (
     <main className="flex-1 px-6 py-12 max-w-6xl mx-auto w-full">
@@ -157,74 +269,204 @@ export default async function CompaniesPage({
       <form
         method="GET"
         action="/companies"
-        className="mb-6 flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center"
+        className="mb-6 flex flex-col gap-3"
       >
-        <input
-          type="search"
-          name="q"
-          defaultValue={q}
-          placeholder="Search companies…"
-          aria-label="Search companies"
-          className="flex-1 min-w-[12rem] rounded-md border border-edge bg-canvas px-3 py-2 text-sm text-ink placeholder:text-ink-muted focus:outline-none focus:ring-2 focus:ring-accent/40"
-        />
+        <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center">
+          <input
+            type="search"
+            name="q"
+            defaultValue={q}
+            placeholder="Search companies…"
+            aria-label="Search companies"
+            className="flex-1 min-w-[12rem] rounded-md border border-edge bg-canvas px-3 py-2 text-sm text-ink placeholder:text-ink-muted focus:outline-none focus:ring-2 focus:ring-accent/40"
+          />
 
-        <select
-          name="industry"
-          defaultValue={industry}
-          aria-label="Filter by industry"
-          className={selectClass}
-        >
-          <option value="">All industries</option>
-          {industries.map((value) => (
-            <option key={value} value={value}>
-              {value}
-            </option>
-          ))}
-        </select>
-
-        {/* Source filter built from real discovered_via values in the DB —
-            self-heals when new pipeline sources appear. */}
-        <select
-          name="source"
-          defaultValue={source}
-          aria-label="Filter by discovery source"
-          className={selectClass}
-        >
-          <option value="">All sources</option>
-          {discoveredViaValues.map((value) => (
-            <option key={value} value={value}>
-              {sourceLabel(value)}
-            </option>
-          ))}
-        </select>
-
-        <select
-          name="sort"
-          defaultValue={sort}
-          aria-label="Sort"
-          className={selectClass}
-        >
-          {SORT_OPTIONS.map((o) => (
-            <option key={o.value} value={o.value}>
-              {o.label}
-            </option>
-          ))}
-        </select>
-
-        <button
-          type="submit"
-          className="rounded-md bg-ink px-4 py-2 text-sm font-medium text-canvas hover:bg-ink/85 transition-colors"
-        >
-          Apply
-        </button>
-        {hasFilters && (
-          <Link
-            href="/companies"
-            className="text-sm text-ink-muted hover:text-ink hover:underline underline-offset-2"
+          <select
+            name="industry"
+            defaultValue={industry}
+            aria-label="Filter by industry"
+            className={selectClass}
           >
-            Clear
+            <option value="">All industries</option>
+            {industries.map((value) => (
+              <option key={value} value={value}>
+                {value}
+              </option>
+            ))}
+          </select>
+
+          {/* Source filter built from real discovered_via values in the DB —
+              self-heals when new pipeline sources appear. */}
+          <select
+            name="source"
+            defaultValue={source}
+            aria-label="Filter by discovery source"
+            className={selectClass}
+          >
+            <option value="">All sources</option>
+            {discoveredViaValues.map((value) => (
+              <option key={value} value={value}>
+                {sourceLabel(value)}
+              </option>
+            ))}
+          </select>
+
+          <select
+            name="sort"
+            defaultValue={sort}
+            aria-label="Sort"
+            className={selectClass}
+          >
+            {SORT_OPTIONS.map((o) => (
+              <option key={o.value} value={o.value}>
+                {o.label}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        {/* Advanced VC filters (Task C2). Funding stage, funded-since window,
+            cumulative-raised range, founded-year range, headcount range. */}
+        <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center">
+          <select
+            name="stage"
+            defaultValue={stage}
+            aria-label="Filter by funding stage"
+            className={selectClass}
+          >
+            <option value="">Any stage</option>
+            {STAGE_OPTIONS.map((value) => (
+              <option key={value} value={value}>
+                {value}
+              </option>
+            ))}
+          </select>
+
+          <select
+            name="funded_since_days"
+            defaultValue={String(fundedSinceDays)}
+            aria-label="Filter by how recently funded"
+            className={selectClass}
+          >
+            {FUNDED_SINCE_OPTIONS.map((o) => (
+              <option key={o.value} value={String(o.value)}>
+                {o.label}
+              </option>
+            ))}
+          </select>
+
+          <div className="flex items-center gap-2 text-sm text-ink-muted">
+            <span className="sr-only sm:not-sr-only">Raised</span>
+            <input
+              type="number"
+              name="min_raised"
+              min={0}
+              step={1000000}
+              defaultValue={minRaised ?? ""}
+              placeholder="min $"
+              aria-label="Minimum total raised (USD)"
+              className={numInputClass}
+            />
+            <span aria-hidden>–</span>
+            <input
+              type="number"
+              name="max_raised"
+              min={0}
+              step={1000000}
+              defaultValue={maxRaised ?? ""}
+              placeholder="max $"
+              aria-label="Maximum total raised (USD)"
+              className={numInputClass}
+            />
+          </div>
+
+          <div className="flex items-center gap-2 text-sm text-ink-muted">
+            <span className="sr-only sm:not-sr-only">Founded</span>
+            <input
+              type="number"
+              name="founded_after"
+              min={1900}
+              max={2100}
+              step={1}
+              defaultValue={foundedAfter ?? ""}
+              placeholder="after"
+              aria-label="Founded in or after year"
+              className={numInputClass}
+            />
+            <span aria-hidden>–</span>
+            <input
+              type="number"
+              name="founded_before"
+              min={1900}
+              max={2100}
+              step={1}
+              defaultValue={foundedBefore ?? ""}
+              placeholder="before"
+              aria-label="Founded in or before year"
+              className={numInputClass}
+            />
+          </div>
+
+          <div className="flex items-center gap-2 text-sm text-ink-muted">
+            <span className="sr-only sm:not-sr-only">Employees</span>
+            <input
+              type="number"
+              name="emp_min"
+              min={0}
+              step={1}
+              defaultValue={empMin ?? ""}
+              placeholder="min"
+              aria-label="Minimum employees"
+              className={numInputClass}
+            />
+            <span aria-hidden>–</span>
+            <input
+              type="number"
+              name="emp_max"
+              min={0}
+              step={1}
+              defaultValue={empMax ?? ""}
+              placeholder="max"
+              aria-label="Maximum employees"
+              className={numInputClass}
+            />
+          </div>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-3">
+          <button
+            type="submit"
+            className="rounded-md bg-ink px-4 py-2 text-sm font-medium text-canvas hover:bg-ink/85 transition-colors"
+          >
+            Apply
+          </button>
+          {hasFilters && (
+            <Link
+              href="/companies"
+              className="text-sm text-ink-muted hover:text-ink hover:underline underline-offset-2"
+            >
+              Clear
+            </Link>
+          )}
+
+          {/* Save the current filter set to localStorage (Task C3). */}
+          <SaveSearch query={currentQuery} />
+
+          {/* Stream the full current shortlist as CSV (Task C4). */}
+          <a
+            href={exportHref}
+            className="text-sm text-ink-soft hover:text-ink underline underline-offset-2 decoration-ink-faint"
+          >
+            Export CSV
+          </a>
+
+          <Link
+            href="/watchlist"
+            className="ml-auto text-sm text-ink-soft hover:text-ink underline underline-offset-2 decoration-ink-faint"
+          >
+            My watchlist →
           </Link>
-        )}
+        </div>
       </form>
 
       {/* ── Result count ──────────────────────────────────────────────────── */}

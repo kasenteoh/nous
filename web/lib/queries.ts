@@ -80,8 +80,24 @@ type CompanyRelationshipJoin = {
   related_company: NestedRelatedCompany | NestedRelatedCompany[] | null;
 };
 
-/** Sort options exposed by the index page. */
-export type CompanyListSort = "name_asc" | "name_desc" | "recent";
+/**
+ * Sort options exposed by the index page.
+ * - name_asc / name_desc — alphabetical.
+ * - recent — created_at desc (newest added to the catalog).
+ * - funding_desc — biggest most-recent raise first (latest_round_amount desc,
+ *   nulls last). (Task C1)
+ * - recently_funded — most recently raised first (latest_round_date desc, nulls
+ *   last). (Task C1)
+ * - headcount_desc — largest headcount first (employee_count_max desc, nulls
+ *   last). (Task C1)
+ */
+export type CompanyListSort =
+  | "name_asc"
+  | "name_desc"
+  | "recent"
+  | "funding_desc"
+  | "recently_funded"
+  | "headcount_desc";
 
 /** Filters + paging accepted by {@link listCompanies}. */
 export interface CompanyListOptions {
@@ -92,9 +108,89 @@ export interface CompanyListOptions {
   tag?: string;
   /** Filter to companies whose `hq_state` exactly matches this value. */
   state?: string;
+  // ── Advanced VC filters (Task C2). All compose with .gte/.lte/.eq; every
+  //    column below is indexed (year_incorporated/employee_count_* by prior
+  //    migrations, total_raised_usd by 0021, latest_round_* by 0028). ──────────
+  /** Minimum stated cumulative total raised, USD (`total_raised_usd >= n`). */
+  min_raised?: number;
+  /** Maximum stated cumulative total raised, USD (`total_raised_usd <= n`). */
+  max_raised?: number;
+  /** Founded in or after this year (`year_incorporated >= n`). */
+  founded_after?: number;
+  /** Founded in or before this year (`year_incorporated <= n`). */
+  founded_before?: number;
+  /** Minimum headcount (`employee_count_max >= n` — upper bound of the range). */
+  emp_min?: number;
+  /** Maximum headcount (`employee_count_min <= n` — lower bound of the range). */
+  emp_max?: number;
+  /** Exact latest funding stage, e.g. "Series A" (`latest_round_type = s`). */
+  stage?: string;
+  /** Only companies whose latest round is within the last N days. */
+  funded_since_days?: number;
   sort?: CompanyListSort;
   limit?: number;
   offset?: number;
+}
+
+/**
+ * Structural subset of the postgrest-js filter builder we chain in
+ * {@link applyCompanyFilters}. PostgREST's PostgrestFilterBuilder generics
+ * aren't publicly nameable (GenericSchema isn't exported), so typing the helper
+ * against the concrete builder would force an `any` (forbidden by CLAUDE.md).
+ * A generic `<Q extends CompanyFilterable>` that returns the SAME `Q` preserves
+ * the builder's full type through the helper without any escape hatch — every
+ * chained method returns the same instance type, so threading `Q` is sound.
+ */
+export interface CompanyFilterable {
+  or(filters: string): this;
+  eq(column: string, value: string): this;
+  gte(column: string, value: string | number): this;
+  lte(column: string, value: string | number): this;
+  contains(column: string, value: readonly string[]): this;
+}
+
+/**
+ * Apply every non-pagination/non-sort filter in {@link CompanyListOptions} to a
+ * query builder. Shared by the main listing query, its count-fallback, and the
+ * CSV-export keyset scan (Task C4) so all three apply the exact same filter
+ * semantics and can never drift. The catalog bar + search `.or()` stay at the
+ * call sites because they need the `count`/range context; everything
+ * column-scoped lives here. Exported so the export route can reuse it.
+ */
+export function applyCompanyFilters<Q extends CompanyFilterable>(
+  query: Q,
+  opts: CompanyListOptions,
+): Q {
+  let q = query;
+  if (opts.industry_group) q = q.eq("industry_group", opts.industry_group);
+  if (opts.discovered_via) q = q.eq("discovered_via", opts.discovered_via);
+  if (opts.tag) {
+    // `contains` checks the text[] column includes the exact element. Never
+    // ilike here — a substring match would conflate e.g. "ai" with
+    // "ai-infrastructure".
+    q = q.contains("tags", [opts.tag]);
+  }
+  if (opts.state) q = q.eq("hq_state", opts.state);
+  if (opts.min_raised != null) q = q.gte("total_raised_usd", opts.min_raised);
+  if (opts.max_raised != null) q = q.lte("total_raised_usd", opts.max_raised);
+  if (opts.founded_after != null) {
+    q = q.gte("year_incorporated", opts.founded_after);
+  }
+  if (opts.founded_before != null) {
+    q = q.lte("year_incorporated", opts.founded_before);
+  }
+  // Headcount is a range [min, max]; "at least N employees" means the upper
+  // bound reaches N, "at most N" means the lower bound is within N.
+  if (opts.emp_min != null) q = q.gte("employee_count_max", opts.emp_min);
+  if (opts.emp_max != null) q = q.lte("employee_count_min", opts.emp_max);
+  if (opts.stage) q = q.eq("latest_round_type", opts.stage);
+  if (opts.funded_since_days != null && opts.funded_since_days > 0) {
+    const cutoff = new Date(Date.now() - opts.funded_since_days * 86400e3)
+      .toISOString()
+      .slice(0, 10); // latest_round_date is a DATE column (YYYY-MM-DD).
+    q = q.gte("latest_round_date", cutoff);
+  }
+  return q;
 }
 
 /** Paged result: the current page of rows plus the total matching the filters. */
@@ -108,7 +204,7 @@ export interface CompanyListResult {
  * user-supplied search term can't break out of the `.or()` / `.ilike()`
  * expression (commas separate `.or()` clauses; `%`/`*` are wildcards).
  */
-function sanitizeIlikeTerm(term: string): string {
+export function sanitizeIlikeTerm(term: string): string {
   return term.replace(/[,()%*\\]/g, " ").replace(/\s+/g, " ").trim();
 }
 
@@ -127,7 +223,7 @@ function sanitizeIlikeTerm(term: string): string {
  * force an `any` — which CLAUDE.md forbids. A shared constant is the cleanest
  * fully-typed option.
  */
-const CATALOG_BAR_OR =
+export const CATALOG_BAR_OR =
   "description_short.not.is.null,funding_round_count.gt.0";
 
 /**
@@ -170,20 +266,10 @@ export async function listCompanies(
       `name.ilike.%${search}%,description_short.ilike.%${search}%`,
     );
   }
-  if (opts.industry_group) {
-    query = query.eq("industry_group", opts.industry_group);
-  }
-  if (opts.discovered_via) {
-    query = query.eq("discovered_via", opts.discovered_via);
-  }
-  if (opts.tag) {
-    // `contains` checks that the text[] column includes the exact element.
-    // Never use ilike here — a substring match would conflate e.g. "ai" with "ai-infrastructure".
-    query = query.contains("tags", [opts.tag]);
-  }
-  if (opts.state) {
-    query = query.eq("hq_state", opts.state);
-  }
+  // Column-scoped filters (industry/source/tag/state + the Task C2 VC filters)
+  // are applied by the shared helper so the count-fallback below can reuse the
+  // exact same set and the two can never drift.
+  query = applyCompanyFilters(query, opts);
 
   switch (opts.sort) {
     case "name_desc":
@@ -191,6 +277,26 @@ export async function listCompanies(
       break;
     case "recent":
       query = query.order("created_at", { ascending: false });
+      break;
+    // Funding/recency/headcount sorts (Task C1) read the denormalized columns
+    // from migration 0028 (latest_round_*) / employee_count_max. nullsFirst:
+    // false keeps unfunded / headcount-unknown companies at the bottom. `name`
+    // is a deterministic tiebreaker so paging is stable when many rows share a
+    // null / equal sort value.
+    case "funding_desc":
+      query = query
+        .order("latest_round_amount", { ascending: false, nullsFirst: false })
+        .order("name", { ascending: true });
+      break;
+    case "recently_funded":
+      query = query
+        .order("latest_round_date", { ascending: false, nullsFirst: false })
+        .order("name", { ascending: true });
+      break;
+    case "headcount_desc":
+      query = query
+        .order("employee_count_max", { ascending: false, nullsFirst: false })
+        .order("name", { ascending: true });
       break;
     default:
       query = query.order("name", { ascending: true });
@@ -213,7 +319,8 @@ export async function listCompanies(
     }
 
     // Fetch the count independently — we still have all the filters wired up.
-    // Rebuild the count query from the same options to stay consistent.
+    // Rebuild the count query from the same options (via the shared helper) so
+    // it stays consistent with the main query.
     let countQuery = supabase
       .from("companies")
       .select(
@@ -229,18 +336,7 @@ export async function listCompanies(
         `name.ilike.%${search2}%,description_short.ilike.%${search2}%`,
       );
     }
-    if (opts.industry_group) {
-      countQuery = countQuery.eq("industry_group", opts.industry_group);
-    }
-    if (opts.discovered_via) {
-      countQuery = countQuery.eq("discovered_via", opts.discovered_via);
-    }
-    if (opts.tag) {
-      countQuery = countQuery.contains("tags", [opts.tag]);
-    }
-    if (opts.state) {
-      countQuery = countQuery.eq("hq_state", opts.state);
-    }
+    countQuery = applyCompanyFilters(countQuery, opts);
 
     const { count: fallbackCount, error: countError } = await countQuery;
     if (countError) {
