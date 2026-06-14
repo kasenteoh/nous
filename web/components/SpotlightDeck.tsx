@@ -88,9 +88,11 @@ export function SpotlightDeck({ spotlights }: Props) {
           key={current.slug}
           className="motion-safe:animate-[spotlight-in_240ms_ease-out]"
         >
-          <h1 className="mt-5 text-4xl sm:text-5xl font-bold tracking-tight text-ink">
+          {/* h2, not h1: the page's constant <h1> is the visually-hidden site
+              heading (see app/page.tsx). This name rotates inside aria-live. */}
+          <h2 className="mt-5 text-4xl sm:text-5xl font-bold tracking-tight text-ink">
             {current.name}
-          </h1>
+          </h2>
           <p className="mt-4 text-lg text-ink-soft leading-relaxed max-w-lg">
             {current.oneLiner}
           </p>

@@ -61,6 +61,19 @@ body {
   font-family: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
 }
 
+/* Visible keyboard-focus indicator. Links/buttons previously had no focus style
+   and the masthead search set `focus:outline-none`, leaving keyboard users with
+   no idea where focus was. `:focus-visible` keeps mouse clicks ring-free. */
+a:focus-visible,
+button:focus-visible,
+select:focus-visible,
+input:focus-visible,
+[tabindex]:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+
 /* Spotlight deck enter transition. Applied via motion-safe: so
    prefers-reduced-motion users get an instant swap instead. */
 @keyframes spotlight-in {
