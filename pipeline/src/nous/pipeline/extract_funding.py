@@ -73,13 +73,13 @@ logger = logging.getLogger(__name__)
 # Minimum cleaned website text length to bother extracting from.
 _MIN_TEXT_CHARS = 200
 
-# How many companies' website-funding LLM calls to run at once. One DeepSeek
-# call per company, network-bound; fanning a batch out collapses wall-clock
-# roughly ``concurrency``-fold. Only the LLM call is parallelized — every DB
-# read (page fetch) and write (round reconcile + checked-at stamp + commit)
-# stays strictly sequential on the single passed-in session, so there is no
-# added DB concurrency and the existing per-company commit cadence /
-# idempotency is unchanged.
+# How many extraction LLM calls to run at once, shared by both the news-article
+# and website-funding paths. One DeepSeek call per item, network-bound; fanning
+# a batch out collapses wall-clock roughly ``concurrency``-fold. Only the LLM
+# call is parallelized — every DB read and write (round reconcile + processed/
+# checked-at stamp + commit) stays strictly sequential on the single passed-in
+# session, so there is no added DB concurrency and the existing per-item commit
+# cadence / idempotency is unchanged.
 _DEFAULT_WEBSITE_CONCURRENCY: int = 5
 
 # Image / media-hosting hosts whose URLs must never be accepted as a funding
@@ -319,6 +319,204 @@ class ExtractFundingSummary(_RoundPersistCounts):
     totals_recorded: int = 0
 
 
+@dataclass(slots=True)
+class _NewsInputs:
+    """Per-article inputs for one news-funding LLM pass, gathered sequentially
+    on the single session BEFORE any concurrent work begins.
+
+    ``prompt`` is the fully built extraction prompt (company name + article
+    text), computed here so Phase 2 never touches the session. ``company`` is
+    None only when the article references a missing company_id — that article
+    is stamped processed in Phase 3 without an LLM call (mirrors the website
+    path's thin-text short-circuit), and ``prompt`` is None to match.
+    """
+
+    article: NewsArticle
+    company: Company | None
+    prompt: str | None
+
+
+@dataclass(slots=True)
+class _NewsOutcome:
+    """LLM-only result for one article's news-funding pass (no DB access).
+
+    Status flags (at most one true):
+    - ``rate_limited``: a 429 was seen; the scheduler stops issuing more work
+      and this article is NOT stamped (matches the serial pre-stamp ``break``).
+    - ``llm_failure``: a parse/other LLM error — counted; the article is left
+      ``processed=false`` so a future run can retry (matches the serial loop).
+    - ``missing_company``: the article references a missing company_id, so no
+      LLM call was made; Phase 3 stamps it processed and moves on.
+    Otherwise ``extraction`` carries the result for Phase 3 to apply + persist.
+    """
+
+    extraction: FundingExtraction | None
+    rate_limited: bool
+    llm_failure: bool
+    missing_company: bool
+
+
+async def _extract_news_one(inputs: _NewsInputs) -> _NewsOutcome:
+    """Run one article's news-funding LLM call. No DB access, so a batch of
+    these is safe to run concurrently against the shared LLM client. Returns a
+    result object Phase 3 turns into sequential DB writes.
+
+    Mirrors the serial control flow: a missing company short-circuits (no LLM
+    call), a 429 aborts the run, a parse/other error is a per-article failure.
+    """
+    if inputs.company is None or inputs.prompt is None:
+        return _NewsOutcome(
+            extraction=None,
+            rate_limited=False,
+            llm_failure=False,
+            missing_company=True,
+        )
+
+    try:
+        extraction: FundingExtraction = await complete_json(
+            inputs.prompt, FundingExtraction
+        )
+    except LLMRateLimitError:
+        logger.warning(
+            "LLM rate limit hit while extracting funding for %s — stopping"
+            " loop to avoid further quota exhaustion.",
+            inputs.company.name,
+        )
+        return _NewsOutcome(
+            extraction=None,
+            rate_limited=True,
+            llm_failure=False,
+            missing_company=False,
+        )
+    except (LLMParseError, LLMError) as exc:
+        logger.warning(
+            "LLM error extracting funding from %s: %s", inputs.article.url, exc
+        )
+        return _NewsOutcome(
+            extraction=None,
+            rate_limited=False,
+            llm_failure=True,
+            missing_company=False,
+        )
+
+    return _NewsOutcome(
+        extraction=extraction,
+        rate_limited=False,
+        llm_failure=False,
+        missing_company=False,
+    )
+
+
+async def _apply_news_outcome(
+    session: AsyncSession,
+    summary: ExtractFundingSummary,
+    *,
+    inputs: _NewsInputs,
+    outcome: _NewsOutcome,
+    skip_low_confidence: bool,
+    proximity_days: int,
+) -> None:
+    """Apply one article's news-funding outcome sequentially on the single
+    session, committing per the original serial loop's cadence.
+
+    This is the EXACT per-article body of the original serial loop (missing-
+    company stamp, LLM-failure skip, status event, stated total, funding gate,
+    low-confidence deferral, round persist, processed stamp + commit) — only
+    its LLM result now arrives precomputed. Never called for a rate-limited
+    outcome (that path deliberately skips the stamp)."""
+    article = inputs.article
+
+    if outcome.missing_company:
+        # The article references a company_id that no longer exists — stamp it
+        # processed so the queue advances and never re-selects it.
+        logger.warning(
+            "news_article %s references missing company_id %s — marking processed",
+            article.id,
+            article.company_id,
+        )
+        article.processed = True
+        session.add(article)
+        await session.commit()
+        return
+
+    if outcome.llm_failure:
+        # Counted here so the tally matches the serial loop's in-line
+        # increment. Leave processed=false so a future run with a fixed prompt
+        # can retry — no commit, nothing to stamp.
+        summary.llm_failures += 1
+        return
+
+    company = inputs.company
+    assert company is not None  # not missing_company → company is present
+    extraction = outcome.extraction
+    assert extraction is not None  # not failure/missing → extraction present
+
+    summary.articles_processed += 1
+
+    # Status events (acquired / shut_down / ipo) apply BEFORE the
+    # is_funding_announcement gate: acquisition/shutdown articles are
+    # usually NOT funding announcements, and catching them is the whole
+    # point of the field.
+    status_outcome = _apply_status_event(
+        company, extraction, source_url=article.url
+    )
+    if status_outcome is not None:
+        if status_outcome == "changed":
+            summary.status_changes_applied += 1
+        else:
+            summary.status_sources_backfilled += 1
+        session.add(company)
+
+    # Stated cumulative totals also apply BEFORE the gate: they appear in
+    # non-funding coverage too (e.g. acquisition articles recapping the
+    # company's funding history). as_of falls back to today when the feed
+    # gave no published date, so the claim still participates in the
+    # newest-wins ordering.
+    total_recorded = _apply_total_raised(
+        company,
+        extraction,
+        source_url=article.url,
+        as_of=article.published_date or datetime.now(tz=UTC).date(),
+    )
+    if total_recorded:
+        summary.totals_recorded += 1
+        session.add(company)
+
+    if not extraction.is_funding_announcement:
+        summary.skipped_not_funding += 1
+        article.processed = True
+        session.add(article)
+        await session.commit()
+        return
+
+    if skip_low_confidence and extraction.confidence == "low":
+        summary.skipped_low_confidence += 1
+        # Leave processed=False so a future run with a tightened prompt
+        # (or `--include-low-confidence`) can retry. "Not a funding
+        # announcement" is terminal-skip above; "low confidence" is a
+        # transient-skip pending better extraction.
+        if status_outcome is not None or total_recorded:
+            # The ROUND extraction is deferred, but the status event /
+            # stated total carry their own validity — persist them now
+            # rather than leaving them pending on a path that never
+            # commits.
+            await session.commit()
+        return
+
+    await _persist_round_and_investors(
+        session,
+        summary,
+        company_id=company.id,
+        extraction=extraction,
+        primary_news_url=article.url,
+        proximity_days=proximity_days,
+    )
+
+    article.processed = True
+    session.add(article)
+    await session.commit()
+
+
 async def run_extract_funding(
     session: AsyncSession,
     *,
@@ -326,6 +524,7 @@ async def run_extract_funding(
     skip_low_confidence: bool = True,
     proximity_days: int = 60,
     requery_totals: bool = False,
+    concurrency: int = _DEFAULT_WEBSITE_CONCURRENCY,
 ) -> ExtractFundingSummary:
     """Walk unprocessed news_articles oldest-first and extract funding rounds.
 
@@ -338,6 +537,15 @@ async def run_extract_funding(
     rounds reconcile into existing rows, status never downgrades, totals
     apply newest-wins, and the articles stay processed (the flag is never
     cleared, so the normal queue is unaffected).
+
+    ``concurrency`` controls how many articles' extraction LLM calls run at
+    once. Only the LLM call is parallelized; every DB read (company fetch) and
+    write (round reconcile + status/total apply + processed stamp + commit)
+    stays strictly sequential on the single passed-in session, so there is no
+    added DB concurrency and the per-article commit cadence / idempotency is
+    unchanged. Rate-limit handling matches the serial loop: the FIRST 429 stops
+    further LLM scheduling, the rate-limited article is NOT stamped, and
+    everything already extracted is still applied + stamped.
     """
     summary = ExtractFundingSummary()
 
@@ -360,107 +568,65 @@ async def run_extract_funding(
     result = await session.execute(stmt)
     articles = result.scalars().all()
 
+    # Phase 1: gather each article's owning company + built prompt sequentially
+    # on the session (DB reads — must not happen inside the concurrent tasks
+    # below, since a single AsyncSession is not concurrency-safe). Ordering is
+    # preserved, so Phase 3 applies writes in the exact serial-loop order.
+    inputs: list[_NewsInputs] = []
     for article in articles:
         # Need the owning company's name for the prompt.
         company = await session.get(Company, article.company_id)
-        if company is None:
-            logger.warning(
-                "news_article %s references missing company_id %s — marking processed",
-                article.id,
-                article.company_id,
+        prompt = (
+            build_prompt(
+                company_name=company.name,
+                article_text=article.raw_content,
             )
-            article.processed = True
-            session.add(article)
-            await session.commit()
-            continue
-
-        prompt = build_prompt(
-            company_name=company.name,
-            article_text=article.raw_content,
+            if company is not None
+            else None
+        )
+        inputs.append(
+            _NewsInputs(article=article, company=company, prompt=prompt)
         )
 
-        try:
-            extraction: FundingExtraction = await complete_json(prompt, FundingExtraction)
-        except LLMRateLimitError:
-            logger.warning(
-                "LLM rate limit hit while extracting funding for %s — stopping"
-                " loop to avoid further quota exhaustion.",
-                company.name,
-            )
-            summary.skipped_rate_limited += 1
+    semaphore = asyncio.Semaphore(max(1, concurrency))
+
+    async def _bounded(one: _NewsInputs) -> _NewsOutcome:
+        async with semaphore:
+            return await _extract_news_one(one)
+
+    # Phases 2 + 3, batched. Batching lets a 429 stop scheduling the REMAINING
+    # batches promptly (instead of fanning out every article's LLM call up
+    # front), preserving the serial loop's "stop on first rate limit" cost
+    # discipline while still parallelizing within a batch.
+    batch_size = max(1, concurrency)
+    stop = False
+    for start in range(0, len(inputs), batch_size):
+        if stop:
             break
-        except (LLMParseError, LLMError) as exc:
-            logger.warning(
-                "LLM error extracting funding from %s: %s", article.url, exc
+        batch = inputs[start : start + batch_size]
+
+        # Phase 2: run this batch's LLM calls concurrently (no DB access).
+        outcomes = await asyncio.gather(*(_bounded(one) for one in batch))
+
+        # Phase 3: apply results sequentially on the single session, in
+        # selection order. A 429 stops scheduling further batches; the
+        # rate-limited article is counted but NOT stamped (deliberate — a
+        # transient provider limit shouldn't consume the article), exactly as
+        # the serial loop's pre-stamp ``break``. Outcomes that completed
+        # before/alongside it are still applied + stamped.
+        for one, outcome in zip(batch, outcomes, strict=True):
+            if outcome.rate_limited:
+                summary.skipped_rate_limited += 1
+                stop = True
+                break
+            await _apply_news_outcome(
+                session,
+                summary,
+                inputs=one,
+                outcome=outcome,
+                skip_low_confidence=skip_low_confidence,
+                proximity_days=proximity_days,
             )
-            summary.llm_failures += 1
-            # Leave processed=false so a future run with a fixed prompt can retry.
-            continue
-
-        summary.articles_processed += 1
-
-        # Status events (acquired / shut_down / ipo) apply BEFORE the
-        # is_funding_announcement gate: acquisition/shutdown articles are
-        # usually NOT funding announcements, and catching them is the whole
-        # point of the field.
-        status_outcome = _apply_status_event(
-            company, extraction, source_url=article.url
-        )
-        if status_outcome is not None:
-            if status_outcome == "changed":
-                summary.status_changes_applied += 1
-            else:
-                summary.status_sources_backfilled += 1
-            session.add(company)
-
-        # Stated cumulative totals also apply BEFORE the gate: they appear in
-        # non-funding coverage too (e.g. acquisition articles recapping the
-        # company's funding history). as_of falls back to today when the feed
-        # gave no published date, so the claim still participates in the
-        # newest-wins ordering.
-        total_recorded = _apply_total_raised(
-            company,
-            extraction,
-            source_url=article.url,
-            as_of=article.published_date or datetime.now(tz=UTC).date(),
-        )
-        if total_recorded:
-            summary.totals_recorded += 1
-            session.add(company)
-
-        if not extraction.is_funding_announcement:
-            summary.skipped_not_funding += 1
-            article.processed = True
-            session.add(article)
-            await session.commit()
-            continue
-
-        if skip_low_confidence and extraction.confidence == "low":
-            summary.skipped_low_confidence += 1
-            # Leave processed=False so a future run with a tightened prompt
-            # (or `--include-low-confidence`) can retry. "Not a funding
-            # announcement" is terminal-skip above; "low confidence" is a
-            # transient-skip pending better extraction.
-            if status_outcome is not None or total_recorded:
-                # The ROUND extraction is deferred, but the status event /
-                # stated total carry their own validity — persist them now
-                # rather than leaving them pending on a path that never
-                # commits.
-                await session.commit()
-            continue
-
-        await _persist_round_and_investors(
-            session,
-            summary,
-            company_id=company.id,
-            extraction=extraction,
-            primary_news_url=article.url,
-            proximity_days=proximity_days,
-        )
-
-        article.processed = True
-        session.add(article)
-        await session.commit()
 
     # Recompute portfolio_count for all investors now that funding-round
     # investor links may have been added. Committed in its own transaction so a
