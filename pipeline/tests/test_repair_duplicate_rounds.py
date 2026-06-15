@@ -310,6 +310,110 @@ async def test_idempotent_second_run_is_noop(db: AsyncSession) -> None:
     assert co.funding_round_count == 1
 
 
+async def test_valuation_only_row_is_not_deleted(db: AsyncSession) -> None:
+    """A row with valuation_post_money set but round_type/announced_date/
+    amount_raised all NULL carries a real sourced fact and must NOT be deleted,
+    and must NOT be counted in empty_rows_deleted.
+    """
+    co = _co("Val Only Co", "val-only-co")
+    db.add(co)
+    await db.flush()
+
+    # Valuation-only row: "Company X valued at $2B" — no round type, no date,
+    # no amount, but a real post-money valuation sourced from an article.
+    db.add(
+        FundingRound(
+            company_id=co.id,
+            round_type=None,
+            amount_raised=None,
+            announced_date=None,
+            valuation_post_money=2_000_000_000,
+            valuation_source="https://techcrunch.com/val-article",
+        )
+    )
+    await db.commit()
+
+    summary = await run_repair_duplicate_rounds(db)
+
+    assert summary.empty_rows_deleted == 0, "valuation-only row must not be deleted"
+    assert summary.companies_repaired == 0
+
+    rows = await _rounds_for(db, co.id)
+    assert len(rows) == 1, "the valuation-only row must survive"
+    assert rows[0].valuation_post_money == 2_000_000_000
+
+
+async def test_valuation_source_only_row_is_not_deleted(db: AsyncSession) -> None:
+    """A row with valuation_source set but everything else NULL must survive.
+    Even without a numeric valuation, the source URL is a real attribution.
+    """
+    co = _co("Val Source Only Co", "val-source-only-co")
+    db.add(co)
+    await db.flush()
+
+    db.add(
+        FundingRound(
+            company_id=co.id,
+            round_type=None,
+            amount_raised=None,
+            announced_date=None,
+            valuation_post_money=None,
+            valuation_source="https://bloomberg.com/val-mention",
+        )
+    )
+    await db.commit()
+
+    summary = await run_repair_duplicate_rounds(db)
+
+    assert summary.empty_rows_deleted == 0, "valuation-source-only row must not be deleted"
+    assert summary.companies_repaired == 0
+
+    rows = await _rounds_for(db, co.id)
+    assert len(rows) == 1, "the valuation-source-only row must survive"
+    assert rows[0].valuation_source == "https://bloomberg.com/val-mention"
+
+
+async def test_truly_fully_empty_row_is_still_deleted(db: AsyncSession) -> None:
+    """A row with round_type/announced_date/amount_raised/valuation_post_money/
+    valuation_source all NULL is true junk and must still be deleted (regression
+    guard — existing behaviour preserved).
+    """
+    co = _co("All Null Co", "all-null-co")
+    db.add(co)
+    await db.flush()
+
+    # One real round plus two truly-empty junk rows.
+    db.add(
+        FundingRound(
+            company_id=co.id,
+            round_type="Series A",
+            amount_raised=10_000_000,
+            announced_date=date(2026, 1, 1),
+        )
+    )
+    for _ in range(2):
+        db.add(
+            FundingRound(
+                company_id=co.id,
+                round_type=None,
+                amount_raised=None,
+                announced_date=None,
+                valuation_post_money=None,
+                valuation_source=None,
+            )
+        )
+    await db.commit()
+
+    summary = await run_repair_duplicate_rounds(db)
+
+    assert summary.empty_rows_deleted == 2, "two truly-empty rows must be deleted"
+    assert summary.companies_repaired == 1
+
+    rows = await _rounds_for(db, co.id)
+    assert len(rows) == 1
+    assert rows[0].round_type == "Series A"
+
+
 async def test_dry_run_writes_nothing(db: AsyncSession) -> None:
     """--dry-run reports the would-be collapse but leaves all rows in place."""
     co = _co("Dry Co", "dry-co")

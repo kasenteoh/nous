@@ -14,8 +14,11 @@ this stage repairs the rows already in the DB.
 
 For each company:
 
-1. DELETE fully-empty junk rows (round_type IS NULL AND announced_date IS NULL
-   AND amount_raised IS NULL) — they carry no fact and only inflate the count.
+1. DELETE fully-empty junk rows — those carrying NO funding signal at all:
+   round_type IS NULL AND announced_date IS NULL AND amount_raised IS NULL AND
+   valuation_post_money IS NULL AND valuation_source IS NULL.
+   A row with only a valuation (e.g. "Company X valued at $2B" from an article
+   that gave no round amount) is a REAL sourced fact and must be preserved.
 
 2. Group the remaining rows by ``amount_raised``. Within a non-null-amount
    group, cluster rows whose round_types are COMPATIBLE (equal case-insensitive,
@@ -232,12 +235,19 @@ async def run_repair_duplicate_rounds(
         merged_here = 0
 
         # ── Pass 1: fully-empty junk rows ────────────────────────────────────
+        # A row is only junk if it carries NO funding signal at all.
+        # A valuation-only row (valuation_post_money or valuation_source set,
+        # but round_type/announced_date/amount_raised all null) is a real sourced
+        # fact — e.g. "Company X valued at $2B" from an article that stated no
+        # round amount — and must NOT be deleted here.
         survivors_pool: list[FundingRound] = []
         for row in rows:
             if (
                 row.round_type is None
                 and row.announced_date is None
                 and row.amount_raised is None
+                and row.valuation_post_money is None
+                and row.valuation_source is None
             ):
                 empty_deleted += 1
                 if not dry_run:
