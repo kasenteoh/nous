@@ -1999,3 +1999,427 @@ async def test_website_concurrency_thin_text_skips_without_llm(
 
     await db.refresh(thin)
     assert thin.website_funding_checked_at is not None
+
+
+# ---------------------------------------------------------------------------
+# News-article-path bounded concurrency (parity with the sequential behavior)
+# ---------------------------------------------------------------------------
+
+
+def _extraction_for_news_prompt(prompt: str) -> FundingExtraction:
+    """Route a stubbed extraction off the company name embedded in the prompt,
+    so a concurrent batch and a sequential run see the SAME deterministic
+    mapping for a given fixture. Exercises every Phase-3 branch:
+
+    - ``*FundCo*``  -> a high-confidence funding round (rounds + investors)
+    - ``*NotCo*``   -> not a funding announcement (terminal skip, processed)
+    - ``*LowCo*``   -> a low-confidence round (transient skip, NOT processed)
+    - ``*AcqCo*``   -> a non-funding acquisition with a stated total
+    - anything else -> a plain high-confidence round
+
+    Investor names are namespaced by the fixture tag ('seq'/'par') embedded in
+    the company name so the two runs create DISJOINT investor rows — otherwise
+    the second run's upsert_investor would dedupe onto the first run's rows and
+    its investors_created counter would diverge purely from shared global state.
+    """
+    tag = "seq" if "seq" in prompt else "par"
+    if "NotCo" in prompt:
+        return _make_extraction(is_funding=False, leads=[], others=[])
+    if "LowCo" in prompt:
+        return _make_extraction(confidence="low", leads=[f"{tag} Lightspeed"], others=[])
+    if "AcqCo" in prompt:
+        return _make_extraction(
+            is_funding=False,
+            leads=[],
+            others=[],
+            status_event="acquired",
+            status_confidence="high",
+            total_raised=Decimal("120000000.00"),
+        )
+    return _make_extraction(
+        round_type="Series A",
+        amount=Decimal("50000000.00"),
+        valuation=None,
+        leads=[f"{tag} Lightspeed"],
+        others=[f"{tag} Founders Fund"],
+        confidence="high",
+    )
+
+
+async def _seed_news_mix(db: AsyncSession, *, tag: str) -> dict[str, Any]:
+    """Create one company + one unprocessed article for each Phase-3 branch,
+    namespaced by ``tag`` so two independent runs don't collide. Returns the
+    company/article ids by kind for cross-run comparison."""
+    kinds = ["FundCo", "NotCo", "LowCo", "AcqCo"]
+    ids: dict[str, Any] = {}
+    for kind in kinds:
+        company = _make_company(f"{tag}{kind}")
+        db.add(company)
+        await db.flush()
+        article = _make_article(
+            company.id,
+            url=f"https://news.example.com/{tag}-{kind}",
+            raw_content=f"{tag}{kind} coverage body. " * 20,
+            published=date(2026, 5, 1),
+        )
+        db.add(article)
+        await db.flush()
+        ids[kind] = {"company_id": company.id, "article_id": article.id}
+    await db.commit()
+    return ids
+
+
+async def _snapshot_news_state(
+    db: AsyncSession, ids: dict[str, Any]
+) -> dict[str, dict[str, Any]]:
+    """Capture the per-kind outcome (company status/total, round count + first
+    round's primary_news_url, article processed flag) into plain values so two
+    independent runs can be compared after the fact."""
+    snap: dict[str, dict[str, Any]] = {}
+    for kind, entry in ids.items():
+        company = await db.get(Company, entry["company_id"])
+        article = await db.get(NewsArticle, entry["article_id"])
+        assert company is not None and article is not None
+        rounds = (
+            await db.execute(
+                select(FundingRound)
+                .where(FundingRound.company_id == company.id)
+                .order_by(FundingRound.announced_date.asc())
+            )
+        ).scalars().all()
+        snap[kind] = {
+            "status": company.status,
+            "total_raised_usd": company.total_raised_usd,
+            "round_count": len(rounds),
+            "round_url": rounds[0].primary_news_url if rounds else None,
+            "processed": article.processed,
+        }
+    return snap
+
+
+async def test_news_concurrency_matches_sequential_state_and_counts(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A concurrency=5 run produces the same DB state (rounds, status, totals,
+    processed flags) AND the same summary counters as a concurrency=1
+    (sequential) run over an identical fixture.
+
+    Two disjoint fixtures (tags 'seq' and 'par') are run independently. Because
+    the news queue is global (``processed=false``), the seq run's intentional
+    leftover (its low-confidence article) is neutralized BEFORE the par run so
+    the par run only touches its own fixture — the parity claim is about the
+    two runs in isolation, not about queue interaction."""
+
+    async def _fake(prompt: str, schema: type) -> FundingExtraction:
+        return _extraction_for_news_prompt(prompt)
+
+    monkeypatch.setattr("nous.pipeline.extract_funding.complete_json", _fake)
+
+    # --- Sequential reference run -------------------------------------------
+    seq_ids = await _seed_news_mix(db, tag="seq")
+    seq = await run_extract_funding(db, limit=100, concurrency=1)
+    seq_snap = await _snapshot_news_state(db, seq_ids)
+
+    # Neutralize seq's intentional leftover (low-confidence → processed=false)
+    # so the global queue is empty before the par fixture is introduced.
+    leftover = await db.get(NewsArticle, seq_ids["LowCo"]["article_id"])
+    assert leftover is not None and leftover.processed is False
+    leftover.processed = True
+    db.add(leftover)
+    await db.commit()
+
+    # --- Concurrent run over an identical fresh fixture ----------------------
+    par_ids = await _seed_news_mix(db, tag="par")
+    par = await run_extract_funding(db, limit=100, concurrency=5)
+    par_snap = await _snapshot_news_state(db, par_ids)
+
+    # Identical summary counters across the two runs.
+    assert seq.model_dump() == par.model_dump()
+    # Sanity: the fixture actually exercised the interesting branches.
+    assert seq.funding_rounds_created == 1  # FundCo
+    assert seq.investors_created == 2  # FundCo's two namespaced investors
+    assert seq.investor_links_created == 2
+    assert seq.skipped_not_funding == 2  # NotCo + AcqCo (both is_funding=False)
+    assert seq.skipped_low_confidence == 1  # LowCo
+    assert seq.status_changes_applied == 1  # AcqCo
+    assert seq.totals_recorded == 1  # AcqCo
+    # articles_processed increments for EVERY article past the LLM call (before
+    # the funding/low-conf gates), so all four count — Low included.
+    assert seq.articles_processed == 4
+
+    # Per-kind DB-state parity (normalize the per-run URL/namespace difference).
+    for kind in ("FundCo", "NotCo", "LowCo", "AcqCo"):
+        s, p = seq_snap[kind], par_snap[kind]
+        assert s["status"] == p["status"]
+        assert s["total_raised_usd"] == p["total_raised_usd"]
+        assert s["round_count"] == p["round_count"]
+        assert s["processed"] == p["processed"]
+
+    # Concrete expectations per kind (so the parity check can't pass vacuously).
+    assert seq_snap["LowCo"]["processed"] is False  # transient skip
+    assert par_snap["LowCo"]["processed"] is False
+    assert seq_snap["FundCo"]["processed"] is True
+    assert seq_snap["FundCo"]["round_count"] == 1
+    assert seq_snap["AcqCo"]["status"] == "acquired"
+    assert par_snap["AcqCo"]["status"] == "acquired"
+    # Each round is attributed to its own article URL (write attribution intact).
+    assert par_snap["FundCo"]["round_url"] == "https://news.example.com/par-FundCo"
+
+
+async def test_news_concurrency_runs_llm_calls_in_parallel(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The news-funding LLM calls for a batch overlap in time (bounded by the
+    semaphore). Proven by recording the peak concurrently-in-flight calls."""
+    n = 8
+    companies = [_make_company(f"NParCo{i:02d}") for i in range(n)]
+    db.add_all(companies)
+    await db.flush()
+    for c in companies:
+        db.add(_make_article(c.id, url=f"https://news.example.com/npar-{c.id}"))
+    await db.flush()
+    await db.commit()
+
+    state = {"in_flight": 0, "peak": 0}
+
+    async def _fake(prompt: str, schema: type) -> FundingExtraction:
+        state["in_flight"] += 1
+        state["peak"] = max(state["peak"], state["in_flight"])
+        try:
+            await asyncio.sleep(0.02)
+            return _make_extraction(is_funding=False, leads=[], others=[])
+        finally:
+            state["in_flight"] -= 1
+
+    monkeypatch.setattr("nous.pipeline.extract_funding.complete_json", _fake)
+
+    await run_extract_funding(db, limit=100, concurrency=4)
+    assert state["peak"] >= 2
+    assert state["peak"] <= 4  # never exceeds the semaphore bound
+
+
+async def test_news_concurrency_one_is_strictly_sequential(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """concurrency=1 degrades to one-at-a-time: peak in-flight is never > 1."""
+    n = 5
+    companies = [_make_company(f"NSeqCo{i}") for i in range(n)]
+    db.add_all(companies)
+    await db.flush()
+    for c in companies:
+        db.add(_make_article(c.id, url=f"https://news.example.com/nseq-{c.id}"))
+    await db.flush()
+    await db.commit()
+
+    state = {"in_flight": 0, "peak": 0}
+
+    async def _fake(prompt: str, schema: type) -> FundingExtraction:
+        state["in_flight"] += 1
+        state["peak"] = max(state["peak"], state["in_flight"])
+        try:
+            await asyncio.sleep(0.005)
+            return _make_extraction(is_funding=False, leads=[], others=[])
+        finally:
+            state["in_flight"] -= 1
+
+    monkeypatch.setattr("nous.pipeline.extract_funding.complete_json", _fake)
+
+    summary = await run_extract_funding(db, limit=100, concurrency=1)
+    assert summary.articles_processed == n
+    assert state["peak"] == 1
+
+
+async def test_news_concurrency_rate_limit_stops_scheduling_no_stamp(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A 429 stops scheduling further batches; the rate-limited article is NOT
+    marked processed (so it stays eligible next run) and later batches never hit
+    the LLM, while first-batch articles are processed.
+
+    Articles are selected newest published_date first; giving each a distinct
+    descending date makes the order deterministic. With concurrency 3 the
+    batches are [00,01,02] [03,04,05] [06,07,08] [09]; the 429 fires on index 4
+    (second batch), so the third+ batches are never scheduled.
+    """
+    n = 10
+    article_ids: list[Any] = []
+    for i in range(n):
+        company = _make_company(f"NRlCo{i:02d}")
+        db.add(company)
+        await db.flush()
+        article = _make_article(
+            company.id,
+            url=f"https://news.example.com/nrl-{i:02d}",
+            # Strictly descending dates → selection order is index 00,01,...,09.
+            published=date(2026, 5, 1) - timedelta(days=i),
+        )
+        db.add(article)
+        await db.flush()
+        article_ids.append(article.id)
+    await db.commit()
+    rate_limited_id = article_ids[4]
+
+    seen: list[str] = []
+
+    async def _fake(prompt: str, schema: type) -> FundingExtraction:
+        for i in range(n):
+            if f"NRlCo{i:02d}" in prompt:
+                seen.append(f"NRlCo{i:02d}")
+                if i == 4:
+                    raise LLMRateLimitError("429")
+                return _make_extraction(is_funding=False, leads=[], others=[])
+        raise AssertionError("unknown company in prompt")
+
+    monkeypatch.setattr("nous.pipeline.extract_funding.complete_json", _fake)
+
+    summary = await run_extract_funding(db, limit=100, concurrency=3)
+
+    assert summary.skipped_rate_limited == 1
+    # Third+ batches never reached the LLM.
+    for i in range(6, n):
+        assert f"NRlCo{i:02d}" not in seen
+
+    # First-batch articles completed and were marked processed.
+    for i in range(3):
+        a = await db.get(NewsArticle, article_ids[i])
+        assert a is not None
+        assert a.processed is True
+
+    # The rate-limited article is deliberately left unprocessed — it keeps its
+    # slot for the next run.
+    rl = await db.get(NewsArticle, rate_limited_id)
+    assert rl is not None
+    assert rl.processed is False
+
+
+async def test_news_concurrency_low_confidence_left_unprocessed(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Under concurrency, a low-confidence round is still a transient skip: the
+    article stays processed=false and no round is created (matches the serial
+    behavior), alongside a high-confidence article that DOES land a round."""
+    low = _make_company("NLowCo")
+    high = _make_company("NHighCo")
+    db.add_all([low, high])
+    await db.flush()
+    low_article = _make_article(low.id, url="https://news.example.com/nlow")
+    high_article = _make_article(high.id, url="https://news.example.com/nhigh")
+    db.add_all([low_article, high_article])
+    await db.flush()
+    await db.commit()
+    low_article_id = low_article.id
+
+    async def _fake(prompt: str, schema: type) -> FundingExtraction:
+        if "NLowCo" in prompt:
+            return _make_extraction(confidence="low", leads=["Lightspeed"], others=[])
+        return _make_extraction(leads=["Sequoia"], others=[])
+
+    monkeypatch.setattr("nous.pipeline.extract_funding.complete_json", _fake)
+
+    summary = await run_extract_funding(db, limit=100, concurrency=5)
+    assert summary.skipped_low_confidence == 1
+    assert summary.funding_rounds_created == 1  # only the high-confidence one
+
+    refetched = await db.get(NewsArticle, low_article_id)
+    assert refetched is not None
+    assert refetched.processed is False
+
+    low_rounds = (
+        await db.execute(select(FundingRound).where(FundingRound.company_id == low.id))
+    ).scalars().all()
+    assert len(low_rounds) == 0
+
+
+async def test_news_concurrency_llm_failure_skips_and_leaves_unprocessed(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A parse/other LLM error on one article is counted under llm_failures and
+    leaves that article unprocessed for retry, WITHOUT stopping the batch (only
+    a 429 stops scheduling). Other articles in the batch still succeed."""
+    from nous.llm.client import LLMParseError
+
+    bad = _make_company("NBadCo")
+    good = _make_company("NGoodCo")
+    db.add_all([bad, good])
+    await db.flush()
+    bad_article = _make_article(bad.id, url="https://news.example.com/nbad")
+    good_article = _make_article(good.id, url="https://news.example.com/ngood")
+    db.add_all([bad_article, good_article])
+    await db.flush()
+    await db.commit()
+    bad_article_id = bad_article.id
+    good_article_id = good_article.id
+
+    async def _fake(prompt: str, schema: type) -> FundingExtraction:
+        if "NBadCo" in prompt:
+            raise LLMParseError("could not parse")
+        return _make_extraction(leads=["Sequoia"], others=[])
+
+    monkeypatch.setattr("nous.pipeline.extract_funding.complete_json", _fake)
+
+    summary = await run_extract_funding(db, limit=100, concurrency=5)
+    assert summary.llm_failures == 1
+    assert summary.skipped_rate_limited == 0  # a parse error does NOT stop the run
+    assert summary.funding_rounds_created == 1  # the good article still lands
+
+    bad_refetched = await db.get(NewsArticle, bad_article_id)
+    assert bad_refetched is not None
+    assert bad_refetched.processed is False  # retryable
+    good_refetched = await db.get(NewsArticle, good_article_id)
+    assert good_refetched is not None
+    assert good_refetched.processed is True
+
+
+async def test_news_concurrency_preserves_deterministic_write_order(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Two articles about the SAME round (within the proximity window) reconcile
+    into ONE FundingRound whose primary_news_url is first-write-wins. Phase 3
+    applies writes in selection order (newest published_date first), so the
+    newer article's URL must win — proving the concurrent path preserves the
+    serial loop's deterministic write ordering, not whichever LLM call returned
+    first."""
+    company = _make_company("OrderCo")
+    db.add(company)
+    await db.flush()
+    # Newer article is selected first (published_date desc). Same round_type +
+    # dates within ±60 days → they reconcile into one round.
+    newer = _make_article(
+        company.id,
+        url="https://news.example.com/order-newer",
+        published=date(2026, 5, 20),
+    )
+    older = _make_article(
+        company.id,
+        url="https://news.example.com/order-older",
+        published=date(2026, 5, 1),
+    )
+    db.add_all([newer, older])
+    await db.flush()
+    await db.commit()
+
+    async def _fake(prompt: str, schema: type) -> FundingExtraction:
+        # Same round_type for both; announced date inside the proximity window.
+        return _make_extraction(
+            round_type="Series A",
+            amount=Decimal("50000000.00"),
+            valuation=None,
+            announced=date(2026, 5, 10),
+            leads=["Lightspeed"],
+            others=[],
+            confidence="high",
+        )
+
+    monkeypatch.setattr("nous.pipeline.extract_funding.complete_json", _fake)
+
+    summary = await run_extract_funding(db, limit=100, concurrency=5)
+    assert summary.funding_rounds_created == 1
+    assert summary.funding_rounds_merged == 1
+
+    rounds = (
+        await db.execute(select(FundingRound).where(FundingRound.company_id == company.id))
+    ).scalars().all()
+    assert len(rounds) == 1
+    # The newer article is processed first, so it creates the round and owns
+    # primary_news_url (first-write-wins). Order-independent code would flake.
+    assert rounds[0].primary_news_url == "https://news.example.com/order-newer"
