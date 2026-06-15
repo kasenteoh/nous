@@ -581,3 +581,230 @@ async def test_ok_startup_sets_stamp_without_exclusion(
     await db.refresh(company)
     assert company.exclusion_reason is None
     assert company.eligibility_checked_at is not None
+
+
+# ---------------------------------------------------------------------------
+# --backfill-missing-taxonomy tests
+# ---------------------------------------------------------------------------
+
+# A canned response that includes an industry label so taxonomy is populated.
+_CANNED_WITH_INDUSTRY = CompanyDescription(
+    description_short="A fintech company.",
+    description_long="This company builds payment infrastructure for SMBs.",
+    primary_category="fintech",
+    tags=["payments", "smb"],
+    website_state="ok",
+    industry="fintech",
+)
+
+
+def _make_described_company(
+    *,
+    name: str,
+    slug: str,
+    industry_group: str | None = None,
+    primary_category: str | None = None,
+) -> Company:
+    """Company that is fully enriched (has description_long) but may lack taxonomy."""
+    return Company(
+        name=name,
+        slug=slug,
+        normalized_name=slug.replace("-", " "),
+        hq_country="US",
+        description_short="A short description.",
+        description_long="A longer description about this company.",
+        primary_category=primary_category,
+        industry_group=industry_group,
+        last_enriched_at=datetime.now(tz=UTC),
+    )
+
+
+async def test_backfill_selects_null_industry_group(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """In backfill mode a described company with NULL industry_group is selected
+    and gets industry_group populated from the LLM response."""
+    company = _make_described_company(
+        name="Backfill Target Inc.",
+        slug="backfill-target",
+        # NULL industry_group — the case we want to fix
+        industry_group=None,
+        primary_category="fintech",
+    )
+    db.add(company)
+    await db.flush()
+    db.add(_make_raw_page(company.id, url="https://backfill-target.example/"))
+    await db.commit()
+
+    monkeypatch.setattr(
+        "nous.pipeline.enrich_companies.complete_json",
+        AsyncMock(return_value=_CANNED_WITH_INDUSTRY),
+    )
+
+    summary = await run_enrich_companies(db, backfill_missing_taxonomy=True)
+
+    assert summary.companies_seen == 1
+    assert summary.companies_enriched == 1
+    await db.refresh(company)
+    # industry_group must be populated now (null → "fintech" canonical)
+    assert company.industry_group == "fintech"
+
+
+async def test_backfill_selects_null_primary_category(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """In backfill mode a described company with NULL primary_category is also
+    selected (both columns are checked)."""
+    company = _make_described_company(
+        name="Backfill Cat Inc.",
+        slug="backfill-cat",
+        industry_group="fintech",
+        primary_category=None,  # missing primary_category
+    )
+    db.add(company)
+    await db.flush()
+    db.add(_make_raw_page(company.id, url="https://backfill-cat.example/"))
+    await db.commit()
+
+    monkeypatch.setattr(
+        "nous.pipeline.enrich_companies.complete_json",
+        AsyncMock(return_value=_CANNED_WITH_INDUSTRY),
+    )
+
+    summary = await run_enrich_companies(db, backfill_missing_taxonomy=True)
+
+    assert summary.companies_seen == 1
+    assert summary.companies_enriched == 1
+    await db.refresh(company)
+    assert company.primary_category == "fintech"
+
+
+async def test_backfill_skips_company_with_both_taxonomy_fields(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """In backfill mode a company that already has BOTH industry_group AND
+    primary_category is NOT selected — it is already competitor-eligible."""
+    company = _make_described_company(
+        name="Already Tagged Inc.",
+        slug="already-tagged",
+        industry_group="fintech",
+        primary_category="fintech",
+    )
+    db.add(company)
+    await db.flush()
+    db.add(_make_raw_page(company.id, url="https://already-tagged.example/"))
+    await db.commit()
+
+    mock_llm = AsyncMock(return_value=_CANNED_WITH_INDUSTRY)
+    monkeypatch.setattr(
+        "nous.pipeline.enrich_companies.complete_json",
+        mock_llm,
+    )
+
+    summary = await run_enrich_companies(db, backfill_missing_taxonomy=True)
+
+    mock_llm.assert_not_called()
+    assert summary.companies_seen == 0
+
+
+async def test_backfill_does_not_select_description_short_null(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Backfill mode requires description_long IS NOT NULL; a company without
+    any description at all is NOT selected (normal enrich-companies covers it)."""
+    unenriched = _make_company(
+        name="Unenriched Co.",
+        slug="unenriched-bf",
+        description_short=None,
+    )
+    db.add(unenriched)
+    await db.flush()
+    db.add(_make_raw_page(unenriched.id, url="https://unenriched-bf.example/"))
+    await db.commit()
+
+    mock_llm = AsyncMock(return_value=_CANNED_WITH_INDUSTRY)
+    monkeypatch.setattr(
+        "nous.pipeline.enrich_companies.complete_json",
+        mock_llm,
+    )
+
+    summary = await run_enrich_companies(db, backfill_missing_taxonomy=True)
+
+    mock_llm.assert_not_called()
+    assert summary.companies_seen == 0
+
+
+async def test_backfill_idempotent_second_run(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """After the first backfill run sets industry_group, a second run is a no-op
+    (the company drops out of the backfill selection)."""
+    company = _make_described_company(
+        name="Idempotent Co.",
+        slug="idempotent-bf",
+        industry_group=None,
+        primary_category="fintech",
+    )
+    db.add(company)
+    await db.flush()
+    db.add(_make_raw_page(company.id, url="https://idempotent-bf.example/"))
+    await db.commit()
+
+    monkeypatch.setattr(
+        "nous.pipeline.enrich_companies.complete_json",
+        AsyncMock(return_value=_CANNED_WITH_INDUSTRY),
+    )
+
+    # First run: populates industry_group
+    summary1 = await run_enrich_companies(db, backfill_missing_taxonomy=True)
+    assert summary1.companies_enriched == 1
+    await db.refresh(company)
+    assert company.industry_group == "fintech"
+
+    # Second run: company now has industry_group set, falls out of selection
+    mock_second = AsyncMock(return_value=_CANNED_WITH_INDUSTRY)
+    monkeypatch.setattr(
+        "nous.pipeline.enrich_companies.complete_json",
+        mock_second,
+    )
+    summary2 = await run_enrich_companies(db, backfill_missing_taxonomy=True)
+    mock_second.assert_not_called()
+    assert summary2.companies_seen == 0
+
+
+async def test_backfill_null_industry_response_leaves_column_null(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """If the LLM returns no industry label (industry=None), the column stays NULL —
+    the company simply remains ineligible rather than receiving a fabricated label."""
+    company = _make_described_company(
+        name="No Industry Co.",
+        slug="no-industry-bf",
+        industry_group=None,
+        primary_category="fintech",
+    )
+    db.add(company)
+    await db.flush()
+    db.add(_make_raw_page(company.id, url="https://no-industry-bf.example/"))
+    await db.commit()
+
+    # LLM returns no industry field
+    canned_no_industry = CompanyDescription(
+        description_short="A fintech company.",
+        description_long="This company builds payment infrastructure.",
+        primary_category="fintech",
+        tags=[],
+        website_state="ok",
+        industry=None,  # explicitly no industry
+    )
+    monkeypatch.setattr(
+        "nous.pipeline.enrich_companies.complete_json",
+        AsyncMock(return_value=canned_no_industry),
+    )
+
+    summary = await run_enrich_companies(db, backfill_missing_taxonomy=True)
+
+    # Was enriched (companies_enriched counts the commit), but industry stays NULL
+    assert summary.companies_enriched == 1
+    await db.refresh(company)
+    assert company.industry_group is None  # never fabricate
