@@ -190,7 +190,23 @@ def scrape_homepages(
         "people). Description + people are stable data, not refreshed weekly."
     ),
 )
-def enrich_companies(limit: int | None, refetch_after_days: int | None) -> None:
+@click.option(
+    "--backfill-missing-taxonomy",
+    is_flag=True,
+    default=False,
+    help=(
+        "Select companies that have description_long but NULL industry_group "
+        "(and/or primary_category) and re-run enrichment to populate the missing "
+        "taxonomy fields. These companies are otherwise ineligible for "
+        "analyze-competitors. Idempotent: once industry_group is set the company "
+        "drops out of the selection. Mutually exclusive with --refetch-after-days."
+    ),
+)
+def enrich_companies(
+    limit: int | None,
+    refetch_after_days: int | None,
+    backfill_missing_taxonomy: bool,
+) -> None:
     """Call the LLM to generate descriptions + people for companies with raw pages."""
     import asyncio
     from datetime import UTC, datetime
@@ -207,6 +223,7 @@ def enrich_companies(limit: int | None, refetch_after_days: int | None) -> None:
                     session,
                     max_companies=limit,
                     refetch_after_days=refetch_after_days,
+                    backfill_missing_taxonomy=backfill_missing_taxonomy,
                 )
                 click.echo(summary.model_dump_json(indent=2))
             await record_pipeline_run(

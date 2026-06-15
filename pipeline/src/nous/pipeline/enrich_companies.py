@@ -177,6 +177,7 @@ async def run_enrich_companies(
     *,
     max_companies: int | None = None,
     refetch_after_days: int | None = None,
+    backfill_missing_taxonomy: bool = False,
 ) -> EnrichSummary:
     """Enrich companies that have raw_pages but no current description.
 
@@ -191,32 +192,62 @@ async def run_enrich_companies(
     enriches companies that have never been enriched. To backfill people onto
     rows enriched before this stage wrote them (or to refresh descriptions),
     run with ``--refetch-after-days 0`` to force re-enrichment of everyone.
+
+    ``backfill_missing_taxonomy`` is an opt-in mode that changes the selection to
+    companies that have a ``description_long`` but NULL ``industry_group``
+    (and/or ``primary_category``). These companies are fully described but were
+    enriched before the taxonomy columns were populated, making them ineligible
+    for ``analyze-competitors``. In this mode the write-once guard for
+    ``industry_group``/``primary_category`` is bypassed so the LLM result is
+    always applied. All other resilience behaviours (rate-limit stop,
+    per-company commit, StaleDataError/IntegrityError skip) are preserved.
+    Idempotent: once ``industry_group`` is set the company drops out of the
+    selection, so re-running is safe. If the LLM still returns no industry
+    the column stays NULL — the company remains ineligible rather than being
+    given a fabricated label.
     """
     summary = EnrichSummary()
 
-    conditions: list[ColumnElement[bool]] = [Company.description_short.is_(None)]
-    if refetch_after_days is not None:
-        cutoff = datetime.now(tz=UTC) - timedelta(days=refetch_after_days)
-        conditions.append(Company.last_enriched_at.is_(None))
-        conditions.append(Company.last_enriched_at < cutoff)
-
-    # Require at least one page with enough stored text to plausibly clear
-    # the _MIN_TEXT_CHARS bar. raw_pages.content holds extracted visible text
-    # (see scrape-homepages), so length() is a faithful proxy. Without this,
-    # thin-text companies — which nothing ever stamps — re-enter the selection
-    # every run and eventually monopolize the LIMIT below. The in-loop check
-    # on the concatenated text remains as the authoritative guard.
-    stmt = (
-        select(Company)
-        .where(
-            exists().where(
-                RawPage.company_id == Company.id,
-                func.length(RawPage.content) >= _MIN_TEXT_CHARS,
-            )
+    if backfill_missing_taxonomy:
+        # Target: described companies that lack a taxonomy label and therefore
+        # cannot enter analyze-competitors. Both NULL guards are OR-combined so
+        # a company with industry_group but no primary_category is also caught.
+        taxonomy_missing: ColumnElement[bool] = or_(
+            Company.industry_group.is_(None),
+            Company.primary_category.is_(None),
         )
-        .where(or_(*conditions))
-        .where(Company.exclusion_reason.is_(None))
-    )
+        stmt = (
+            select(Company)
+            .where(Company.exclusion_reason.is_(None))
+            .where(Company.description_long.is_not(None))
+            .where(taxonomy_missing)
+            # Deterministic ordering keeps successive bounded runs stable.
+            .order_by(Company.id)
+        )
+    else:
+        conditions: list[ColumnElement[bool]] = [Company.description_short.is_(None)]
+        if refetch_after_days is not None:
+            cutoff = datetime.now(tz=UTC) - timedelta(days=refetch_after_days)
+            conditions.append(Company.last_enriched_at.is_(None))
+            conditions.append(Company.last_enriched_at < cutoff)
+
+        # Require at least one page with enough stored text to plausibly clear
+        # the _MIN_TEXT_CHARS bar. raw_pages.content holds extracted visible text
+        # (see scrape-homepages), so length() is a faithful proxy. Without this,
+        # thin-text companies — which nothing ever stamps — re-enter the selection
+        # every run and eventually monopolize the LIMIT below. The in-loop check
+        # on the concatenated text remains as the authoritative guard.
+        stmt = (
+            select(Company)
+            .where(
+                exists().where(
+                    RawPage.company_id == Company.id,
+                    func.length(RawPage.content) >= _MIN_TEXT_CHARS,
+                )
+            )
+            .where(or_(*conditions))
+            .where(Company.exclusion_reason.is_(None))
+        )
     if max_companies is not None:
         stmt = stmt.limit(max_companies)
 
@@ -329,7 +360,11 @@ async def run_enrich_companies(
             company.hq_city = description.hq_city
         if description.hq_state and not company.hq_state:
             company.hq_state = description.hq_state
-        if description.industry and not company.industry_group:
+        if description.industry and (not company.industry_group or backfill_missing_taxonomy):
+            # In backfill mode the write-once guard is deliberately bypassed so
+            # that companies with NULL industry_group receive a taxonomy label
+            # from the re-run LLM call. If the LLM returns no industry the
+            # column stays NULL — never fabricate a label.
             company.industry_group = normalize_industry(description.industry)
         elif company.industry_group:
             # Canonicalize an existing value on re-enrichment too, so the
