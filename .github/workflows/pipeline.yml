@@ -117,6 +117,15 @@ on:
         required: false
         type: boolean
         default: false
+      run_enrich_backfill:
+        description: "Run enrich-companies --backfill-missing-taxonomy (populate industry_group for competitor-eligibility)."
+        required: false
+        type: boolean
+        default: false
+      enrich_backfill_limit:
+        description: "Limit for the enrich backfill pass."
+        required: false
+        type: string
 
 # Serialize against every other workflow that mutates the companies table (see
 # discovery.yml). resolve / enrich UPDATE company rows and ingest-news /
@@ -399,6 +408,16 @@ jobs:
           ENRICH_LIMIT="${{ inputs.enrich_limit }}"
           if [ -z "$ENRICH_LIMIT" ]; then ENRICH_LIMIT=30; fi
           uv run nous enrich-companies --limit "$ENRICH_LIMIT"
+
+      - name: Enrich backfill (missing taxonomy)
+        id: enrich_backfill
+        if: ${{ github.event.inputs.run_enrich_backfill == 'true' }}
+        # One-off backfill: re-enriches companies that have a description but
+        # NULL industry_group, making them competitor-eligible. Gated off by
+        # default; dispatch with run_enrich_backfill=true to run.
+        timeout-minutes: 20
+        continue-on-error: true
+        run: uv run nous enrich-companies --backfill-missing-taxonomy --limit "${{ github.event.inputs.enrich_backfill_limit || '300' }}"
 
       - name: Judge eligibility
         id: judge
