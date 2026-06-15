@@ -165,3 +165,55 @@ ongoing extraction.
 - **pipeline-health:** all 12 stages green ✓ (0 non-green) on the final run.
 - **DB size:** 81.4 MB / 500 MB cap (16.3%) — ample headroom despite +3,595 stored articles.
 - **CI:** all 6 PRs merged green (ruff + mypy + pytest on ephemeral Postgres + web build).
+
+---
+
+# Round 2 — the "do these" follow-up (2026-06-15)
+
+Resumed to execute the three next-day levers I'd flagged. All three done, plus a data-loss bug
+found and fixed during close-out.
+
+## Final coverage (full day: session start → end)
+
+| Metric | Start | End | Δ |
+|---|---|---|---|
+| Have ≥1 competitor edge | 186 (13.5%) | **1,345 (97.3%)** | **+1,159** |
+| Have ≥1 news article | 171 (12.4%) | 241 (17.4%) | +70 |
+| Have ≥1 funding round | 114 (8.3%) | 174 (12.6%) | +60 |
+| Funding rounds (all) | 205 | 649 | +444 |
+| Valuations | 40 | 102 | +62 |
+| Competitor edges | 1,426 | 7,499 | +6,073 |
+
+(Denominator of "shown" drifted 1,377→1,383 as the cron discovered + excluded companies.)
+
+## What the three levers delivered
+
+1. **Parallelized the `extract-funding` news path** ([#106](https://github.com/kasenteoh/nous/pull/106)) — mirrored #100's Phase-1/2/3 pattern, parity-verified on real Postgres. The decisive funding lever: drained the stored 5-yr-ingest backlog ~3-4× faster (≈1,300 articles/run vs ≈380 sequential), taking **funding 135→174, valuations 51→102, rounds 308→649** across a few drains. Backlog ~3,300→367 (the rest converts via the cron, which now inherits the concurrency).
+2. **More 5-yr ingest** (batch 3) — **tapped**: +700 articles stored but `shown_with_news` held (the rotation has covered the reachable never-newsed companies; the remainder is genuine ceiling). The stored articles fed the funding drains.
+3. **Backfill `industry_group` for the competitor-ineligible** ([#104](https://github.com/kasenteoh/nous/pull/104) + workflow input [#105](https://github.com/kasenteoh/nous/pull/105)) — `enrich --backfill-missing-taxonomy` populated industry for **96 of 126** null-industry companies (30 left null — the LLM genuinely couldn't classify them; not fabricated). A competitor sweep then took **competitors 1,227→1,345 (87.9%→97.3%)**, gap 169→**38** (the unclassifiable + LLM-found-no-competitors floor).
+
+## Bug found + fixed during close-out ([#107](https://github.com/kasenteoh/nous/pull/107))
+
+`repair-duplicate-rounds`' "empty junk row" deletion checked only `round_type`/`announced_date`/
+`amount_raised` — **not `valuation_post_money`** — so it deleted ~20 **valuation-only** rounds
+(a stated post-money valuation with no round amount/type/date is a real sourced fact). Caught it via
+a valuations dip (115→95) right after applying repair-dupes. Fixed: the empty-check now also
+requires `valuation_post_money` and `valuation_source` to be null. ~7 valuations re-grew via the
+next drain; the rest re-derive as the cron drains the backlog. **Lesson:** a valuation is a fact
+independent of the round amount — never treat a valuation-bearing row as empty.
+
+## PRs merged this round
+[#104](https://github.com/kasenteoh/nous/pull/104) backfill-taxonomy ·
+[#105](https://github.com/kasenteoh/nous/pull/105) workflow input ·
+[#106](https://github.com/kasenteoh/nous/pull/106) parallel extract ·
+[#107](https://github.com/kasenteoh/nous/pull/107) valuation-preservation fix. (Day total: #97–#107, 11 PRs.)
+
+## Verification (final)
+DB **90 MB / 500 MB (17%)** · pipeline-health **all 12 stages green** · repair-dupes duplicate-free.
+
+## Standing state
+The pipeline is upgraded and self-converting: the cron's now-parallel `extract-funding` keeps
+draining the 367-article backlog into funding/valuations automatically. Remaining gaps are the
+documented ceiling — competitors at the 38-company floor (unclassifiable), funding/news bounded by
+what's publicly published (paywalled-DB-only seeds, stealth, non-US scope leaks). Open follow-up:
+the non-US exclusion pass (task chip filed).
