@@ -1386,6 +1386,74 @@ def pipeline_health(strict: bool) -> None:
         sys.exit(1)
 
 
+@cli.command("adapter-health")
+@click.option(
+    "--floor",
+    type=int,
+    default=None,
+    help=(
+        "Global minimum entry count an adapter must exceed to count as healthy. "
+        "Per-firm overrides in nous.pipeline.adapter_health.ADAPTER_FLOORS take "
+        "precedence. Default: adapter_health.DEFAULT_GLOBAL_FLOOR (10)."
+    ),
+)
+@click.option(
+    "--strict",
+    is_flag=True,
+    default=False,
+    help=(
+        "Exit non-zero when any adapter is at or below its floor (or raised). "
+        "Default: always exit 0 (annotate only), matching pipeline-health and "
+        "the pipeline's continue-on-error semantics. Use --strict for a "
+        "dedicated alerting cron."
+    ),
+)
+def adapter_health(floor: int | None, strict: bool) -> None:
+    """Canary the VC portfolio adapters: warn when an adapter's yield collapses.
+
+    Runs every registered adapter in nous.sources.vc_portfolios.ADAPTERS against
+    a live HomepageClient, counts the entries each yields, and compares the count
+    to a floor (a configurable global floor with per-firm overrides). Any adapter
+    at or below its floor — including one that raises — gets a GitHub Actions
+    ``::warning::`` annotation, appears in the step-summary table, and is recorded
+    in a single pipeline_runs audit row. Read-only otherwise; one broken adapter
+    never aborts the others. Exits 0 by default; pass --strict to exit non-zero.
+    """
+    import sys
+
+    from nous.config import Settings
+    from nous.observability import emit_run_telemetry
+    from nous.pipeline.adapter_health import (
+        DEFAULT_GLOBAL_FLOOR,
+        AdapterHealthReport,
+        emit_adapter_health_annotations,
+        run_adapter_health_sync,
+    )
+
+    settings = Settings()
+    effective_floor = floor if floor is not None else DEFAULT_GLOBAL_FLOOR
+
+    try:
+        report: AdapterHealthReport = run_adapter_health_sync(
+            user_agent=settings.SEC_USER_AGENT,
+            global_floor=effective_floor,
+        )
+    finally:
+        # No LLM calls in this stage, but emit telemetry for a uniform run
+        # footer across stages (the ledger will simply read zeroes).
+        emit_run_telemetry("adapter-health")
+
+    emit_adapter_health_annotations(report)
+
+    click.echo(
+        f"adapter-health: checked {len(report.adapters)} adapter(s), "
+        f"{len(report.unhealthy)} below floor"
+    )
+
+    if strict and not report.all_healthy:
+        sys.exit(1)
+
+
 @cli.command("repair-catalog")
 @click.option(
     "--dry-run",
