@@ -2,8 +2,8 @@
 
 Detects non-US companies that slipped through the enrich/judge country logic
 with hq_country = NULL because the HQ signal was absent from the scraped
-homepage/product text. For each shown company with hq_country IS NULL this
-stage FETCHES the address-bearing pages the homepage scraper skips
+homepage/product text. For each shown company that has a website and description
+with hq_country IS NULL this stage FETCHES the address-bearing pages the homepage scraper skips
 (/about, /contact, /legal, /imprint, /privacy, ...) on the company's OWN
 domain, runs a focused country-inference LLM judgment over that text, and —
 only on positive, quoted evidence — sets hq_country and soft-excludes non-US
@@ -143,8 +143,13 @@ def _evidence_supported(
     q = _normalize_ws(quote)
     if len(q) < 3:
         return None
+    # Match only when the quote is NOT embedded inside a larger alphanumeric
+    # token — guards against a short quote coincidentally matching a substring
+    # (e.g. "usa" inside "usable"). Real HQ evidence ("Copenhagen", "Berlin,
+    # Germany") sits at word boundaries, so recall is unaffected.
+    pattern = re.compile(rf"(?<![a-z0-9]){re.escape(q)}(?![a-z0-9])")
     for url, text in sources:
-        if q in _normalize_ws(text):
+        if pattern.search(_normalize_ws(text)):
             return url
     return None
 

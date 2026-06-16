@@ -270,6 +270,39 @@ async def test_rate_limit_stops_the_loop(
     assert c is not None and c.hq_country_checked_at is None
 
 
+async def test_us_confirmed_sets_country_no_exclusion(
+    committed_session_factory: Factory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    site = "https://us-co.example/"
+    async with committed_session_factory() as s1:
+        co = _shown_null_country_company("US Co", "infer-us", site)
+        s1.add(co)
+        await s1.commit()
+        co_id = co.id
+
+    client = FakeClient({
+        f"{site}contact": _html(
+            f"{site}contact",
+            "Reach our team at hello@us-co.example. US Co, "
+            "500 Howard Street, San Francisco, CA 94105, United States.",
+        ),
+    })
+    monkeypatch.setattr(
+        "nous.pipeline.infer_hq_country.complete_json",
+        _amock(HqCountryJudgment(hq_country="US", evidence_quote="San Francisco, CA")),
+    )
+
+    summary = await run_infer_hq_country(committed_session_factory, client)
+    assert summary.set_us == 1
+    assert summary.excluded_non_us == 0
+    async with committed_session_factory() as s3:
+        row = await s3.get(Company, co_id)
+    assert row is not None
+    assert row.hq_country == "US"
+    assert row.exclusion_reason is None
+    assert row.hq_country_checked_at is not None
+
+
 def _amock(return_value: object):
     from unittest.mock import AsyncMock
     return AsyncMock(return_value=return_value)

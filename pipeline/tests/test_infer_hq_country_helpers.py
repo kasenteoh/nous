@@ -98,6 +98,18 @@ def test_apply_unsupported_evidence_leaves_unknown() -> None:
     assert summary.left_unknown == 1
 
 
+def test_evidence_supported_rejects_substring_inside_word() -> None:
+    # "usa" must NOT match inside "usable" — guards coincidental fragments.
+    assert _evidence_supported("usa", [("u", "Our usable software platform")]) is None
+
+
+def test_evidence_supported_accepts_single_token_at_word_boundary() -> None:
+    # A bare city at a word boundary is still valid evidence (recall preserved).
+    assert _evidence_supported(
+        "copenhagen", [("u", "We are based in Copenhagen.")]
+    ) == "u"
+
+
 def test_apply_dry_run_writes_nothing_but_counts() -> None:
     co = _co()
     summary = InferHqCountrySummary()
