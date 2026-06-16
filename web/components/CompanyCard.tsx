@@ -5,6 +5,7 @@ import Link from "next/link";
 import { formatLocation } from "@/lib/format";
 import { StatusBadge } from "@/components/StatusBadge";
 import { WatchlistButton } from "@/components/WatchlistButton";
+import { CompareToggle } from "@/components/CompareBar";
 import type { CompanyListRow } from "@/lib/types";
 
 interface CompanyCardProps {
@@ -13,14 +14,16 @@ interface CompanyCardProps {
 
 /**
  * A card linking to /c/[slug] with name, description, and location/industry
- * meta, plus a watchlist star (Task C3). The card stays a server component; the
- * star is the only client island (WatchlistButton). The star is a SIBLING of
- * the link — not nested — because the whole card is an <a> and a <button>
- * inside an <a> is invalid HTML; it's absolutely positioned in the corner.
+ * meta, plus a watchlist star (Task C3) and a Compare checkbox. The card stays a
+ * server component; the two interactive controls are the only client islands
+ * (WatchlistButton, CompareToggle). Both are SIBLINGS of the link — not nested —
+ * because the whole card body is an <a> and an interactive control inside an <a>
+ * is invalid HTML: the star is absolutely positioned in the corner, the Compare
+ * toggle sits in a footer row below the linked region.
  */
 export function CompanyCard({ company }: CompanyCardProps) {
   return (
-    <div className="group relative rounded-lg border border-edge p-5 hover:border-ink-muted transition-colors">
+    <div className="group relative flex flex-col rounded-lg border border-edge p-5 hover:border-ink-muted transition-colors">
       {/* Watchlist toggle — kept out of the link flow (absolute sibling). The
           right padding on the header below leaves room so it never overlaps
           the company name. */}
@@ -59,6 +62,13 @@ export function CompanyCard({ company }: CompanyCardProps) {
           )}
         </dl>
       </Link>
+
+      {/* Compare toggle — a sibling footer row (interactive controls can't nest
+          in the card-body <a>). mt-auto pins it to the bottom so cards of
+          differing text length keep their toggles aligned in the grid. */}
+      <div className="mt-auto pt-3">
+        <CompareToggle slug={company.slug} name={company.name} />
+      </div>
     </div>
   );
 }

@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import Link from "next/link";
 import { ThemeToggle } from "@/components/ThemeToggle";
+import { CompareBar } from "@/components/CompareBar";
 import { SITE_NAME, repoIssueUrl, siteOrigin } from "@/lib/site";
 import "./globals.css";
 
@@ -200,6 +201,12 @@ export default function RootLayout({
             <p className="text-ink-faint">© 2026 {SITE_NAME}</p>
           </div>
         </footer>
+
+        {/* Compare selection bar — sticky to the viewport bottom, site-wide, so
+            a selection survives navigation. Client island; renders nothing until
+            the visitor has ticked ≥1 company (and nothing during SSR), so it's
+            safe to include in this server layout. */}
+        <CompareBar />
       </body>
     </html>
   );
