@@ -17,6 +17,7 @@ import {
   formatEmployeeRange,
   formatLocation,
   formatUsd,
+  formatUsdExact,
 } from "@/lib/format";
 import { JsonLd } from "@/components/JsonLd";
 import { Markdown } from "@/components/Markdown";
@@ -453,6 +454,8 @@ export default async function CompanyPage({ params }: Props) {
             </dt>
             <dd
               className={`mt-1 text-base font-semibold ${hasTotalRaised ? "font-mono text-money" : "text-ink-faint"}`}
+              // Hovering the rounded figure reveals the exact dollars.
+              title={hasTotalRaised ? formatUsdExact(displayedTotal) : undefined}
             >
               {hasTotalRaised ? formatUsd(displayedTotal) : "—"}
             </dd>
@@ -474,7 +477,9 @@ export default async function CompanyPage({ params }: Props) {
                 Latest valuation
               </dt>
               <dd className="mt-1 text-base font-semibold font-mono text-money">
-                {formatUsd(valuationRound.valuation_post_money)}
+                <span title={formatUsdExact(valuationRound.valuation_post_money)}>
+                  {formatUsd(valuationRound.valuation_post_money)}
+                </span>
                 <span className="ml-1 font-sans text-xs font-normal text-ink-muted">
                   post-money
                 </span>
@@ -517,6 +522,17 @@ export default async function CompanyPage({ params }: Props) {
         <section className="mb-12">
           <h2 className="text-lg font-semibold text-ink mb-4">About</h2>
           <Markdown>{company.description_long}</Markdown>
+          {/* Honest attribution for the LLM-drafted summary. It's written by
+              nous from several scraped pages of the company's own site, so we
+              don't attribute it to a single source hostname (that would
+              misrepresent a multi-page synthesis as one citation). The
+              enrichment date is appended when known. Genuine per-fact source
+              links (funding / news / people) live in the Sources section. */}
+          <p className="mt-4 font-mono text-xs text-ink-faint">
+            Summary written by nous from the company&apos;s website
+            {company.last_enriched_at &&
+              ` · ${formatDate(company.last_enriched_at)}`}
+          </p>
         </section>
       )}
 

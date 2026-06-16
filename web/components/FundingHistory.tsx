@@ -4,7 +4,7 @@
 // Syntax-highlighting metaphor (spec §3): amounts are "number literals" —
 // money green in Geist Mono; dates are "comments" — muted mono.
 
-import { formatDate, formatUsd } from "@/lib/format";
+import { formatDate, formatUsd, formatUsdExact } from "@/lib/format";
 import type { FundingRoundWithInvestors } from "@/lib/types";
 
 const EM_DASH = "—";
@@ -80,7 +80,12 @@ export function FundingHistory({ rounds, asOf }: Props) {
                     </td>
                     <td className="py-3 pr-6 text-right font-mono">
                       {round.amount_raised != null ? (
-                        <span className="text-money">
+                        // title shows the exact dollars — the short form rounds
+                        // (e.g. $1.51M and $1.49M both display "$1.5M").
+                        <span
+                          className="text-money"
+                          title={formatUsdExact(round.amount_raised)}
+                        >
                           {formatUsd(round.amount_raised)}
                         </span>
                       ) : (
@@ -90,7 +95,9 @@ export function FundingHistory({ rounds, asOf }: Props) {
                     <td className="py-3 pr-6 text-right">
                       {round.valuation_post_money != null ? (
                         <div className="font-mono text-money">
-                          {formatUsd(round.valuation_post_money)}
+                          <span title={formatUsdExact(round.valuation_post_money)}>
+                            {formatUsd(round.valuation_post_money)}
+                          </span>
                           <span className="ml-1 font-sans text-xs text-ink-muted">
                             (post-money)
                           </span>
