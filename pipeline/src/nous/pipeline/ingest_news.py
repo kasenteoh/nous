@@ -36,6 +36,7 @@ from nous.sources.news import (
     NewsArticleResult,
     NewsClient,
     ResolvedArticle,
+    article_mentions_company,
 )
 from nous.sources.prnewswire import fetch_prnewswire_funding_articles
 from nous.sources.siliconangle import fetch_siliconangle_funding_articles
@@ -79,6 +80,10 @@ class IngestNewsSummary(BaseModel):
     articles_kept: int = 0
     articles_inserted: int = 0
     articles_skipped_thin: int = 0
+    # Per-company articles dropped by the relevance guard: the company name did
+    # not actually appear in the headline / lede, so the keyword query matched
+    # an unrelated article (e.g. a generic-named company like "Aardvark").
+    articles_skipped_irrelevant: int = 0
     # Google-News redirects that resolved to a real publisher body (Task A1).
     articles_resolved: int = 0
     auto_created_companies: int = 0
@@ -108,6 +113,7 @@ async def _ingest_one_article(
     session: AsyncSession,
     client: NewsClient,
     company_id: UUID,
+    company_name: str,
     result: NewsArticleResult,
     summary: IngestNewsSummary,
 ) -> None:
@@ -119,6 +125,17 @@ async def _ingest_one_article(
     failure we fall back to storing the headline (+ snippet) — the funding facts
     survive and the row is never dropped as "thin". A direct publisher link
     (rare in GN RSS) still gets a plain body fetch with the thin-body guard.
+
+    Relevance guard: the ``"<name>" funding`` query is ranked loosely by Google
+    News, so for generic / common-word company names it returns articles that
+    merely contain the word (the "Aardvark" biotech matched a PBS-funding story,
+    a rugby fundraiser, etc.). Before storing, ``article_mentions_company``
+    requires the company name to actually appear as a phrase in the headline (or
+    the lede of the resolved body), dropping the misattribution. We pass the
+    resolved/fetched body when we have one so a genuine article whose RSS title
+    omits the exact name is still kept on a lede match; on the headline-only
+    fallback the title is the sole signal (conservative — better to drop a
+    borderline article than store an irrelevant one).
     """
     if await _article_already_stored(session, result.url):
         return
@@ -126,6 +143,10 @@ async def _ingest_one_article(
     url = result.url
     source = result.source
     content: str
+    # The real article body when we obtained one (resolved publisher page or a
+    # direct fetch); None on the Google-News headline-only fallback. The guard
+    # only trusts a body match when a body actually exists.
+    body_for_guard: str | None = None
 
     if hostname(result.url) == _GOOGLE_NEWS_HOST:
         resolved: ResolvedArticle | None = await client.resolve_article(result.url)
@@ -141,6 +162,7 @@ async def _ingest_one_article(
             url = resolved.url
             source = resolved.source
             content = resolved.body
+            body_for_guard = resolved.body
             summary.articles_resolved += 1
         else:
             # Resolution failed — keep the headline (+ snippet); still useful.
@@ -151,6 +173,21 @@ async def _ingest_one_article(
             summary.articles_skipped_thin += 1
             return
         content = body
+        body_for_guard = body
+
+    if not article_mentions_company(
+        company_name,
+        result.title,
+        snippet=result.raw_content,
+        body=body_for_guard,
+    ):
+        logger.info(
+            "dropping article (company name %r not in headline/lede): %s",
+            company_name,
+            result.title,
+        )
+        summary.articles_skipped_irrelevant += 1
+        return
 
     article = NewsArticle(
         company_id=company_id,
@@ -254,8 +291,12 @@ async def run_ingest_news(
             results = []
         for result in results:
             summary.articles_seen += 1
-            summary.articles_kept += 1  # already keyword-filtered upstream
-            await _ingest_one_article(session, client, company.id, result, summary)
+            # Keyword-filtered upstream; the relevance guard inside
+            # _ingest_one_article may still drop it (articles_skipped_irrelevant).
+            summary.articles_kept += 1
+            await _ingest_one_article(
+                session, client, company.id, company.name, result, summary
+            )
         # Stamp the attempt (success or failure) so the rotation advances —
         # a head-of-line company whose query keeps failing must not pin the
         # whole rotation in place. Commit per company, matching the

@@ -325,6 +325,159 @@ async def test_skips_articles_with_thin_body(
     assert summary.articles_inserted == 0
 
 
+# ---------------------------------------------------------------------------
+# Per-company relevance guard (regression: generic-name misattribution)
+# ---------------------------------------------------------------------------
+
+
+@pytestmark_db
+async def test_irrelevant_article_for_generic_name_is_dropped(
+    db: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The live "Aardvark" bug: the ``"<name>" funding`` query returns an
+    article that merely contains a funding keyword but is NOT about the company
+    (the company name is absent from the headline). It must be dropped — counted
+    as articles_skipped_irrelevant, never persisted — even though its body would
+    pass the thin-body guard. Resolution returns None so the headline (no name)
+    is the only signal, exactly the production failure mode."""
+    company = _make_company("Aardvark")
+    db.add(company)
+    await db.flush()
+    await db.commit()
+
+    redirect_url = "https://news.google.com/rss/articles/CBMiAARDVARK?oc=5"
+    irrelevant = NewsArticleResult(
+        url=redirect_url,
+        title="Donald Trump Cut Funding To PBS, And Now This 'Arthur' TikTok Is Going Viral",
+        source="example.com",
+        published_date=date(2026, 6, 1),
+        raw_content="A viral TikTok about the PBS show Arthur and federal funding cuts.",
+    )
+    client = _MockNewsClient(
+        rss_results={'"Aardvark" funding': [irrelevant]},
+        resolved={redirect_url: None},  # GN headline-only fallback
+    )
+
+    async def _no_tc(*args: Any, **kwargs: Any) -> list[NewsArticleResult]:
+        return []
+
+    monkeypatch.setattr(
+        "nous.pipeline.ingest_news.fetch_techcrunch_funding_articles", _no_tc
+    )
+
+    summary = await run_ingest_news(db, client, include_techcrunch_broad=False)
+
+    assert summary.articles_skipped_irrelevant == 1
+    assert summary.articles_inserted == 0
+    rows = (
+        (
+            await db.execute(
+                select(NewsArticle).where(NewsArticle.company_id == company.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert rows == []
+
+
+@pytestmark_db
+async def test_genuine_article_for_generic_name_is_kept(
+    db: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The counterpart to the drop test: a real "<Company> raises $X" headline
+    for the same generic name IS stored — the guard must not over-reject."""
+    company = _make_company("Aardvark")
+    db.add(company)
+    await db.flush()
+    await db.commit()
+
+    redirect_url = "https://news.google.com/rss/articles/CBMiGENUINE?oc=5"
+    real_body = (
+        "Aardvark Therapeutics, a clinical-stage biotech, said today it raised "
+        "an $85M Series C led by Decheng Capital to advance its obesity drug. " * 10
+    )
+    genuine = NewsArticleResult(
+        url=redirect_url,
+        title="Aardvark Therapeutics raises $85M Series C - Reuters",
+        source="news.google.com",
+        published_date=date(2026, 6, 1),
+        raw_content="Aardvark Therapeutics raised $85M Series C.",
+    )
+    client = _MockNewsClient(
+        rss_results={'"Aardvark" funding': [genuine]},
+        resolved={
+            redirect_url: ResolvedArticle(
+                url="https://reuters.com/aardvark-series-c",
+                source="reuters.com",
+                body=real_body,
+            )
+        },
+    )
+
+    async def _no_tc(*args: Any, **kwargs: Any) -> list[NewsArticleResult]:
+        return []
+
+    monkeypatch.setattr(
+        "nous.pipeline.ingest_news.fetch_techcrunch_funding_articles", _no_tc
+    )
+
+    summary = await run_ingest_news(db, client, include_techcrunch_broad=False)
+
+    assert summary.articles_skipped_irrelevant == 0
+    assert summary.articles_inserted == 1
+    rows = (
+        (
+            await db.execute(
+                select(NewsArticle).where(NewsArticle.company_id == company.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert len(rows) == 1
+    assert rows[0].source == "reuters.com"
+
+
+@pytestmark_db
+async def test_relevance_guard_runs_only_on_per_company_path(
+    db: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The broad-sweep path identifies the company via the LLM, not the query,
+    so the per-company name-in-headline guard must NOT apply there: a broad-feed
+    article whose title doesn't contain the LLM-extracted name is still stored."""
+    tc_article = NewsArticleResult(
+        # Title deliberately omits the company name the LLM will extract.
+        url="https://techcrunch.com/2026/06/01/stealthy-startup-lands-round",
+        title="Stealthy startup lands a fresh round",
+        source="techcrunch.com",
+        published_date=date(2026, 6, 1),
+        raw_content="snippet",
+    )
+
+    async def _tc(*args: Any, **kwargs: Any) -> list[NewsArticleResult]:
+        return [tc_article]
+
+    monkeypatch.setattr(
+        "nous.pipeline.ingest_news.fetch_techcrunch_funding_articles", _tc
+    )
+    _mock_headline(monkeypatch, is_funding=True, name="Aardvark")
+
+    client = _MockNewsClient(
+        rss_results={},
+        bodies={tc_article.url: "TC body text " * 100},
+    )
+
+    summary = await run_ingest_news(db, client, include_techcrunch_broad=True)
+
+    assert summary.articles_skipped_irrelevant == 0
+    assert summary.auto_created_companies == 1
+    assert summary.articles_inserted == 1
+
+
 @pytestmark_db
 async def test_resolves_google_news_redirect_and_fetches_body(
     db: AsyncSession,

@@ -20,6 +20,9 @@ from nous.sources.news import (
     _extract_article_text,
     _is_robots_exempt,
     _matches_funding_keyword,
+    _phrase_in_tokens,
+    _tokenize,
+    article_mentions_company,
 )
 from nous.sources.techcrunch import TC_FUNDING_FEED, fetch_techcrunch_funding_articles
 from nous.util.ssrf import BlockedAddressError
@@ -149,6 +152,178 @@ def test_funding_keywords_includes_basics() -> None:
     # Sanity guard against accidental list edits dropping core signals.
     for required in ("raised", "funding", "valuation", "series a"):
         assert required in FUNDING_KEYWORDS
+
+
+# ---------------------------------------------------------------------------
+# Relevance guard: article_mentions_company (unit)
+# ---------------------------------------------------------------------------
+#
+# Regression coverage for the live "Aardvark" misattribution: the per-company
+# Google News query "<name> funding" returns articles that merely contain a
+# generic word. The guard requires the company name to actually appear before
+# attributing, biased toward dropping borderline matches.
+
+
+def test_tokenize_folds_case_and_punctuation() -> None:
+    assert _tokenize("Aardvark Therapeutics, Inc.") == [
+        "aardvark",
+        "therapeutics",
+        "inc",
+    ]
+    assert _tokenize("") == []
+
+
+def test_phrase_in_tokens_requires_contiguous_subsequence() -> None:
+    assert _phrase_in_tokens(["aardvark"], ["aardvark", "raises", "85m"])
+    assert _phrase_in_tokens(
+        ["aardvark", "therapeutics"],
+        _tokenize("Aardvark Therapeutics raises $85M"),
+    )
+    # Out-of-order / non-contiguous does not count as the phrase.
+    assert not _phrase_in_tokens(
+        ["aardvark", "therapeutics"], ["therapeutics", "from", "aardvark"]
+    )
+    # Empty needle never matches.
+    assert not _phrase_in_tokens([], ["anything"])
+
+
+def test_phrase_match_respects_word_boundaries() -> None:
+    """Token matching must not fire on a substring inside another word —
+    "Ramp" must not match inside "cramped"."""
+    assert not _phrase_in_tokens(["ramp"], _tokenize("the schedule felt cramped today"))
+    assert _phrase_in_tokens(["ramp"], _tokenize("Ramp raises a Series F"))
+
+
+class TestArticleMentionsCompany:
+    # --- The live Aardvark false positives: all rejected -------------------
+
+    def test_rejects_unrelated_pbs_funding_story(self) -> None:
+        assert not article_mentions_company(
+            "Aardvark",
+            "Donald Trump Cut Funding To PBS, And Now This 'Arthur' TikTok Is Going Viral",
+        )
+
+    def test_rejects_unrelated_rugby_fundraiser(self) -> None:
+        assert not article_mentions_company(
+            "Aardvark",
+            "Rugby tournament raises money for local youth charity",
+        )
+
+    def test_rejects_unrelated_daycare_funding(self) -> None:
+        assert not article_mentions_company(
+            "Aardvark",
+            "Day-care owners fighting for survival as federal funding runs out",
+        )
+
+    # --- Genuine funding articles: kept ------------------------------------
+
+    def test_keeps_genuine_single_token_name_in_title(self) -> None:
+        assert article_mentions_company(
+            "Aardvark",
+            "Aardvark Therapeutics raises $85M Series C to advance obesity drug",
+        )
+
+    def test_keeps_genuine_full_phrase_name(self) -> None:
+        assert article_mentions_company(
+            "Aardvark Therapeutics",
+            "Aardvark Therapeutics closes $85M round led by Decheng Capital",
+        )
+
+    def test_keeps_when_name_has_corporate_suffix(self) -> None:
+        # Suffix is stripped before matching, so "Ramp Inc" still matches a
+        # headline that says just "Ramp".
+        assert article_mentions_company(
+            "Ramp Inc",
+            "Ramp raises Series F at $22.5B valuation",
+        )
+
+    # --- Risky (short / common-word) names: title is the strong signal -----
+
+    def test_risky_name_rejected_when_only_in_body_without_funding_headline(
+        self,
+    ) -> None:
+        """A common-word name appearing only deep in the body of an article whose
+        HEADLINE isn't funding-flavored is NOT attributed — that's exactly the
+        incidental-mention false positive we guard against."""
+        body = (
+            "City council debated the new transit plan for an hour. "
+            "A councilor mentioned a ramp near the station. " * 5
+        )
+        assert not article_mentions_company(
+            "Ramp",
+            "City council debates new transit plan",
+            body=body,
+        )
+
+    def test_risky_name_kept_when_body_match_and_funding_headline(self) -> None:
+        """A common-word name in the body IS attributed when the headline itself
+        is funding-flavored (publisher headline often abbreviates the name)."""
+        body = (
+            "Ramp, the corporate card startup, announced it has raised a new "
+            "round. " + "Details of the financing follow. " * 10
+        )
+        assert article_mentions_company(
+            "Ramp",
+            "Fintech startup closes Series F",  # funding-flavored, name not present
+            body=body,
+        )
+
+    def test_two_token_name_treated_as_risky_needs_title_or_lede(self) -> None:
+        # "Acme Robotics" (2 tokens) -> risky. Title without the phrase, and no
+        # body, is dropped.
+        assert not article_mentions_company(
+            "Acme Robotics",
+            "A roundup of robotics startups to watch in 2026",
+        )
+        # But the full phrase in the title keeps it.
+        assert article_mentions_company(
+            "Acme Robotics",
+            "Acme Robotics raises $40M Series B",
+        )
+
+    # --- Distinctive (>= 3 token) names: lede match is enough --------------
+
+    def test_distinctive_name_kept_on_body_lede_match(self) -> None:
+        """A long, low-collision name is trusted on a body-lede mention even when
+        the (truncated) RSS title omits it."""
+        body = (
+            "Northstar Quantum Systems, a Boston startup, said it raised $50M. "
+            + "More detail in the body. " * 10
+        )
+        assert article_mentions_company(
+            "Northstar Quantum Systems",
+            "Boston startup lands a fresh round",  # name absent from title
+            body=body,
+        )
+
+    def test_distinctive_name_rejected_when_absent_everywhere(self) -> None:
+        assert not article_mentions_company(
+            "Northstar Quantum Systems",
+            "Unrelated company raises a big round",
+            body="This article is about a completely different firm. " * 20,
+        )
+
+    # --- Body relevance is limited to the lede window ----------------------
+
+    def test_body_match_only_counts_within_lede_window(self) -> None:
+        """A distinctive name buried PAST the lede window does not rescue an
+        article whose title omits it — scanning the whole body would re-admit
+        incidental mentions."""
+        filler = "Totally unrelated narrative text. " * 40  # >> 600 chars
+        body = filler + " Northstar Quantum Systems is mentioned only here."
+        assert len(filler) > 600
+        assert not article_mentions_company(
+            "Northstar Quantum Systems",
+            "A story about something else",
+            body=body,
+        )
+
+    # --- Defensive edge cases ----------------------------------------------
+
+    def test_blank_or_suffix_only_name_fails_closed(self) -> None:
+        assert not article_mentions_company("", "Some funding headline")
+        # A name that is nothing but a strippable suffix has no anchor token.
+        assert not article_mentions_company("Inc", "Some funding headline")
 
 
 # ---------------------------------------------------------------------------
