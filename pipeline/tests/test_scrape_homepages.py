@@ -14,6 +14,7 @@ import os
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
+import httpx
 import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -611,3 +612,174 @@ async def test_funding_round_count_breaks_amount_ties(db: AsyncSession) -> None:
     assert few_pages == []
     await db.refresh(few_rounds)
     assert few_rounds.last_scrape_attempt_at is None
+
+
+# ---------------------------------------------------------------------------
+# Logo / favicon discovery during scrape
+# ---------------------------------------------------------------------------
+
+
+class LogoMockHomepageClient(MockHomepageClient):
+    """MockHomepageClient that also exposes a real SSRF-guarded ``_client``
+    (backed by a mock transport) so the favicon validation path runs.
+
+    The homepage fetch returns ``homepage_html`` (which declares an
+    apple-touch-icon); the validation HEAD/GET for the icon URL is answered by
+    ``image_handler`` — letting a test simulate "candidate is a real image" or
+    "candidate is HTML / 404" without touching the network.
+    """
+
+    def __init__(
+        self,
+        *,
+        homepage_html: str,
+        image_handler: object,
+    ) -> None:
+        super().__init__()
+        self._homepage_html = homepage_html
+        self._image_handler = image_handler
+
+    async def __aenter__(self) -> LogoMockHomepageClient:  # type: ignore[override]
+        # Wire a guarded-shaped client over a mock transport so _assert_open()
+        # in the stage returns a usable client and fetch_logo_url can validate.
+        self._client = httpx.AsyncClient(
+            transport=httpx.MockTransport(self._image_handler),  # type: ignore[arg-type]
+            headers={"User-Agent": "test agent test@example.com"},
+            follow_redirects=True,
+        )
+        self._robots = object()  # type: ignore[assignment]  # only _client is used by the logo path
+        return self
+
+    async def __aexit__(self, *args: object) -> None:
+        if self._client is not None:
+            await self._client.aclose()
+            self._client = None
+
+    async def fetch(self, url: str) -> FetchResult:
+        return FetchResult(
+            url=url,
+            status_code=200,
+            content=self._homepage_html,
+            content_type="text/html",
+        )
+
+
+_HOMEPAGE_WITH_ICON = (
+    "<html><head>"
+    '<link rel="apple-touch-icon" href="/apple-touch-icon.png">'
+    "<title>Acme builds rockets</title>"
+    "</head><body><h1>Acme</h1></body></html>"
+)
+
+
+@pytest.fixture()
+def _public_dns(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Force the SSRF guard's resolver to report a public IP for the synthetic
+    test hosts (which don't exist in DNS), so the favicon validation reaches the
+    mock transport instead of failing on an unresolvable host."""
+    import nous.util.ssrf as ssrf_module
+
+    async def fake_resolve(host: str, port: int) -> list[str]:
+        return ["93.184.216.34"]  # public (example.com)
+
+    monkeypatch.setattr(ssrf_module, "resolve_host_ips", fake_resolve)
+
+
+async def test_scrape_stores_validated_logo_url(db: AsyncSession, _public_dns: None) -> None:
+    """A homepage declaring an apple-touch-icon that resolves to a real image
+    populates company.logo_url with the external (own-domain) URL."""
+
+    def image_handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            content=b"\x89PNG\r\n\x1a\n" + b"\x00" * 200,
+            headers={"content-type": "image/png"},
+        )
+
+    company = _make_company(slug="logo-found", website="https://logofound.com")
+    db.add(company)
+    await db.flush()
+    await db.commit()
+
+    async with LogoMockHomepageClient(
+        homepage_html=_HOMEPAGE_WITH_ICON, image_handler=image_handler
+    ) as client:
+        summary = await run_scrape_homepages(db, client)
+
+    assert summary.logos_found == 1
+    await db.refresh(company)
+    assert company.logo_url == "https://logofound.com/apple-touch-icon.png"
+
+
+async def test_scrape_leaves_logo_null_when_candidate_not_image(
+    db: AsyncSession, _public_dns: None
+) -> None:
+    """When the icon candidate resolves to HTML (SPA catch-all), logo_url stays
+    NULL — we never store a non-image as a logo."""
+
+    def html_handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            content=b"<html><body>app shell</body></html>",
+            headers={"content-type": "text/html; charset=utf-8"},
+        )
+
+    company = _make_company(slug="logo-nonimage", website="https://logononimage.com")
+    db.add(company)
+    await db.flush()
+    await db.commit()
+
+    async with LogoMockHomepageClient(
+        homepage_html=_HOMEPAGE_WITH_ICON, image_handler=html_handler
+    ) as client:
+        summary = await run_scrape_homepages(db, client)
+
+    assert summary.logos_found == 0
+    assert summary.pages_fetched >= 1  # the scrape itself still succeeded
+    await db.refresh(company)
+    assert company.logo_url is None
+
+
+async def test_scrape_does_not_clobber_existing_logo_on_miss(
+    db: AsyncSession, _public_dns: None
+) -> None:
+    """A transient logo miss (candidate 404s) must not overwrite a logo that was
+    already stored on a previous run."""
+
+    def not_found_handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404, content=b"nope")
+
+    company = _make_company(slug="logo-keep", website="https://logokeep.com")
+    company.logo_url = "https://logokeep.com/existing-logo.png"
+    db.add(company)
+    await db.flush()
+    await db.commit()
+
+    async with LogoMockHomepageClient(
+        homepage_html=_HOMEPAGE_WITH_ICON, image_handler=not_found_handler
+    ) as client:
+        summary = await run_scrape_homepages(db, client)
+
+    assert summary.logos_found == 0
+    await db.refresh(company)
+    # Unchanged — the prior logo survives a miss.
+    assert company.logo_url == "https://logokeep.com/existing-logo.png"
+
+
+async def test_logo_discovery_skipped_for_plain_mock_client(
+    db: AsyncSession,
+) -> None:
+    """The plain MockHomepageClient (no real _client) must scrape normally with
+    logo discovery silently skipped — proves logo lookup never breaks a scrape
+    even when the client can't validate images."""
+    company = _make_company(slug="logo-skip", website="https://logoskip.com")
+    db.add(company)
+    await db.flush()
+    await db.commit()
+
+    summary = await run_scrape_homepages(db, MockHomepageClient())
+
+    assert summary.pages_fetched == 1
+    assert summary.logos_found == 0
+    await db.refresh(company)
+    assert company.logo_url is None
