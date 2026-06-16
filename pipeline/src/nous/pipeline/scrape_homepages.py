@@ -59,6 +59,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from nous.db.models import Company, RawPage
 from nous.db.upsert import upsert_raw_page
+from nous.sources.favicon import fetch_logo_url
 from nous.sources.headless_browser import HeadlessBrowserClient
 from nous.sources.homepage import FetchResult, HomepageClient, RobotsBlockedError
 from nous.util.ssrf import BlockedAddressError
@@ -174,6 +175,10 @@ class ScrapeSummary(BaseModel):
     # the headless-browser fallback produced richer content that we stored
     # instead. Useful signal for "how much JS-shell content are we rescuing?"
     pages_via_browser_fallback: int = 0
+    # Count of companies for which a logo/favicon URL was validated and stored
+    # on this run. Best-effort: a homepage that yields no usable image simply
+    # doesn't increment this (and never fails the scrape).
+    logos_found: int = 0
     # True when the max_runtime_minutes budget stopped the loop before the
     # selection was drained. The remaining companies stay eligible next run.
     stopped_early: bool = False
@@ -214,6 +219,37 @@ async def _fetch_one(
         # redirect to one). Treat it like an unreachable site, not an
         # unexpected error.
         logger.info("scrape: SSRF guard blocked %s: %s", url, exc)
+        return None
+
+
+async def _resolve_logo_url(
+    client: HomepageClient, homepage_html: str, homepage_url: str
+) -> str | None:
+    """Best-effort logo URL for a fetched homepage, or ``None``.
+
+    Reuses the HomepageClient's own SSRF-guarded httpx client to validate the
+    favicon/apple-touch-icon candidate (see :mod:`nous.sources.favicon`). The
+    favicon is a small same-host asset, so this adds at most one lightweight
+    HEAD/GET per company per refetch cycle.
+
+    Wrapped so logo discovery can never break a scrape: any failure (including
+    the client not being open, e.g. a test double) yields ``None`` and a log
+    line, and the page persistence proceeds unaffected.
+    """
+    try:
+        guarded_client, _ = client._assert_open()
+    except RuntimeError:
+        # A test/mocked HomepageClient may not run the real context manager;
+        # logo discovery is optional, so skip silently rather than error.
+        return None
+    try:
+        return await fetch_logo_url(guarded_client, homepage_html, homepage_url)
+    except Exception:
+        logger.info(
+            "scrape: logo discovery failed for %s (continuing without logo)",
+            homepage_url,
+            exc_info=True,
+        )
         return None
 
 
@@ -295,6 +331,9 @@ class _ScrapeOutcome(NamedTuple):
     ``pages`` lists the homepage first, then any discovered sub-pages, in fetch
     order. The counters cover sub-pages only; homepage-level robots/dead are
     conveyed via ``homepage_status``.
+    ``logo_url`` is the validated external favicon/apple-touch-icon URL on the
+    company's own domain (``None`` when no usable image was found); set on the
+    company during the sequential persist phase.
     """
 
     homepage_status: str
@@ -302,6 +341,7 @@ class _ScrapeOutcome(NamedTuple):
     sub_skipped_robots: int
     sub_failed: int
     pages_via_browser_fallback: int
+    logo_url: str | None
 
 
 async def _scrape_one(
@@ -320,9 +360,9 @@ async def _scrape_one(
     homepage_url = urljoin(website, "/")
     homepage = await _fetch_one(client, homepage_url)
     if homepage == "robots":
-        return _ScrapeOutcome("robots", [], 0, 0, 0)
+        return _ScrapeOutcome("robots", [], 0, 0, 0, None)
     if homepage is None:
-        return _ScrapeOutcome("dead", [], 0, 0, 0)
+        return _ScrapeOutcome("dead", [], 0, 0, 0, None)
     assert isinstance(homepage, FetchResult)
 
     pages: list[tuple[str, str]] = []
@@ -336,6 +376,12 @@ async def _scrape_one(
     if used_browser:
         browser_fallbacks += 1
     pages.append((homepage.url, homepage_content))
+
+    # Best-effort logo discovery from the homepage <head>. Parse the HTML we
+    # actually fetched (the JS-rendered DOM when the browser fallback fired —
+    # it carries the same icon links), validate the candidate is a real image,
+    # and carry the external URL on the outcome. Never fail the scrape over it.
+    logo_url = await _resolve_logo_url(client, homepage_content, homepage.url)
 
     # Discover relevant subpages from whichever HTML we ended up storing (the
     # JS-rendered version contains the real <a> tags too).
@@ -362,7 +408,9 @@ async def _scrape_one(
             browser_fallbacks += 1
         pages.append((sub.url, sub_content))
 
-    return _ScrapeOutcome("ok", pages, sub_skipped_robots, sub_failed, browser_fallbacks)
+    return _ScrapeOutcome(
+        "ok", pages, sub_skipped_robots, sub_failed, browser_fallbacks, logo_url
+    )
 
 
 async def run_scrape_homepages(
@@ -506,7 +554,7 @@ async def run_scrape_homepages(
                     company.website,
                     raw_outcome,
                 )
-                outcome = _ScrapeOutcome("dead", [], 0, 0, 0)
+                outcome = _ScrapeOutcome("dead", [], 0, 0, 0, None)
             else:
                 outcome = raw_outcome
 
@@ -525,6 +573,15 @@ async def run_scrape_homepages(
                 else:  # "ok"
                     # Homepage reachable ⇒ reset the dead-site counter.
                     company.consecutive_scrape_failures = 0
+                    # Refresh the logo on the same cadence as the pages: a
+                    # company only reaches "ok" here when it was due for a
+                    # (re)scrape, so adopt any freshly-validated favicon URL.
+                    # Only overwrite when we actually found one — never clobber
+                    # an existing logo with NULL on a transient miss. Idempotent:
+                    # the same homepage yields the same candidate each run.
+                    if outcome.logo_url is not None:
+                        company.logo_url = outcome.logo_url
+                        summary.logos_found += 1
                     summary.pages_skipped_robots += outcome.sub_skipped_robots
                     summary.pages_failed += outcome.sub_failed
                     summary.pages_via_browser_fallback += (
