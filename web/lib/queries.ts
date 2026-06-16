@@ -1820,6 +1820,14 @@ export async function listInvestors(
   return { rows, total: count ?? rows.length };
 }
 
+/** Pagination window for the portfolio card list returned by getInvestorBySlug. */
+export interface InvestorPortfolioPage {
+  /** Max portfolio cards to return. Omit (or undefined) to return the full union. */
+  limit?: number;
+  /** Cards to skip from the front of the sorted union. Defaults to 0. */
+  offset?: number;
+}
+
 /**
  * Full detail for a single investor by slug, or null when the slug is unknown.
  *
@@ -1828,9 +1836,17 @@ export async function listInvestors(
  *   2. company_investors → companies — the portfolio, shaped for CompanyCard.
  *   3. funding_round_investors → funding_rounds → companies — rounds this firm
  *      led or participated in, flattened with the funded company.
+ *
+ * The full portfolio union (company-level links + round-only companies, both
+ * excluding excluded companies) is assembled and sorted in memory exactly as
+ * before; `portfolioTotal` reports its length and `portfolio` is the slice for
+ * the requested `opts` window. Passing no `opts` returns the entire union (so
+ * the argument-free `generateMetadata` call is unaffected). The funding-activity
+ * and round sections are not paginated — `rounds` is always the full list.
  */
 export async function getInvestorBySlug(
   slug: string,
+  opts: InvestorPortfolioPage = {},
 ): Promise<InvestorDetail | null> {
   let supabase: ReturnType<typeof createSupabaseServerClient>;
   try {
@@ -2042,6 +2058,19 @@ export async function getInvestorBySlug(
     );
   }
 
+  // `portfolio` is now the FULL deduplicated union (company-level + round-only),
+  // already sorted by name. Paginate it in memory: portfolioTotal is the full
+  // length the page pages over, `portfolio` is just the requested slice. The
+  // data is small (card fields only) so slicing here is cheaper and keeps the
+  // exclusion/union logic identical to before. With no opts, the slice is the
+  // whole array (offset 0, no limit) — preserving the legacy full-list return.
+  const portfolioTotal = portfolio.length;
+  const offset = Math.max(0, opts.offset ?? 0);
+  const portfolioPage =
+    opts.limit === undefined
+      ? portfolio.slice(offset)
+      : portfolio.slice(offset, offset + Math.max(0, opts.limit));
+
   return {
     slug: investor.slug as string,
     name: investor.name as string,
@@ -2051,11 +2080,12 @@ export async function getInvestorBySlug(
     // portfolio_count is the denormalized total from migration 0025 (covers
     // both company_investors AND funding_round_investors paths). Use it as the
     // headline "Backs N companies" number so it matches the /investors index.
-    // The rendered `portfolio` card list may be shorter because it only shows
-    // companies linked directly via company_investors (round-only companies
-    // are not yet in the card list). See Task 3.1.
-    portfolioCount: (investor.portfolio_count as number | null) ?? portfolio.length,
-    portfolio,
+    // The paginated `portfolio` card list (and portfolioTotal) reflects the
+    // resolved union; this headline count may be larger when some backed
+    // companies aren't yet resolvable to a card. See Task 3.1.
+    portfolioCount: (investor.portfolio_count as number | null) ?? portfolioTotal,
+    portfolio: portfolioPage,
+    portfolioTotal,
     rounds,
   };
 }
