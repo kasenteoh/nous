@@ -13,42 +13,36 @@ bottom of the appropriate section; close items by deleting them.
 
 ---
 
-## 2026-06-16 product review — new top items
+## 2026-06-16 product review + remediation — SHIPPED
 
-Full findings + persona walkthrough:
-[2026-06-16-product-review-and-next-steps.md](docs/superpowers/plans/2026-06-16-product-review-and-next-steps.md).
-A live four-persona pass (VC / CTO / PM / enthusiast) confirmed the 06-14 lanes
-shipped (funding coverage ~31%, VC features, normalized taxonomy, relationship
-graph) and surfaced these **new** items, highest-impact first:
+Review: [2026-06-16-product-review-and-next-steps.md](docs/superpowers/plans/2026-06-16-product-review-and-next-steps.md).
+Execution log + activation steps: [2026-06-16-remediation-execution-log.md](docs/superpowers/plans/2026-06-16-remediation-execution-log.md).
 
-**P0 (the site currently looks wrong)**
-- Suppress the "no full profile yet" husk notice when funding/news/competitor
-  data exists; fix the literal `vc portfoliobut` typo + raw enum. [S] frontend.
-- Prioritise `enrich-companies` by `latest_round_amount` / news volume — marquee
-  companies (Perplexity, Mistral, Fivetran…) are blank husks at the top of
-  "Largest raise". [S–M]
-- Drain & harden non-US detection (extends `infer-hq-country` #109): Mistral (FR),
-  ICEYE (FI), Zepto (IN), Clio (CA), Rohlik (CZ) are live in a "US-only" catalog. [M]
-- Detect wrong-website / mismatched descriptions and re-queue (Kalshi shows
-  FrenFlow's copy; AgentMail shows "Series V"'s) — extends `repair-wrong-websites`. [M]
+Every bug the four-persona review found, plus the high-value backlog items below,
+shipped as PRs #112–#128 (verified on prod):
 
-**P1**
-- Re-judge non-startups that slipped through (Manta = 20-yr directory, Lucra =
-  coaching). [S–M]
-- Funding rows missing dates/round types + duplicate/empty rounds; run
-  `repair-duplicate-rounds` (dry-run today) over the new backlog. [S–M]
-- **Compare entry UI** — `/compare` works but tells users to hand-type a URL;
-  add card checkboxes → "Compare (n)" bar (Wave-4 "Compare view": page done, entry
-  missing). [S]
-- Resolve Google-News redirects to publishers so the Sources list isn't all
-  `news.google.com`. [S]
-- News mis-attribution (Autoscience article on Perplexity's page). [S]
-- Investor pages: populate/render `description` + `website`; paginate the
-  portfolio (a16z renders 678 cards on one page). [S–M] (QA G4/G5)
+- ✅ Husk notice + `discovered_via` label (#112) · marquee-husk enrichment
+  prioritisation (#114) · wrong-company profile detect + resolver hardening (#117)
+  · funding sources → publisher URLs (#118) · phantom valuation rounds (#124)
+- ✅ Eligibility rejects non-startups + opt-in re-judge (#115) · news
+  mis-attribution guard (#116)
+- ✅ Investor dedup a16z/junk/angels (#113) · compare selection UI (#119) ·
+  investor pagination + profile (#120) · amount tooltips + attribution (#121)
+- ✅ Company logos (#122/#125/#126) · name-quality casing (#123) · state-display
+  normalization (#125) · Alternatives pages + FAQ JSON-LD (#126)
+- ✅ Adapter-health canary (#127) · filter-column indexes / migration 0030 (#128)
+- ✅ Stale `repoIssueUrl` comment removed (#112-era)
 
-**P2 quick wins:** humanise the `discovered_via` badge on `/c/[slug]`; merge
-`a16z` → `Andreessen Horowitz` and drop junk investors ("a group of investors");
-remove the stale `repoIssueUrl` "unused until public" comment in `web/lib/site.ts`.
+**Pending activation** (one-time prod dispatches + workflow wiring — see the
+execution log's "Activation" section): run `repair-wrong-websites` /
+`repair-duplicate-rounds` over existing rows; `judge-eligibility
+--rejudge-nonstartup-signals` for the Manta/Lucra leaks; wire `name-quality` +
+`adapter-health` into `discovery.yml`. The every-3h cron heals going-forward data
+automatically.
+
+**Still open from the review:** news-list de-dup/ranking (E2); a deliberate non-US
+backfill drain (V2 — eligibility now rejects on entry, but existing foreign rows
+like Mistral/Clio need a sweep); mobile-responsiveness pass (P3).
 
 ---
 
