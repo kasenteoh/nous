@@ -114,9 +114,9 @@ Run (creates a throwaway DB so it never collides with the shared `nous` DB):
 
 ```bash
 createdb nous_mig_check_0029
-DATABASE_URL="postgresql+asyncpg://localhost/nous_mig_check_0029" uv run alembic upgrade head
-DATABASE_URL="postgresql+asyncpg://localhost/nous_mig_check_0029" uv run alembic downgrade -1
-DATABASE_URL="postgresql+asyncpg://localhost/nous_mig_check_0029" uv run alembic upgrade head
+DATABASE_URL="postgresql+psycopg://localhost/nous_mig_check_0029" uv run alembic upgrade head
+DATABASE_URL="postgresql+psycopg://localhost/nous_mig_check_0029" uv run alembic downgrade -1
+DATABASE_URL="postgresql+psycopg://localhost/nous_mig_check_0029" uv run alembic upgrade head
 dropdb nous_mig_check_0029
 ```
 
@@ -1078,7 +1078,7 @@ def _amock(return_value: object):
 
 - [ ] **Step 6: Run the integration tests** (DB required)
 
-Run: `DATABASE_URL=$(grep -m1 '^DATABASE_URL=' .env | cut -d= -f2-) uv run pytest tests/test_infer_hq_country_stage.py -v`
+Run: `DATABASE_URL="postgresql+psycopg://localhost/nous_infer_hqc" uv run pytest tests/test_infer_hq_country_stage.py -v`
 (Adjust to your local PG URL; the suite skips cleanly if `DATABASE_URL` is unset.)
 Expected: PASS (6 tests). If `DATABASE_URL` is unavailable locally, note the skip and rely on CI.
 
@@ -1249,7 +1249,7 @@ Expected: PASS.
 
 - [ ] **Step 3: Full test suite**
 
-Run: `DATABASE_URL=<local-pg-url> uv run pytest`
+Run: `DATABASE_URL="postgresql+psycopg://localhost/nous_infer_hqc" uv run pytest`
 Expected: PASS (existing suite + the 3 new test files; DB-gated tests run when `DATABASE_URL` is set, otherwise skip — note which).
 
 - [ ] **Step 4: Web build (unaffected, run per CLAUDE.md)**
