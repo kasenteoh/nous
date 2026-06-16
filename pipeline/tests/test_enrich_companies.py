@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import os
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from typing import Any
 from unittest.mock import AsyncMock
 
@@ -53,6 +54,8 @@ def _make_company(
     slug: str = "acme",
     description_short: str | None = None,
     last_enriched_at: datetime | None = None,
+    latest_round_amount: Decimal | None = None,
+    funding_round_count: int = 0,
 ) -> Company:
     return Company(
         name=name,
@@ -61,6 +64,8 @@ def _make_company(
         hq_country="US",
         description_short=description_short,
         last_enriched_at=last_enriched_at,
+        latest_round_amount=latest_round_amount,
+        funding_round_count=funding_round_count,
     )
 
 
@@ -387,6 +392,97 @@ async def test_max_companies_caps_enrichment(
 
     assert summary.companies_seen == 1
     assert summary.companies_enriched == 1
+
+
+async def test_max_companies_prioritizes_highest_raise(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With a tight --max-companies, the highest-raise eligible companies are
+    enriched first. This is the fix for marquee companies (Perplexity, Mistral,
+    …) showing up as blank husks at the top of "Largest raise": they have
+    funding + scraped pages but a small per-run budget kept skipping them."""
+    big = _make_company(
+        name="BigRaise Inc.",
+        slug="bigraise-prio-enrich",
+        latest_round_amount=Decimal("500000000"),  # $500M
+    )
+    mid = _make_company(
+        name="MidRaise Inc.",
+        slug="midraise-prio-enrich",
+        latest_round_amount=Decimal("10000000"),  # $10M
+    )
+    none = _make_company(
+        name="NoRaise Inc.",
+        slug="noraise-prio-enrich",
+        latest_round_amount=None,  # no funding amount → sorts last
+    )
+    db.add_all([none, mid, big])  # add in non-priority order on purpose
+    await db.flush()
+    # Each company has a page long enough to clear the _MIN_TEXT_CHARS bar.
+    db.add(_make_raw_page(big.id, url="https://bigraise-enrich.com/"))
+    db.add(_make_raw_page(mid.id, url="https://midraise-enrich.com/"))
+    db.add(_make_raw_page(none.id, url="https://noraise-enrich.com/"))
+    await db.flush()
+    await db.commit()
+
+    monkeypatch.setattr(
+        "nous.pipeline.enrich_companies.complete_json",
+        AsyncMock(return_value=_CANNED_DESCRIPTION),
+    )
+
+    # max_companies=2 admits only the two most prominent of the three.
+    summary = await run_enrich_companies(db, max_companies=2)
+
+    assert summary.companies_seen == 2
+    assert summary.companies_enriched == 2
+    await db.refresh(big)
+    await db.refresh(mid)
+    await db.refresh(none)
+    # The two highest-raise companies were enriched; the NULL-amount one was not.
+    assert big.description_short == _CANNED_DESCRIPTION.description_short
+    assert mid.description_short == _CANNED_DESCRIPTION.description_short
+    assert none.description_short is None
+    assert none.last_enriched_at is None
+
+
+async def test_max_companies_funding_round_count_breaks_ties(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When latest_round_amount ties, the company with more funding rounds is
+    enriched first within the limited slot."""
+    many_rounds = _make_company(
+        name="ManyRounds Inc.",
+        slug="manyrounds-tie-enrich",
+        latest_round_amount=Decimal("10000000"),
+        funding_round_count=5,
+    )
+    few_rounds = _make_company(
+        name="FewRounds Inc.",
+        slug="fewrounds-tie-enrich",
+        latest_round_amount=Decimal("10000000"),  # same amount
+        funding_round_count=1,
+    )
+    db.add_all([few_rounds, many_rounds])
+    await db.flush()
+    db.add(_make_raw_page(many_rounds.id, url="https://manyrounds-enrich.com/"))
+    db.add(_make_raw_page(few_rounds.id, url="https://fewrounds-enrich.com/"))
+    await db.flush()
+    await db.commit()
+
+    monkeypatch.setattr(
+        "nous.pipeline.enrich_companies.complete_json",
+        AsyncMock(return_value=_CANNED_DESCRIPTION),
+    )
+
+    summary = await run_enrich_companies(db, max_companies=1)
+
+    assert summary.companies_seen == 1
+    assert summary.companies_enriched == 1
+    await db.refresh(many_rounds)
+    await db.refresh(few_rounds)
+    assert many_rounds.description_short == _CANNED_DESCRIPTION.description_short
+    assert few_rounds.description_short is None
+    assert few_rounds.last_enriched_at is None
 
 
 async def test_thin_text_company_is_not_selected(

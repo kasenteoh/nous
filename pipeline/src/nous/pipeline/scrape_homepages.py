@@ -444,6 +444,18 @@ async def run_scrape_homepages(
             | (Company.last_scrape_attempt_at.is_(None))
             | (Company.last_scrape_attempt_at < failure_cutoff)
         )
+        # Prominence-first: when --limit only admits a slice of the backlog,
+        # scrape the highest-raise companies first so marquee names get pages
+        # (and thus enrichment) ahead of the long tail. latest_round_amount is
+        # the denormalized "most recent round" column on companies; NULLS LAST
+        # keeps amount-less companies behind funded ones. funding_round_count
+        # breaks ties, and id makes successive bounded runs deterministic.
+        # Eligibility (the WHERE clauses above) is unchanged.
+        .order_by(
+            Company.latest_round_amount.desc().nulls_last(),
+            Company.funding_round_count.desc(),
+            Company.id,
+        )
     )
     if limit is not None:
         stmt = stmt.limit(limit)

@@ -128,13 +128,28 @@ async def run_resolve_homepages(
 
     cutoff = datetime.now(tz=UTC) - timedelta(days=refetch_after_days)
 
-    stmt = select(Company).where(
-        Company.website.is_(None),
-        Company.exclusion_reason.is_(None),
-        or_(
-            Company.website_resolved_at.is_(None),
-            Company.website_resolved_at < cutoff,
-        ),
+    stmt = (
+        select(Company)
+        .where(
+            Company.website.is_(None),
+            Company.exclusion_reason.is_(None),
+            or_(
+                Company.website_resolved_at.is_(None),
+                Company.website_resolved_at < cutoff,
+            ),
+        )
+        # Prominence-first: when --limit only admits a slice of the backlog,
+        # resolve the highest-raise companies first so marquee names (Perplexity,
+        # Mistral, …) get a website before the long tail. latest_round_amount is
+        # the denormalized "most recent round" column on companies; NULLS LAST
+        # keeps amount-less companies behind funded ones. funding_round_count
+        # breaks ties (more rounds ⇒ more prominent), and id makes successive
+        # bounded runs deterministic. Eligibility (the WHERE above) is unchanged.
+        .order_by(
+            Company.latest_round_amount.desc().nulls_last(),
+            Company.funding_round_count.desc(),
+            Company.id,
+        )
     )
     if limit is not None:
         stmt = stmt.limit(limit)

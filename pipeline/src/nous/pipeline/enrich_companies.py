@@ -247,6 +247,21 @@ async def run_enrich_companies(
             )
             .where(or_(*conditions))
             .where(Company.exclusion_reason.is_(None))
+            # Prominence-first: when --max-companies only admits a slice of the
+            # eligible backlog, enrich the highest-raise companies first so
+            # marquee names (Perplexity, Mistral, …) get a description before the
+            # long tail instead of sitting as blank husks at the top of "Largest
+            # raise". latest_round_amount is the denormalized "most recent round"
+            # column on companies; NULLS LAST keeps amount-less companies behind
+            # funded ones. funding_round_count breaks ties, and id makes
+            # successive bounded runs deterministic. The exists()/RawPage>=200
+            # precondition and all other WHERE filters are unchanged — this is
+            # purely about order.
+            .order_by(
+                Company.latest_round_amount.desc().nulls_last(),
+                Company.funding_round_count.desc(),
+                Company.id,
+            )
         )
     if max_companies is not None:
         stmt = stmt.limit(max_companies)
