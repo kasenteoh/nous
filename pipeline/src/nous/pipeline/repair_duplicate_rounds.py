@@ -32,6 +32,20 @@ For each company:
    carry no merge signal here (reconcile's type+date path owns those), and
    touching them risks collapsing genuinely distinct undated rounds.
 
+3. Collapse valuation-only PHANTOM rows. A phantom is a round with NO
+   round_type, NO announced_date and NO amount_raised — only a
+   ``valuation_post_money`` (the shape seen on Perplexity's page: blank rows
+   carrying just "$20B post-money" beside the real $20B round). When another
+   round for the SAME company carries the SAME ``valuation_post_money`` and is
+   "more complete" (has an amount OR a type OR a date), the phantom's valuation
+   is folded into that sibling — a no-op data-wise, since the valuation is
+   already equal, but it keeps the valuation on a real row — its investor links
+   are repointed/deduped, and the phantom shell is deleted. A phantom whose
+   valuation matches NO sibling is LEFT ALONE: it may be the sole carrier of
+   that valuation, and PR #107's "never lose a valuation" invariant forbids
+   dropping it. A phantom is never merged into another phantom (the survivor
+   must be more complete), so the valuation always lands on a real round.
+
 Survivor selection within a cluster prefers, in order: a non-null round_type,
 then a non-null announced_date, then higher extraction_confidence, then a
 non-aggregator ``primary_news_url`` host (a real publisher over a Google-News
@@ -41,9 +55,10 @@ losers' non-null fields are folded into the survivor (gap-fill), their
 (round, investor) pair, promoting is_lead), then the losers are deleted.
 
 Idempotent: after a run every amount group has at most one row per compatible
-cluster and no fully-empty rows remain, so a second run collapses nothing.
-Records to pipeline_runs via the CLI. ``--dry-run`` logs intended actions
-without writing.
+cluster, no fully-empty rows remain, and every valuation-only phantom either
+has been folded into its matching sibling or has no sibling to fold into, so a
+second run collapses nothing. Records to pipeline_runs via the CLI.
+``--dry-run`` logs intended actions without writing.
 """
 
 from __future__ import annotations
@@ -69,6 +84,8 @@ class RepairDuplicateRoundsSummary(BaseModel):
     companies_repaired: int = 0
     empty_rows_deleted: int = 0
     duplicate_rows_merged: int = 0
+    # Pass 3: valuation-only phantom shells folded into a matching sibling.
+    phantom_valuation_rows_merged: int = 0
     dry_run: bool = False
 
 
@@ -163,6 +180,40 @@ def _cluster_amount_group(rows: list[FundingRound]) -> list[list[FundingRound]]:
     return clusters
 
 
+def _is_phantom_valuation_row(row: FundingRound) -> bool:
+    """True for a valuation-only PHANTOM shell.
+
+    No round_type, no announced_date, no amount_raised — only a
+    ``valuation_post_money``. This is the junk Funding-History row seen on
+    Perplexity: a blank row that carries nothing but a "$20B post-money" figure.
+    It survives Pass 1 (a valuation is a real sourced fact) and Pass 2 ignores
+    it (no amount → no merge signal), so Pass 3 handles it. A row with a
+    ``valuation_source`` but a null ``valuation_post_money`` is NOT a phantom
+    here: there is no numeric valuation to match against a sibling, so it is
+    left untouched.
+    """
+    return (
+        row.round_type is None
+        and row.announced_date is None
+        and row.amount_raised is None
+        and row.valuation_post_money is not None
+    )
+
+
+def _is_more_complete_round(row: FundingRound) -> bool:
+    """True when a row carries real round substance beyond a bare valuation.
+
+    A valid merge TARGET for a phantom: it has an amount, a round_type, or a
+    date, so folding the phantom's (equal) valuation onto it lands the valuation
+    on a genuine round rather than another empty shell.
+    """
+    return (
+        row.amount_raised is not None
+        or row.round_type is not None
+        or row.announced_date is not None
+    )
+
+
 async def _repoint_round_investors(
     session: AsyncSession, *, survivor_id: UUID, loser_id: UUID
 ) -> None:
@@ -202,6 +253,91 @@ async def _repoint_round_investors(
         .where(FundingRoundInvestor.funding_round_id == loser_id)
         .values(funding_round_id=survivor_id)
     )
+
+
+async def _collapse_phantom_valuations(
+    session: AsyncSession,
+    *,
+    company_id: UUID,
+    rows: list[FundingRound],
+    dry_run: bool,
+) -> int:
+    """Pass 3 — fold valuation-only phantom shells into a matching sibling.
+
+    For each ``valuation_post_money`` value on the company, if there is at least
+    one phantom row carrying it (see ``_is_phantom_valuation_row``) AND at least
+    one "more complete" sibling carrying the SAME valuation (see
+    ``_is_more_complete_round``), every such phantom is folded into the best
+    sibling: the sibling already holds the (equal) valuation so PR #107's "never
+    lose a valuation" invariant is preserved, the phantom's investor links are
+    repointed/deduped, and the phantom is deleted.
+
+    Conservative by construction:
+    - a phantom whose valuation matches no sibling is never touched (it might be
+      the only carrier of that valuation);
+    - the survivor is always a "more complete" row, never another phantom, so
+      the valuation never gets stranded on a second empty shell;
+    - it runs over ``survivors_pool`` AFTER Pass 2, so a row already chosen as a
+      same-amount survivor (which has an amount, hence is not a phantom) is a
+      valid target, not a victim.
+
+    Mutates ``rows`` in place — collapsed phantoms are removed from the list so
+    the caller's count refresh and idempotency hold. Returns the number of
+    phantom rows merged.
+    """
+    # Bucket every valuation-bearing row by its exact post-money figure.
+    by_valuation: dict[Decimal, list[FundingRound]] = defaultdict(list)
+    for row in rows:
+        if row.valuation_post_money is not None:
+            by_valuation[row.valuation_post_money].append(row)
+
+    merged = 0
+    collapsed_ids: set[UUID] = set()
+    for valuation, group in by_valuation.items():
+        phantoms = [r for r in group if _is_phantom_valuation_row(r)]
+        if not phantoms:
+            continue
+        # Candidate survivors: same valuation AND real round substance. Never a
+        # phantom — that would just move the valuation to another empty shell.
+        candidates = [r for r in group if _is_more_complete_round(r)]
+        if not candidates:
+            # Lone/duplicated phantom valuation with no complete sibling — the
+            # #107 invariant says keep it; it may be the only carrier.
+            continue
+        survivor = sorted(candidates, key=_survivor_sort_key)[0]
+
+        for phantom in phantoms:
+            logger.info(
+                "repair-duplicate-rounds: company=%s collapsing phantom "
+                "valuation row=%s (valuation=%s) into sibling=%s",
+                company_id,
+                phantom.id,
+                valuation,
+                survivor.id,
+            )
+            merged += 1
+            if dry_run:
+                continue
+            # Fold first (valuation already equal → no-op, but keeps the
+            # invariant explicit and gap-fills valuation_source if the phantom
+            # has one the survivor lacks), then repoint investors.
+            _fold_loser_into_survivor(survivor, phantom)
+            await _repoint_round_investors(
+                session, survivor_id=survivor.id, loser_id=phantom.id
+            )
+            collapsed_ids.add(phantom.id)
+
+        if not dry_run:
+            session.add(survivor)
+            # Flush the investor repoints before deleting the phantoms so no FK
+            # still points at them.
+            await session.flush()
+            for phantom in phantoms:
+                await session.delete(phantom)
+
+    if collapsed_ids:
+        rows[:] = [r for r in rows if r.id not in collapsed_ids]
+    return merged
 
 
 async def run_repair_duplicate_rounds(
@@ -294,11 +430,32 @@ async def run_repair_duplicate_rounds(
                 await session.flush()
                 for loser in losers:
                     await session.delete(loser)
+                # Keep survivors_pool in sync so Pass 3 never buckets a row this
+                # pass just deleted (loser rows have an amount, so they are not
+                # phantoms, but a deleted loser must not appear as a sibling).
+                loser_ids = {loser.id for loser in losers}
+                survivors_pool = [
+                    r for r in survivors_pool if r.id not in loser_ids
+                ]
 
-        if empty_deleted or merged_here:
+        # ── Pass 3: valuation-only phantom shells ────────────────────────────
+        # Fold each phantom (no type/date/amount, only a valuation_post_money)
+        # into a "more complete" sibling carrying the SAME valuation. The
+        # valuation is already equal, so this is data-preserving — PR #107's
+        # "never lose a valuation" invariant holds because it lands on a real
+        # round. Phantoms with no matching sibling are left alone.
+        phantom_merged = await _collapse_phantom_valuations(
+            session,
+            company_id=company_id,
+            rows=survivors_pool,
+            dry_run=dry_run,
+        )
+
+        if empty_deleted or merged_here or phantom_merged:
             summary.companies_repaired += 1
             summary.empty_rows_deleted += empty_deleted
             summary.duplicate_rows_merged += merged_here
+            summary.phantom_valuation_rows_merged += phantom_merged
             if not dry_run:
                 await session.flush()
                 await refresh_funding_round_count(session, company_id)
