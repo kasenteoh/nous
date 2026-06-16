@@ -26,6 +26,19 @@ export function formatUsd(amount: number | null | undefined): string {
 }
 
 /**
+ * Format a USD dollar amount as its exact, fully-written figure — for tooltips
+ * that disambiguate the rounded `formatUsd` short form (e.g. $1.51M and $1.49M
+ * both render "$1.5M", and a "$12.4B" tile hides the real number).
+ * - 12_400_000_000  → "$12,400,000,000"
+ * - null/undefined  → "—"
+ * Pure: thousands separators via `toLocaleString`, no fractional cents.
+ */
+export function formatUsdExact(amount: number | null | undefined): string {
+  if (amount == null) return "—";
+  return `$${amount.toLocaleString("en-US", { maximumFractionDigits: 0 })}`;
+}
+
+/**
  * Format an ISO date string (YYYY-MM-DD or full ISO timestamp) for display.
  * Returns "—" for null/undefined.
  * Example: "2026-05-12" → "May 12, 2026"
