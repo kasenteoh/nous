@@ -10,7 +10,11 @@ import {
   getInvestorNameToSlugMap,
   getRelatedCompanies,
 } from "@/lib/queries";
-import type { CompanyRow, FundingRoundWithInvestors } from "@/lib/types";
+import type {
+  CompanyRow,
+  FundingRoundWithInvestors,
+  PersonRow,
+} from "@/lib/types";
 import {
   discoveredViaLabel,
   formatDate,
@@ -124,6 +128,78 @@ function companyJsonLd(company: CompanyRow): Record<string, unknown> {
   return org;
 }
 
+/** Roles that mark a person as a founder, for the "Who founded …" FAQ answer.
+ * Matches "founder", "co-founder", "founding <X>", etc. We only claim someone
+ * founded the company when their recorded role actually says so — never infer
+ * a founder from a generic executive title (no-fabrication rule). */
+const FOUNDER_ROLE = /found(s|ed|er|ing)?\b/i;
+
+/**
+ * schema.org FAQPage markup for AI answer engines / rich results. Each Q&A is
+ * derived purely from data already shown on the page, and a question is emitted
+ * only when its answer exists (no fabrication). Returns null when none of the
+ * four questions can be answered, so the caller can skip the block entirely.
+ *
+ * Questions:
+ *   - "What does {Company} do?"        ← description_short
+ *   - "Who founded {Company}?"         ← people whose role marks them a founder
+ *   - "How much has {Company} raised?" ← the displayed total raised (when known)
+ *   - "Where is {Company} based?"      ← HQ city/state
+ */
+function companyFaqJsonLd(
+  company: CompanyRow,
+  people: PersonRow[],
+  raised: { has: boolean; display: number },
+): Record<string, unknown> | null {
+  const qa: { q: string; a: string }[] = [];
+
+  if (company.description_short) {
+    qa.push({
+      q: `What does ${company.name} do?`,
+      a: company.description_short,
+    });
+  }
+
+  const founders = people.filter((p) => FOUNDER_ROLE.test(p.role));
+  if (founders.length > 0) {
+    const names = founders.map((p) => p.name);
+    const list =
+      names.length === 1
+        ? names[0]
+        : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+    qa.push({
+      q: `Who founded ${company.name}?`,
+      a: `${company.name} was founded by ${list}.`,
+    });
+  }
+
+  if (raised.has) {
+    qa.push({
+      q: `How much has ${company.name} raised?`,
+      a: `${company.name} has raised ${formatUsd(raised.display)} in disclosed funding to date.`,
+    });
+  }
+
+  if (company.hq_city || company.hq_state) {
+    qa.push({
+      q: `Where is ${company.name} based?`,
+      a: `${company.name} is based in ${formatLocation(company.hq_city, company.hq_state)}.`,
+    });
+  }
+
+  if (qa.length === 0) return null;
+
+  return {
+    "@context": "https://schema.org",
+    "@type": "FAQPage",
+    mainEntity: qa.map(({ q, a }) => ({
+      "@type": "Question",
+      name: q,
+      acceptedAnswer: { "@type": "Answer", text: a },
+    })),
+  };
+}
+
 /** Render-friendly hostname for a website URL — strips protocol, "www.", and
  * trailing slash. Returns null on a malformed URL so the caller can fall back
  * to showing the raw string. */
@@ -234,6 +310,14 @@ export default async function CompanyPage({ params }: Props) {
   const displayedTotal = statedWins ? statedTotal : computedTotal;
   const hasTotalRaised = hasComputedTotal || statedTotal != null;
   const statedAsOf = company.total_raised_as_of ?? null;
+
+  // FAQPage structured data (no visible UI) for AI answer engines / rich
+  // results, built from data already on the page. Null when none of its
+  // questions can be answered, so the block is skipped entirely.
+  const faqJsonLd = companyFaqJsonLd(company, people, {
+    has: hasTotalRaised,
+    display: displayedTotal,
+  });
   // Citation for the displayed total: the stated figure's source article when
   // that figure wins; otherwise the company's own site is the citation for the
   // summed-from-rounds total (a self-reported aggregate). Per-round article
@@ -323,6 +407,10 @@ export default async function CompanyPage({ params }: Props) {
   return (
     <main className="flex-1 px-6 py-12 max-w-4xl mx-auto w-full">
       <JsonLd data={companyJsonLd(company)} />
+      {/* FAQ structured data (JSON-LD only — no visible UI). Answers, from data
+          already on the page: what the company does, who founded it, how much
+          it raised, and where it's based — for AI answer engines. */}
+      {faqJsonLd && <JsonLd data={faqJsonLd} />}
       {/* ── Company header ─────────────────────────────────────────────── */}
       <header className="mb-10">
         <div className="flex flex-wrap items-center gap-3">
@@ -555,7 +643,10 @@ export default async function CompanyPage({ params }: Props) {
       />
 
       {/* ── Competitors (M4) ───────────────────────────────────────────── */}
-      <Competitors competitors={competitors} />
+      {/* alternativesSlug renders a discreet link to /alternatives/[slug] in
+          the section header (a higher-SEO-value standalone view of the same
+          competitor set). */}
+      <Competitors competitors={competitors} alternativesSlug={company.slug} />
 
       {/* ── Related companies (relationship graph) ─────────────────────── */}
       <RelatedCompanies similar={similar} alsoBackedBy={alsoBackedBy} />

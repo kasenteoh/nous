@@ -6,6 +6,8 @@ import { createSupabaseServerClient } from "@/lib/db";
 import { buildSpotlightPool, type Spotlight } from "@/lib/spotlight";
 import type {
   AlsoBackedByCompany,
+  AlternativeCompany,
+  AlternativesData,
   CoInvestor,
   CompanyDetail,
   CompanyInvestorRow,
@@ -21,6 +23,7 @@ import type {
   InvestorListRow,
   InvestorRoundRow,
   InvestorSlugRow,
+  NamedAlternative,
   NewsArticleRow,
   PersonRow,
   RelatedCompany,
@@ -256,7 +259,7 @@ export async function listCompanies(
   let query = supabase
     .from("companies")
     .select(
-      "slug, name, hq_city, hq_state, industry_group, description_short, status",
+      "slug, name, hq_city, hq_state, industry_group, description_short, status, logo_url",
       { count: "exact" },
     )
     .is("exclusion_reason", null)
@@ -359,6 +362,7 @@ export async function listCompanies(
     industry_group: (c.industry_group as string | null) ?? null,
     description_short: (c.description_short as string | null) ?? null,
     status: c.status as string,
+    logo_url: (c.logo_url as string | null) ?? null,
   }));
 
   return { rows, total: count ?? rows.length };
@@ -1140,6 +1144,185 @@ export async function getCompanyBySlug(
   };
 }
 
+// ─── "Alternatives to X" pages (SEO) ──────────────────────────────────────────
+
+/**
+ * LLM scratch-notes occasionally leak into a competitor's stored rationale
+ * (e.g. "Included temporarily for evaluation but should be dropped."). The
+ * Competitors component drops such rows so internal model reasoning never
+ * reaches a customer; the /alternatives page applies the SAME guard so a
+ * leaked row can't appear there either — nor inflate the ≥3-competitor sitemap
+ * threshold or the JSON-LD list. Keep this pattern in sync with the copy in
+ * components/Competitors.tsx (the canonical display-side guard).
+ */
+const COMPETITOR_META_LEAK =
+  /should be dropped|for evaluation|temporar|placeholder|do not (include|display|show)|not a (real )?competitor/i;
+
+/**
+ * Shape returned by the nested competitor → resolved-company select used by
+ * {@link getAlternatives}. Carries the full card projection (so resolved
+ * alternatives render in a CompanyCard with their logo), plus exclusion_reason
+ * so excluded companies are dropped (their /c/[slug] 404s).
+ */
+interface AlternativesResolvedCompany {
+  slug: string | null;
+  name: string | null;
+  hq_city: string | null;
+  hq_state: string | null;
+  industry_group: string | null;
+  description_short: string | null;
+  status: string | null;
+  logo_url: string | null;
+  exclusion_reason?: string | null;
+}
+
+type AlternativesCompetitorJoin = CompetitorRow & {
+  competitor_company:
+    | AlternativesResolvedCompany
+    | AlternativesResolvedCompany[]
+    | null;
+};
+
+/**
+ * Data for /alternatives/[slug] — "Top alternatives to {Company}". Returns the
+ * subject company's display fields plus its competitors, split into:
+ *   - `resolved`: competitors that matched an indexed company (rendered as
+ *     linked CompanyCards, so they carry the full card projection + logo).
+ *   - `named`:    LLM-named competitors with no nous page (name + reasoning).
+ *
+ * Mirrors the competitor fetch in {@link getCompanyBySlug} but selects the full
+ * card projection on the resolved company. Both lists are ordered by competitor
+ * `rank` ascending (1 = most relevant). Meta-leak rows are filtered out (see
+ * {@link COMPETITOR_META_LEAK}). Returns null when the slug is unknown or the
+ * company is excluded (the page then 404s) — note an *empty* competitor set is
+ * still a non-null result, so the page can render a graceful "no alternatives
+ * yet" state rather than a 404.
+ */
+export async function getAlternatives(
+  slug: string,
+): Promise<AlternativesData | null> {
+  let supabase: ReturnType<typeof createSupabaseServerClient>;
+  try {
+    supabase = createSupabaseServerClient();
+  } catch (err) {
+    console.warn(
+      "[getAlternatives] Supabase not configured:",
+      (err as Error).message,
+    );
+    return null;
+  }
+
+  // 1. Subject company — only the fields the page header + metadata need.
+  const { data: company, error: companyError } = await supabase
+    .from("companies")
+    .select("id, slug, name, description_short, industry_group, exclusion_reason")
+    .eq("slug", slug)
+    .single();
+
+  if (companyError || !company) {
+    if (companyError?.code !== "PGRST116") {
+      console.error(
+        "[getAlternatives] company query failed:",
+        companyError?.message,
+      );
+    }
+    return null;
+  }
+
+  // Excluded companies 404 on /c/[slug]; their alternatives page must 404 too.
+  if ((company as { exclusion_reason?: string | null }).exclusion_reason) {
+    return null;
+  }
+
+  const companyId = company.id as string;
+
+  // 2. Competitors with the resolved company's full card projection embedded.
+  const { data: competitorRows, error: competitorsError } = await supabase
+    .from("competitors")
+    .select(
+      "*, competitor_company:companies!competitor_company_id(slug, name, hq_city, hq_state, industry_group, description_short, status, logo_url, exclusion_reason)",
+    )
+    .eq("company_id", companyId)
+    .order("rank", { ascending: true });
+
+  if (competitorsError) {
+    console.error(
+      "[getAlternatives] competitors query failed:",
+      competitorsError.message,
+    );
+    // A company with no readable competitors is still a valid (empty) page.
+    return {
+      company: {
+        slug: company.slug as string,
+        name: company.name as string,
+        description_short: (company.description_short as string | null) ?? null,
+        industry_group: (company.industry_group as string | null) ?? null,
+      },
+      resolved: [],
+      named: [],
+    };
+  }
+
+  const resolved: AlternativeCompany[] = [];
+  const named: NamedAlternative[] = [];
+
+  for (const row of (competitorRows ?? []) as unknown as AlternativesCompetitorJoin[]) {
+    // Same display-side guard as the Competitors component: never surface a row
+    // whose stored reasoning/description is leaked model scratch-text.
+    if (
+      COMPETITOR_META_LEAK.test(row.reasoning ?? "") ||
+      COMPETITOR_META_LEAK.test(row.description ?? "")
+    ) {
+      continue;
+    }
+
+    const nested = Array.isArray(row.competitor_company)
+      ? row.competitor_company[0]
+      : row.competitor_company;
+
+    // Resolved → linked card, but only when the matched company is itself
+    // listable (has slug + name and isn't excluded). Otherwise fall back to the
+    // text-only "named" treatment so we never render a dead /c/[slug] link.
+    if (nested && nested.slug && nested.name && !nested.exclusion_reason) {
+      resolved.push({
+        slug: nested.slug,
+        name: nested.name,
+        hq_city: nested.hq_city ?? null,
+        hq_state: nested.hq_state ?? null,
+        industry_group: nested.industry_group ?? null,
+        description_short: nested.description_short ?? null,
+        status: nested.status ?? "active",
+        logo_url: nested.logo_url ?? null,
+        rank: row.rank,
+        reasoning: row.reasoning ?? null,
+        description: row.description ?? null,
+        source: row.source,
+        source_url: row.source_url ?? null,
+      });
+    } else {
+      named.push({
+        name: row.competitor_name,
+        rank: row.rank,
+        reasoning: row.reasoning ?? null,
+        description: row.description ?? null,
+        source: row.source,
+        source_url: row.source_url ?? null,
+      });
+    }
+  }
+
+  return {
+    company: {
+      slug: company.slug as string,
+      name: company.name as string,
+      description_short: (company.description_short as string | null) ?? null,
+      industry_group: (company.industry_group as string | null) ?? null,
+    },
+    resolved,
+    named,
+  };
+}
+
 // ─── Relationship graph (similar / also-backed-by) ────────────────────────────
 
 /**
@@ -1562,6 +1745,142 @@ export async function listAllStates(): Promise<string[]> {
   return [...seen].sort((a, b) => a.localeCompare(b));
 }
 
+/**
+ * Minimum number of competitor rows a company must carry before its
+ * /alternatives/<slug> page earns a sitemap entry. Mirrors the analogous
+ * {@link MIN_TAG_COMPANY_COUNT} tag threshold: a company with only one or two
+ * competitors makes a thin "alternatives" page with little SEO value, so we
+ * only list ones with enough alternatives to be a useful comparison landing
+ * page. The page itself still renders for any company with ≥1 competitor (and
+ * is reachable via the on-page link) — this bar only gates sitemap inclusion.
+ * Raise/lower in one place here.
+ */
+const MIN_ALTERNATIVES_COMPETITOR_COUNT = 3;
+
+/**
+ * Keyset-paginated full scan of the `competitors` table, tallying competitor
+ * rows per `company_id`. PostgREST caps every response at 1000 rows regardless
+ * of `.limit()`, and the table has several rows per company, so a flat select
+ * would silently truncate. We page ordered by the row `id` (the UUID PK, unique
+ * so the cursor strictly advances) via `.gt("id", cursor)` until a short page,
+ * exactly like {@link scanTable} does for slug-keyed tables — but `competitors`
+ * is keyed on a non-slug column, so it needs its own walk. A hard page bound
+ * caps the scan and warns rather than looping. Returns null on missing env or a
+ * mid-scan failure so the sitemap caller falls back to omitting these entries.
+ */
+async function countCompetitorsByCompany(): Promise<Map<string, number> | null> {
+  let supabase: ReturnType<typeof createSupabaseServerClient>;
+  try {
+    supabase = createSupabaseServerClient();
+  } catch (err) {
+    console.warn(
+      "[countCompetitorsByCompany] Supabase not configured:",
+      (err as Error).message,
+    );
+    return null;
+  }
+
+  const pageSize = 1000;
+  const maxPages = 200; // up to 200k competitor rows — far above current scale.
+  const counts = new Map<string, number>();
+  let lastId: string | null = null;
+
+  for (let page = 0; page < maxPages; page++) {
+    let query = supabase
+      .from("competitors")
+      .select("id, company_id")
+      .order("id", { ascending: true })
+      .limit(pageSize);
+    if (lastId !== null) query = query.gt("id", lastId);
+
+    const { data, error } = await query;
+    if (error) {
+      console.error(
+        "[countCompetitorsByCompany] page query failed:",
+        error.message,
+      );
+      return null;
+    }
+
+    const rows = (data ?? []) as { id: string | null; company_id: string | null }[];
+    for (const r of rows) {
+      if (r.company_id) counts.set(r.company_id, (counts.get(r.company_id) ?? 0) + 1);
+    }
+
+    if (rows.length < pageSize) return counts;
+    lastId = rows[rows.length - 1].id as string;
+  }
+
+  console.warn(
+    `[countCompetitorsByCompany] hit maxPages=${maxPages}; counts may be partial.`,
+  );
+  return counts;
+}
+
+/**
+ * Slugs (+ updated_at) of listable companies that carry at least
+ * {@link MIN_ALTERNATIVES_COMPETITOR_COUNT} competitor rows, for the
+ * /alternatives/<slug> sitemap entries. Tallies competitor counts per company
+ * via {@link countCompetitorsByCompany}, then resolves the qualifying company
+ * ids to slugs — dropping excluded companies (their pages 404) and any failing
+ * the catalog bar (consistent with every other sitemap surface). Returns [] on
+ * missing env or any error so the sitemap still builds with its other entries.
+ */
+export async function listAlternativesCompanySlugs(): Promise<CompanySlugRow[]> {
+  const counts = await countCompetitorsByCompany();
+  if (counts === null) return [];
+
+  const qualifyingIds = [...counts.entries()]
+    .filter(([, n]) => n >= MIN_ALTERNATIVES_COMPETITOR_COUNT)
+    .map(([id]) => id);
+  if (qualifyingIds.length === 0) return [];
+
+  let supabase: ReturnType<typeof createSupabaseServerClient>;
+  try {
+    supabase = createSupabaseServerClient();
+  } catch (err) {
+    console.warn(
+      "[listAlternativesCompanySlugs] Supabase not configured:",
+      (err as Error).message,
+    );
+    return [];
+  }
+
+  // Resolve ids → slugs in chunks so a large `.in(...)` list stays well under
+  // any URL/length limits, applying the same exclusion + catalog bar as the
+  // rest of the sitemap.
+  const CHUNK = 500;
+  const out: CompanySlugRow[] = [];
+  for (let i = 0; i < qualifyingIds.length; i += CHUNK) {
+    const chunk = qualifyingIds.slice(i, i + CHUNK);
+    const { data, error } = await supabase
+      .from("companies")
+      .select("slug, updated_at")
+      .in("id", chunk)
+      .is("exclusion_reason", null)
+      .or(CATALOG_BAR_OR);
+
+    if (error) {
+      console.error(
+        "[listAlternativesCompanySlugs] slug resolve failed:",
+        error.message,
+      );
+      return [];
+    }
+
+    for (const r of (data ?? []) as {
+      slug: string | null;
+      updated_at: string | null;
+    }[]) {
+      if (r.slug) out.push({ slug: r.slug, updated_at: r.updated_at ?? null });
+    }
+  }
+
+  // Deterministic order so the sitemap is stable across revalidations.
+  out.sort((a, b) => a.slug.localeCompare(b.slug));
+  return out;
+}
+
 // ─── "New this week" queries ──────────────────────────────────────────────────
 
 /** One row in the new-companies feed. */
@@ -1884,7 +2203,7 @@ export async function getInvestorBySlug(
     supabase
       .from("company_investors")
       .select(
-        "companies(slug, name, hq_city, hq_state, industry_group, description_short, status, exclusion_reason)",
+        "companies(slug, name, hq_city, hq_state, industry_group, description_short, status, logo_url, exclusion_reason)",
       )
       .eq("investor_id", investorId),
 
@@ -1910,29 +2229,19 @@ export async function getInvestorBySlug(
   }
 
   // ── Portfolio: flatten the nested company, drop unresolved joins, sort by name.
+  type PortfolioCompany = {
+    slug: string | null;
+    name: string | null;
+    hq_city: string | null;
+    hq_state: string | null;
+    industry_group: string | null;
+    description_short: string | null;
+    status: string | null;
+    logo_url?: string | null;
+    exclusion_reason?: string | null;
+  };
   type PortfolioJoin = {
-    companies:
-      | {
-          slug: string | null;
-          name: string | null;
-          hq_city: string | null;
-          hq_state: string | null;
-          industry_group: string | null;
-          description_short: string | null;
-          status: string | null;
-          exclusion_reason?: string | null;
-        }
-      | {
-          slug: string | null;
-          name: string | null;
-          hq_city: string | null;
-          hq_state: string | null;
-          industry_group: string | null;
-          description_short: string | null;
-          status: string | null;
-          exclusion_reason?: string | null;
-        }[]
-      | null;
+    companies: PortfolioCompany | PortfolioCompany[] | null;
   };
 
   const portfolio: CompanyListRow[] = ((portfolioResult.data ?? []) as PortfolioJoin[])
@@ -1948,6 +2257,7 @@ export async function getInvestorBySlug(
           industry_group: c.industry_group ?? null,
           description_short: c.description_short ?? null,
           status: c.status ?? "active",
+          logo_url: c.logo_url ?? null,
         },
       ];
     })
@@ -2023,7 +2333,7 @@ export async function getInvestorBySlug(
     const { data: extra, error: extraError } = await supabase
       .from("companies")
       .select(
-        "slug, name, hq_city, hq_state, industry_group, description_short, status, exclusion_reason",
+        "slug, name, hq_city, hq_state, industry_group, description_short, status, logo_url, exclusion_reason",
       )
       .in("slug", roundOnlySlugs);
     if (extraError) {
@@ -2040,6 +2350,7 @@ export async function getInvestorBySlug(
       industry_group: string | null;
       description_short: string | null;
       status: string | null;
+      logo_url?: string | null;
       exclusion_reason?: string | null;
     }[]) {
       if (!c.slug || !c.name || c.exclusion_reason) continue;
@@ -2051,6 +2362,7 @@ export async function getInvestorBySlug(
         industry_group: c.industry_group ?? null,
         description_short: c.description_short ?? null,
         status: c.status ?? "active",
+        logo_url: c.logo_url ?? null,
       });
     }
     portfolio.sort((a, b) =>

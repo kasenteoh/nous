@@ -212,7 +212,11 @@ export default async function InvestorPage({ params, searchParams }: Props) {
             </p>
             <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
               {portfolio.map((company) => (
-                <CompanyCard key={company.slug} company={company} />
+                <CompanyCard
+                  key={company.slug}
+                  company={company}
+                  logoUrl={company.logo_url}
+                />
               ))}
             </div>
 

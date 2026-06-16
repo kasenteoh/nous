@@ -11,6 +11,7 @@ import {
   listAllInvestorSlugs,
   listAllTags,
   listAllStates,
+  listAlternativesCompanySlugs,
 } from "@/lib/queries";
 import { siteOrigin } from "@/lib/site";
 
@@ -25,11 +26,12 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
     { url: `${origin}/about` },
   ];
 
-  const [companies, investors, tags, states] = await Promise.all([
+  const [companies, investors, tags, states, alternatives] = await Promise.all([
     listAllCompanySlugs(),
     listAllInvestorSlugs(),
     listAllTags(),
     listAllStates(),
+    listAlternativesCompanySlugs(),
   ]);
 
   const companyEntries: MetadataRoute.Sitemap = companies.map((c) => ({
@@ -53,11 +55,21 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
     url: `${origin}/location/${encodeURIComponent(state)}`,
   }));
 
+  // `alternatives` is already the de-thinned list — listAlternativesCompanySlugs
+  // returns only companies with ≥ MIN_ALTERNATIVES_COMPETITOR_COUNT competitor
+  // rows (mirroring the tag threshold) — so thin one/two-competitor pages stay
+  // out of the sitemap. No further filtering needed here.
+  const alternativesEntries: MetadataRoute.Sitemap = alternatives.map((c) => ({
+    url: `${origin}/alternatives/${c.slug}`,
+    lastModified: c.updated_at ?? undefined,
+  }));
+
   return [
     ...staticEntries,
     ...companyEntries,
     ...investorEntries,
     ...tagEntries,
     ...locationEntries,
+    ...alternativesEntries,
   ];
 }
