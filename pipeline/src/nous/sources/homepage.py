@@ -29,6 +29,7 @@ from nous.util.ssrf import (
     assert_public_url,
     guarded_async_client,
 )
+from nous.util.title_subject import name_is_dominant_subject
 from nous.util.url import canonical_domain
 
 # Re-export for backwards compatibility — callers that did
@@ -56,33 +57,53 @@ _MAX_FALLBACK_REDIRECTS = 5
 
 
 def _name_in_strong_position(html: str, slug_base: str, company_name: str) -> bool:
-    """Return True when *slug_base* or *company_name* appears in the page <title>
-    or an <h1> element.
+    """Return True when the company is the *dominant subject* of the page <title>
+    or an <h1> — not merely one brand listed among others.
 
-    "Strong position" guards against directory / aggregator pages that mention a
-    company name in body text (e.g. "Find startups like Acme on Startup Intros")
-    but whose <title>/<h1> describe the directory, not the company.
+    "Strong position" already guards against directory / aggregator pages that
+    mention a company name only in body text.  This adds a *dominance* check on
+    top, because a strong-position mention is not enough on its own: a DIFFERENT
+    company's homepage that lists the target among several brands also satisfies
+    "name appears in an <h1>".  In production this attached **Kalshi** (a
+    prediction market) to **FrenFlow**'s site — whose <h1> reads "copy-trade
+    across Polymarket, Kalshi, Predict.fun, Hyperliquid" — and **AgentMail** to a
+    "Series V" page.
+
+    A title/h1 accepts the page when EITHER:
+    - the slug form (``lightning-ai`` / ``lightning ai``) is the dominant subject
+      of the element, OR
+    - the prose company name is the dominant subject (see
+      :func:`name_is_dominant_subject`).
+
+    Dominance rejects a *competing leading brand* ("FrenFlow — …" for Kalshi) and
+    a *brand list* where the company is not the first item, while still accepting
+    ordinary single-subject homepages ("Acme — tagline", "Welcome to Acme", a
+    bare "Acme", "Acme vs Bar").
 
     Uses the hyphen-normalised slug (e.g. "lightning-ai" → "lightning ai") so
     both slug forms are tested against each strong element.
     """
     tree = HTMLParser(html)
 
-    slug_variants = {slug_base.lower(), slug_base.replace("-", " ").lower()}
-    name_lower = company_name.lower()
+    slug_spaced = slug_base.replace("-", " ")
 
-    def _matches(text: str) -> bool:
-        t = text.lower()
+    def _dominant(text: str) -> bool:
+        if not text:
+            return False
+        # Test the prose name and both slug forms; the slug is what the resolver
+        # guessed the domain from, so a homepage whose title is just the slug
+        # ("lightning-ai") must still pass.
         return (
-            any(sv in t for sv in slug_variants)
-            or name_lower in t
+            name_is_dominant_subject(text, company_name)
+            or name_is_dominant_subject(text, slug_base)
+            or name_is_dominant_subject(text, slug_spaced)
         )
 
     title_node = tree.css_first("title")
-    if title_node is not None and _matches(title_node.text(strip=True)):
+    if title_node is not None and _dominant(title_node.text(strip=True)):
         return True
 
-    return any(_matches(h1.text(strip=True)) for h1 in tree.css("h1"))
+    return any(_dominant(h1.text(strip=True)) for h1 in tree.css("h1"))
 
 
 def _is_retryable(exc: BaseException) -> bool:
