@@ -37,7 +37,7 @@ import asyncio
 import logging
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
-from typing import Literal
+from typing import Literal, Protocol
 from urllib.parse import urlparse
 from uuid import UUID
 
@@ -45,6 +45,7 @@ from pydantic import BaseModel
 from sqlalchemy import exists, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from nous.config import Settings
 from nous.db.models import Company, FundingRound, NewsArticle, RawPage
 from nous.db.upsert import (
     link_round_investor,
@@ -65,10 +66,28 @@ from nous.llm.prompts.funding_extraction import (
 )
 from nous.pipeline.refresh_investor_counts import refresh_investor_counts
 from nous.pipeline.refresh_latest_round import refresh_latest_round
+from nous.sources.news import (
+    _GOOGLE_NEWS_HOST,
+    NewsClient,
+    ResolvedArticle,
+)
 from nous.sources.reject_hosts import is_aggregator_url
 from nous.util.text import extract_visible_text, truncate_to_chars
+from nous.util.url import hostname
 
 logger = logging.getLogger(__name__)
+
+
+class _UseDefaultResolver:
+    """Sentinel: caller wants the default lazy Google-News resolver.
+
+    Distinguishes "argument omitted → build the default resolver" from an
+    explicit ``resolver=None`` (resolution disabled). A distinct type keeps the
+    public parameter typed as ``NewsRedirectResolver | None`` for callers.
+    """
+
+
+_USE_DEFAULT_RESOLVER = _UseDefaultResolver()
 
 # Minimum cleaned website text length to bother extracting from.
 _MIN_TEXT_CHARS = 200
@@ -117,6 +136,112 @@ def _is_junk_source_url(url: str) -> bool:
     return bare in _IMAGE_HOSTS or any(
         bare.endswith("." + h) for h in _IMAGE_HOSTS
     )
+
+
+class NewsRedirectResolver(Protocol):
+    """The slice of ``NewsClient`` extract-funding needs to de-redirect a URL.
+
+    A funding round's ``primary_news_url`` must be a real publisher URL so the
+    web "Sources" section links to Reuters/Bloomberg/TechCrunch, not the opaque
+    ``news.google.com/rss/articles/CBMi...`` redirect. ``news_articles.url`` is
+    usually already resolved (the ingest stage chases the redirect — Task A1),
+    but when resolution failed at ingest time the row still holds the Google-
+    News redirect, and extract-funding would copy it verbatim into the round.
+    This protocol lets the stage resolve such a URL just-in-time, while keeping
+    the dependency injectable (real ``NewsClient`` in prod, a fake in tests).
+    """
+
+    async def resolve_article(self, url: str) -> ResolvedArticle | None:
+        """Resolve a Google-News redirect to its publisher article, or None."""
+        ...
+
+
+class _LazyNewsClientResolver:
+    """Default :class:`NewsRedirectResolver` that opens a ``NewsClient`` lazily.
+
+    The overwhelming majority of funding rows already carry a resolved
+    publisher URL, so the common path must pay nothing: the underlying
+    ``NewsClient`` (and its HTTP clients) is constructed and entered only on the
+    FIRST ``news.google.com`` URL actually seen, then reused for the rest of the
+    run. ``aclose`` tears it down at end of run. Not concurrency-safe by design
+    — the extract-funding stage resolves URLs sequentially in its Phase-3 DB
+    loop, never inside the concurrent LLM fan-out.
+    """
+
+    def __init__(self, user_agent: str) -> None:
+        self._user_agent = user_agent
+        self._client: NewsClient | None = None
+
+    async def _ensure_client(self) -> NewsClient:
+        if self._client is None:
+            # Same construction as the ingest-news CLI: identify ourselves and
+            # honour the 1 req/s per-domain throttle baked into NewsClient.
+            client = NewsClient(
+                self._user_agent, requests_per_second_per_domain=1.0
+            )
+            await client.__aenter__()
+            self._client = client
+        return self._client
+
+    async def resolve_article(self, url: str) -> ResolvedArticle | None:
+        client = await self._ensure_client()
+        return await client.resolve_article(url)
+
+    async def aclose(self) -> None:
+        if self._client is not None:
+            await self._client.__aexit__(None, None, None)
+            self._client = None
+
+
+def _is_google_news_url(url: str) -> bool:
+    """True when ``url`` is a Google-News redirect (an unhelpful funding source)."""
+    return hostname(url) == _GOOGLE_NEWS_HOST
+
+
+async def _resolve_primary_news_url(
+    url: str, resolver: NewsRedirectResolver | None
+) -> str:
+    """Return a publisher URL for ``url``, de-redirecting Google-News links.
+
+    Idempotent and safe to call on every funding-source URL:
+
+    - A non-Google-News URL is already a real publisher (or the company's own
+      website on the fallback path) and is returned unchanged — no network, no
+      LLM, no cost. This is the overwhelmingly common case.
+    - A ``news.google.com`` redirect is resolved via ``resolver``; on success
+      the destination publisher URL is returned, otherwise the original is kept
+      (a redirect we can't resolve is still better than dropping the source).
+    - ``resolver=None`` disables resolution entirely (callers that opt out), so
+      the original URL is returned as-is.
+
+    Because legacy rows whose ``news_articles.url`` is still a Google-News
+    redirect flow through this same helper, re-running extract-funding over them
+    repairs their ``primary_news_url`` going forward (first-write-wins means it
+    lands on freshly-created rounds; the dedicated duplicate-round repair already
+    prefers a real-publisher URL when merging).
+    """
+    if resolver is None or not _is_google_news_url(url):
+        return url
+    try:
+        resolved = await resolver.resolve_article(url)
+    except Exception:
+        # Resolution is best-effort: a transient fetch/parse failure must never
+        # break extraction. Keep the redirect rather than losing the source.
+        logger.warning(
+            "Failed to resolve Google-News funding source URL; keeping redirect: %s",
+            url,
+            exc_info=True,
+        )
+        return url
+    if resolved is not None:
+        logger.info(
+            "Resolved Google-News funding source to publisher: %s -> %s",
+            url,
+            resolved.url,
+        )
+        return resolved.url
+    return url
+
 
 # Phrases that signal an article states a cumulative funding total. Used by
 # the --requery-totals backfill to pick already-processed articles worth a
@@ -415,6 +540,7 @@ async def _apply_news_outcome(
     outcome: _NewsOutcome,
     skip_low_confidence: bool,
     proximity_days: int,
+    resolver: NewsRedirectResolver | None,
 ) -> None:
     """Apply one article's news-funding outcome sequentially on the single
     session, committing per the original serial loop's cadence.
@@ -503,12 +629,18 @@ async def _apply_news_outcome(
             await session.commit()
         return
 
+    # The round's source must be a real publisher, not a news.google.com
+    # redirect. article.url is usually already resolved (ingest chases the
+    # redirect — Task A1); when it isn't (resolution failed then, or a legacy
+    # pre-A1 row), de-redirect it here before it lands in primary_news_url.
+    # Non-Google-News URLs return unchanged with no network call.
+    source_url = await _resolve_primary_news_url(article.url, resolver)
     await _persist_round_and_investors(
         session,
         summary,
         company_id=company.id,
         extraction=extraction,
-        primary_news_url=article.url,
+        primary_news_url=source_url,
         proximity_days=proximity_days,
     )
 
@@ -525,6 +657,9 @@ async def run_extract_funding(
     proximity_days: int = 60,
     requery_totals: bool = False,
     concurrency: int = _DEFAULT_WEBSITE_CONCURRENCY,
+    resolver: NewsRedirectResolver | None | _UseDefaultResolver = (
+        _USE_DEFAULT_RESOLVER
+    ),
 ) -> ExtractFundingSummary:
     """Walk unprocessed news_articles oldest-first and extract funding rounds.
 
@@ -546,8 +681,28 @@ async def run_extract_funding(
     unchanged. Rate-limit handling matches the serial loop: the FIRST 429 stops
     further LLM scheduling, the rate-limited article is NOT stamped, and
     everything already extracted is still applied + stamped.
+
+    ``resolver`` de-redirects a funding round's source URL: a round whose
+    source article URL is still a ``news.google.com`` redirect (resolution
+    failed at ingest time, or a legacy pre-Task-A1 row) would otherwise store
+    that unhelpful redirect as ``primary_news_url`` and the web "Sources"
+    section would link to ``news.google.com`` instead of the real publisher.
+    Defaults to a lazily-opened ``NewsClient`` (built from ``SEC_USER_AGENT``,
+    opened only if a redirect URL is actually seen, so all-publisher runs pay
+    nothing); pass an explicit object to inject one, or ``None`` to disable
+    resolution (the original URL is stored verbatim).
     """
     summary = ExtractFundingSummary()
+
+    # Resolve the sentinel to a concrete resolver up front so mypy narrows the
+    # type (the public param is a 3-way union). ``owns_resolver`` records that
+    # WE built the default and are therefore responsible for closing it.
+    owns_resolver = isinstance(resolver, _UseDefaultResolver)
+    active_resolver: NewsRedirectResolver | None
+    if isinstance(resolver, _UseDefaultResolver):
+        active_resolver = _LazyNewsClientResolver(Settings().SEC_USER_AGENT)
+    else:
+        active_resolver = resolver
 
     if requery_totals:
         stmt = (
@@ -600,33 +755,40 @@ async def run_extract_funding(
     # discipline while still parallelizing within a batch.
     batch_size = max(1, concurrency)
     stop = False
-    for start in range(0, len(inputs), batch_size):
-        if stop:
-            break
-        batch = inputs[start : start + batch_size]
-
-        # Phase 2: run this batch's LLM calls concurrently (no DB access).
-        outcomes = await asyncio.gather(*(_bounded(one) for one in batch))
-
-        # Phase 3: apply results sequentially on the single session, in
-        # selection order. A 429 stops scheduling further batches; the
-        # rate-limited article is counted but NOT stamped (deliberate — a
-        # transient provider limit shouldn't consume the article), exactly as
-        # the serial loop's pre-stamp ``break``. Outcomes that completed
-        # before/alongside it are still applied + stamped.
-        for one, outcome in zip(batch, outcomes, strict=True):
-            if outcome.rate_limited:
-                summary.skipped_rate_limited += 1
-                stop = True
+    try:
+        for start in range(0, len(inputs), batch_size):
+            if stop:
                 break
-            await _apply_news_outcome(
-                session,
-                summary,
-                inputs=one,
-                outcome=outcome,
-                skip_low_confidence=skip_low_confidence,
-                proximity_days=proximity_days,
-            )
+            batch = inputs[start : start + batch_size]
+
+            # Phase 2: run this batch's LLM calls concurrently (no DB access).
+            outcomes = await asyncio.gather(*(_bounded(one) for one in batch))
+
+            # Phase 3: apply results sequentially on the single session, in
+            # selection order. A 429 stops scheduling further batches; the
+            # rate-limited article is counted but NOT stamped (deliberate — a
+            # transient provider limit shouldn't consume the article), exactly
+            # as the serial loop's pre-stamp ``break``. Outcomes that completed
+            # before/alongside it are still applied + stamped.
+            for one, outcome in zip(batch, outcomes, strict=True):
+                if outcome.rate_limited:
+                    summary.skipped_rate_limited += 1
+                    stop = True
+                    break
+                await _apply_news_outcome(
+                    session,
+                    summary,
+                    inputs=one,
+                    outcome=outcome,
+                    skip_low_confidence=skip_low_confidence,
+                    proximity_days=proximity_days,
+                    resolver=active_resolver,
+                )
+    finally:
+        # Close the lazily-opened default resolver's HTTP clients. Only when we
+        # built it ourselves — an injected resolver is the caller's to manage.
+        if owns_resolver and isinstance(active_resolver, _LazyNewsClientResolver):
+            await active_resolver.aclose()
 
     # Recompute portfolio_count for all investors now that funding-round
     # investor links may have been added. Committed in its own transaction so a

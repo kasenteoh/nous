@@ -33,6 +33,7 @@ from nous.pipeline.extract_funding import (
     run_extract_funding,
     run_extract_funding_website,
 )
+from nous.sources.news import ResolvedArticle
 from nous.util.slugify import normalize_name
 
 pytestmark = pytest.mark.skipif(
@@ -2423,3 +2424,200 @@ async def test_news_concurrency_preserves_deterministic_write_order(
     # The newer article is processed first, so it creates the round and owns
     # primary_news_url (first-write-wins). Order-independent code would flake.
     assert rounds[0].primary_news_url == "https://news.example.com/order-newer"
+
+
+# ---------------------------------------------------------------------------
+# Google-News redirect resolution for primary_news_url
+#
+# When ingest could not de-redirect a Google-News link (consent interstitial,
+# robots-block, paywall stub, fetch error, or a legacy pre-Task-A1 row), the
+# article row still holds a ``news.google.com/...`` redirect. Extract-funding
+# must NOT copy that opaque redirect into ``funding_rounds.primary_news_url``
+# (the web "Sources" section would then link to news.google.com instead of the
+# real publisher). It resolves the redirect to the publisher URL just before
+# storing, falling back to the original only if resolution fails.
+# ---------------------------------------------------------------------------
+
+
+class _FakeResolver:
+    """Stand-in NewsRedirectResolver. Records calls; returns a canned result."""
+
+    def __init__(self, mapping: dict[str, ResolvedArticle | None]) -> None:
+        self._mapping = mapping
+        self.calls: list[str] = []
+
+    async def resolve_article(self, url: str) -> ResolvedArticle | None:
+        self.calls.append(url)
+        return self._mapping.get(url)
+
+
+_GN_REDIRECT = "https://news.google.com/rss/articles/CBMiAbCdEf?oc=5"
+
+
+async def test_google_news_source_url_resolved_to_publisher(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A round sourced from an unresolved GN redirect stores the PUBLISHER URL."""
+    company = _make_company("RedirectCo")
+    db.add(company)
+    await db.flush()
+    db.add(
+        _make_article(
+            company.id,
+            url=_GN_REDIRECT,
+            published=date(2026, 5, 1),
+        )
+    )
+    await db.flush()
+    await db.commit()
+
+    async def _fake_complete_json(prompt: str, schema: type) -> FundingExtraction:
+        return _make_extraction()
+
+    monkeypatch.setattr(
+        "nous.pipeline.extract_funding.complete_json", _fake_complete_json
+    )
+
+    publisher = "https://www.reuters.com/tech/redirectco-raises-50m"
+    resolver = _FakeResolver(
+        {
+            _GN_REDIRECT: ResolvedArticle(
+                url=publisher,
+                source="reuters.com",
+                body="x" * 600,
+            )
+        }
+    )
+
+    summary = await run_extract_funding(db, limit=10, resolver=resolver)
+    assert summary.funding_rounds_created == 1
+
+    rounds = (await db.execute(select(FundingRound))).scalars().all()
+    assert len(rounds) == 1
+    # The Google-News redirect was de-referenced to the real publisher URL.
+    assert rounds[0].primary_news_url == publisher
+    # The resolver was consulted exactly once, with the GN redirect.
+    assert resolver.calls == [_GN_REDIRECT]
+
+
+async def test_google_news_source_url_unresolvable_keeps_original(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When the GN redirect can't be resolved, keep it — better than no source."""
+    company = _make_company("UnresolvableCo")
+    db.add(company)
+    await db.flush()
+    db.add(
+        _make_article(company.id, url=_GN_REDIRECT, published=date(2026, 5, 1))
+    )
+    await db.flush()
+    await db.commit()
+
+    async def _fake_complete_json(prompt: str, schema: type) -> FundingExtraction:
+        return _make_extraction()
+
+    monkeypatch.setattr(
+        "nous.pipeline.extract_funding.complete_json", _fake_complete_json
+    )
+
+    # Resolver returns None (consent interstitial / robots-block / paywall).
+    resolver = _FakeResolver({_GN_REDIRECT: None})
+
+    await run_extract_funding(db, limit=10, resolver=resolver)
+
+    rounds = (await db.execute(select(FundingRound))).scalars().all()
+    assert len(rounds) == 1
+    assert rounds[0].primary_news_url == _GN_REDIRECT
+    assert resolver.calls == [_GN_REDIRECT]
+
+
+async def test_publisher_source_url_is_not_resolved(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An already-resolved publisher URL is stored as-is; resolver untouched.
+
+    This is the common path (ingest resolves at Task A1), so it must incur no
+    resolver call at all — the round's source URL passes through unchanged.
+    """
+    company = _make_company("PublisherCo")
+    db.add(company)
+    await db.flush()
+    publisher = "https://techcrunch.com/2026/05/01/publisherco-series-a"
+    db.add(_make_article(company.id, url=publisher, published=date(2026, 5, 1)))
+    await db.flush()
+    await db.commit()
+
+    async def _fake_complete_json(prompt: str, schema: type) -> FundingExtraction:
+        return _make_extraction()
+
+    monkeypatch.setattr(
+        "nous.pipeline.extract_funding.complete_json", _fake_complete_json
+    )
+
+    # Map the GN redirect only; a publisher URL must never reach the resolver.
+    resolver = _FakeResolver({_GN_REDIRECT: None})
+
+    await run_extract_funding(db, limit=10, resolver=resolver)
+
+    rounds = (await db.execute(select(FundingRound))).scalars().all()
+    assert len(rounds) == 1
+    assert rounds[0].primary_news_url == publisher
+    assert resolver.calls == []  # non-GN URL → no resolution attempted
+
+
+async def test_resolver_none_disables_resolution(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``resolver=None`` stores the source URL verbatim (resolution disabled)."""
+    company = _make_company("DisabledCo")
+    db.add(company)
+    await db.flush()
+    db.add(
+        _make_article(company.id, url=_GN_REDIRECT, published=date(2026, 5, 1))
+    )
+    await db.flush()
+    await db.commit()
+
+    async def _fake_complete_json(prompt: str, schema: type) -> FundingExtraction:
+        return _make_extraction()
+
+    monkeypatch.setattr(
+        "nous.pipeline.extract_funding.complete_json", _fake_complete_json
+    )
+
+    await run_extract_funding(db, limit=10, resolver=None)
+
+    rounds = (await db.execute(select(FundingRound))).scalars().all()
+    assert len(rounds) == 1
+    assert rounds[0].primary_news_url == _GN_REDIRECT
+
+
+async def test_resolver_failure_falls_back_to_redirect(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A raised resolver error must not break extraction; keep the redirect."""
+    company = _make_company("BoomCo")
+    db.add(company)
+    await db.flush()
+    db.add(
+        _make_article(company.id, url=_GN_REDIRECT, published=date(2026, 5, 1))
+    )
+    await db.flush()
+    await db.commit()
+
+    async def _fake_complete_json(prompt: str, schema: type) -> FundingExtraction:
+        return _make_extraction()
+
+    monkeypatch.setattr(
+        "nous.pipeline.extract_funding.complete_json", _fake_complete_json
+    )
+
+    class _BoomResolver:
+        async def resolve_article(self, url: str) -> ResolvedArticle | None:
+            raise RuntimeError("network exploded")
+
+    summary = await run_extract_funding(db, limit=10, resolver=_BoomResolver())
+    # Extraction still succeeded; the round just keeps the redirect URL.
+    assert summary.funding_rounds_created == 1
+    rounds = (await db.execute(select(FundingRound))).scalars().all()
+    assert rounds[0].primary_news_url == _GN_REDIRECT
