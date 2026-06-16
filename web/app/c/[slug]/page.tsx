@@ -12,6 +12,7 @@ import {
 } from "@/lib/queries";
 import type { CompanyRow, FundingRoundWithInvestors } from "@/lib/types";
 import {
+  discoveredViaLabel,
   formatDate,
   formatEmployeeRange,
   formatLocation,
@@ -335,12 +336,12 @@ export default async function CompanyPage({ params }: Props) {
           />
           {/* Discovery badge — every company has a discovered_via value
               ('vc_portfolio' | 'news' | 'techcrunch'), surfacing how nous
-              first found the company. */}
+              first found the company. Humanized so the raw enum never leaks. */}
           <span
             className="rounded border border-edge px-2 py-0.5 text-xs text-ink-muted"
             title="How nous first discovered this company"
           >
-            Discovered via {company.discovered_via}
+            Discovered via {discoveredViaLabel(company.discovered_via)}
           </span>
         </div>
 
@@ -489,21 +490,27 @@ export default async function CompanyPage({ params }: Props) {
       </header>
 
       {/* ── Husk placeholder (Task 1.5) ────────────────────────────────────
-          Shown when a company has no description_long — it was discovered by
-          the pipeline but hasn't been enriched yet. Renders as an honest
-          "coming soon" notice so the page doesn't look broken. Only shown
-          when there is also no description_short (no tagline = full husk).
-          Non-husk companies (those with description_long) get the full About
-          section below instead. ──────────────────────────────────────────── */}
-      {!company.description_long && !company.description_short && (
-        <div className="mb-12 rounded-lg border border-dashed border-edge px-8 py-10">
-          <p className="text-sm text-ink-muted">
-            We&apos;ve discovered <span className="text-ink-soft font-medium">{company.name}</span>{" "}
-            via {company.discovered_via.replace(/_/g, " ")} but haven&apos;t built a full
-            profile yet. Check back after the next pipeline run.
-          </p>
-        </div>
-      )}
+          Shown only for a true husk: discovered by the pipeline but not yet
+          enriched AND carrying no other substance — no description, funding
+          history, news, competitors, or investors. A company that has funding
+          or news (even without a description) renders those sections instead,
+          so we never claim "no profile yet" on a page full of data (e.g. a
+          well-known company with a deep funding history). ──────────────────── */}
+      {!company.description_long &&
+        !company.description_short &&
+        fundingRounds.length === 0 &&
+        news.length === 0 &&
+        competitors.length === 0 &&
+        investors.length === 0 && (
+          <div className="mb-12 rounded-lg border border-dashed border-edge px-8 py-10">
+            <p className="text-sm text-ink-muted">
+              We&apos;ve discovered{" "}
+              <span className="text-ink-soft font-medium">{company.name}</span> via{" "}
+              {discoveredViaLabel(company.discovered_via)} but haven&apos;t built a
+              full profile yet. Check back after the next pipeline run.
+            </p>
+          </div>
+        )}
 
       {/* ── About ──────────────────────────────────────────────────────── */}
       {company.description_long && (

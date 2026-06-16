@@ -78,3 +78,22 @@ export function formatLocation(
   const parts = [city, state].filter(Boolean);
   return parts.length > 0 ? parts.join(", ") : "—";
 }
+
+const DISCOVERED_VIA_LABELS: Record<string, string> = {
+  vc_portfolio: "VC portfolio",
+  techcrunch: "TechCrunch",
+  news: "News",
+};
+
+/**
+ * Human-readable label for a company's `discovered_via` value (e.g.
+ * "vc_portfolio" → "VC portfolio"). Unknown keys fall back to the raw value,
+ * title-cased, so new pipeline values self-heal in the UI rather than leaking
+ * a raw enum.
+ */
+export function discoveredViaLabel(value: string): string {
+  return (
+    DISCOVERED_VIA_LABELS[value] ??
+    value.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase())
+  );
+}

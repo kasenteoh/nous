@@ -26,9 +26,7 @@ export function siteOrigin(): string {
 
 /**
  * Prefilled "new GitHub issue" URL for the "Report incorrect data" link
- * on company pages.
- *
- * Unused until the repo goes public — see BACKLOG (report-incorrect-data link).
+ * in the site footer. The repo is public, so these links resolve for visitors.
  */
 export function repoIssueUrl(title: string, body: string): string {
   return `${REPO_URL}/issues/new?title=${encodeURIComponent(title)}&body=${encodeURIComponent(body)}`;
