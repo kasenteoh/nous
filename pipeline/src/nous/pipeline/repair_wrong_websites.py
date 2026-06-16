@@ -1,6 +1,6 @@
 """repair-wrong-websites pipeline stage — idempotent poisoned-row repair.
 
-Four detection passes (spec 2026-06-13 Task 2.2):
+Five detection passes (spec 2026-06-13 Task 2.2; pass (e) added 2026-06-16):
 
 (a) Aggregator/directory URL: company.website host is in the shared
     AGGREGATOR_HOSTS reject set (or matches DIRECTORY_PATH_RE).  These were
@@ -28,7 +28,27 @@ Four detection passes (spec 2026-06-13 Task 2.2):
     the resolver's, since scanning a real company's full page text false-positives
     on the looser signals), and resets live (non-excluded) rows as (a)/(b) do.
 
-Repair action for (a)/(b)/(d):
+(e) Wrong-company profile: the stored profile is clearly about a DIFFERENT
+    company than the row's name.  In production the hardened resolver still let a
+    few of these through before it shipped: Kalshi (a prediction market) carried
+    FrenFlow's description ("multi-venue prediction-market platform ... copy-trade
+    across Polymarket, Kalshi, Predict.fun, Hyperliquid") because the resolver
+    landed on FrenFlow's site, which merely lists Kalshi as a venue; AgentMail
+    carried a "Series V" description.  Pass (e) is HIGH-PRECISION by double
+    confirmation — it acts only when BOTH:
+      1. description_short OPENS by naming a different company — a leading
+         "<Other> is/provides/offers ..." whose subject does not fuzzy-match
+         company.name (nous.util.title_subject.description_subject_mismatches),
+         AND
+      2. the stored homepage page's title line (the first line of the scraped
+         RawPage.content, which scrape-homepages prepends from <title>) is NOT
+         dominated by company.name (name_is_dominant_subject is False) — i.e. the
+         page itself reads as a different brand, corroborating the description.
+    A correctly-matched company ("Ramp is an all-in-one spend management
+    platform ...") fails (1) — its subject IS the company — so it is never
+    flagged.  Only live (non-excluded) rows are reset.
+
+Repair action for (a)/(b)/(d)/(e):
     - Append bad URL to rejected_urls (so the hardened resolver never re-picks it)
     - Clear: website, website_resolved_at, description_short, description_long,
       primary_category, tags, last_enriched_at, last_enriched_payload,
@@ -46,6 +66,8 @@ Idempotency:
     - (b): after repair, description_short IS NULL → no longer selected
     - (c): after repair, exclusion_reason IS NULL → no longer selected
     - (d): after repair, website IS NULL + raw_pages dropped → no longer selected
+    - (e): after repair, website + description_short NULL + raw_pages dropped →
+      no longer selected
 
 ``--dry-run`` logs intended actions without writing.
 """
@@ -63,6 +85,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from nous.db.models import Company, RawPage
 from nous.sources.parked import page_is_for_sale_lander
 from nous.sources.reject_hosts import is_aggregator_url
+from nous.util.title_subject import (
+    description_subject_mismatches,
+    name_is_dominant_subject,
+)
 from nous.util.url import canonical_domain
 
 logger = logging.getLogger(__name__)
@@ -149,6 +175,7 @@ class RepairWrongWebsitesSummary(BaseModel):
     parked_desc_reset: int = 0
     page_content_reset: int = 0
     false_exclusion_requeued: int = 0
+    wrong_company_reset: int = 0
     dry_run: bool = False
 
 
@@ -316,7 +343,79 @@ async def run_repair_wrong_websites(
     if not dry_run:
         await session.commit()
 
+    # ── Pass (e): wrong-company profile ──────────────────────────────────────
+    # HIGH-PRECISION: double-confirmed wrong-company match (description names a
+    # different company AND the stored page title is a different brand). The SQL
+    # net is broad on purpose (every live enriched row with a description); the
+    # two Python confirmations below — both keyed on the conservative
+    # title_subject helpers — are what make this safe to MUTATE.
+    wrong_company_candidates = (
+        (
+            await session.execute(
+                select(Company)
+                .where(Company.website.is_not(None))
+                .where(Company.exclusion_reason.is_(None))
+                .where(Company.description_short.is_not(None))
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+    for company in wrong_company_candidates:
+        description = company.description_short
+        if not description:
+            continue
+        # (1) Description must OPEN by naming a company that is clearly not this
+        # row. description_subject_mismatches returns False unless it actually
+        # extracted a named subject that fails the fuzzy-name match — so a
+        # correctly-matched "Ramp is ..." (subject == company) is never selected.
+        if not description_subject_mismatches(description, company.name):
+            continue
+        # (2) Corroborate with the stored page: the homepage title line must NOT
+        # be dominated by the company name. scrape-homepages stores extracted
+        # text with the <title> prepended as the first line, so the first
+        # non-empty line is our title proxy. Requiring the page itself to read as
+        # a different brand guards against a one-off odd description opener on a
+        # row whose site is genuinely the company's.
+        page = await _homepage_page(session, company)
+        if page is None:
+            continue
+        title_line = _title_line(page.content)
+        if not title_line or name_is_dominant_subject(title_line, company.name):
+            continue
+
+        logger.info(
+            "repair-wrong-websites (e): resetting wrong-company profile %r "
+            "(website %s; title %r; desc %r)",
+            company.name,
+            company.website,
+            title_line[:80],
+            description[:80],
+        )
+        summary.wrong_company_reset += 1
+        if not dry_run:
+            await _reset_website_fields(session, company, now)
+
+    if not dry_run:
+        await session.commit()
+
     return summary
+
+
+def _title_line(content: str) -> str:
+    """Return the first non-empty line of stored page *content* — the title proxy.
+
+    scrape-homepages stores ``extract_visible_text`` output, which prepends the
+    page ``<title>`` (and SEO meta) as the first section, so the first non-empty
+    line is the page's title for our purposes.  Returns "" when *content* is
+    blank.
+    """
+    for line in content.splitlines():
+        stripped = line.strip()
+        if stripped:
+            return stripped
+    return ""
 
 
 async def _homepage_page(session: AsyncSession, company: Company) -> RawPage | None:

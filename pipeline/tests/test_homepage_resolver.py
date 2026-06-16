@@ -32,6 +32,15 @@ HTML_SOFT_FOR_SALE = (FIXTURES / "soft_for_sale_page.html").read_text()
 # Real company homepage: name in <title> and <h1>
 HTML_REAL_COMPANY = (FIXTURES / "real_company_homepage.html").read_text()
 
+# FrenFlow's site, which merely LISTS Kalshi as a supported venue. The
+# production resolver wrongly accepted this for the company "Kalshi" because
+# "Kalshi" appears in an <h1> — a strong position — even though FrenFlow, not
+# Kalshi, is the subject.
+HTML_FRENFLOW_LISTS_KALSHI = (FIXTURES / "frenflow_lists_kalshi.html").read_text()
+
+# The real Kalshi homepage: Kalshi is the dominant subject of <title> + <h1>.
+HTML_KALSHI_REAL = (FIXTURES / "kalshi_real_homepage.html").read_text()
+
 USER_AGENT = "nous-test test@example.com"
 
 
@@ -340,6 +349,78 @@ async def test_phase1_rejects_name_only_in_body_text_not_title_or_h1() -> None:
         )
 
     assert result is None
+
+
+# ---------------------------------------------------------------------------
+# Dominant-subject hardening — list-among-others / wrong-leading-brand pages
+# ---------------------------------------------------------------------------
+
+
+async def test_phase1_rejects_page_that_only_lists_company_among_others() -> None:
+    """The Kalshi/FrenFlow incident.
+
+    A TLD guess for "Kalshi" lands on a page whose <title> is "FrenFlow — …" and
+    whose <h1> lists "Kalshi" among other venues.  "Kalshi" IS in a strong
+    position (the <h1>), so the old resolver accepted it and rendered FrenFlow's
+    description for Kalshi.  The hardened resolver requires Kalshi to be the
+    DOMINANT subject — it is not — so the page is REJECTED.
+    """
+    transport = ResolverTransport({"kalshi.com": (200, HTML_FRENFLOW_LISTS_KALSHI)})
+
+    client = HomepageClient(user_agent=USER_AGENT)
+    async with client:
+        _inject_transport(client, transport)
+        result = await resolve_homepage(
+            client,
+            "kalshi",
+            "Kalshi",
+            tlds=(".com",),
+        )
+
+    assert result is None
+
+
+async def test_phase2_rejects_page_that_only_lists_company_among_others() -> None:
+    """Same incident via the DDG fallback path: a candidate URL serves FrenFlow's
+    multi-venue page, which must be rejected for company 'Kalshi'."""
+    search_results = ["https://frenflow.com/"]
+    transport = ResolverTransport({"frenflow.com": (200, HTML_FRENFLOW_LISTS_KALSHI)})
+
+    client = MockSearchHomepageClient(
+        search_results=search_results,
+        user_agent=USER_AGENT,
+    )
+    async with client:
+        _inject_transport(client, transport)
+        result = await resolve_homepage(
+            client,
+            "kalshi",
+            "Kalshi",
+            tlds=(),
+        )
+
+    assert result is None
+
+
+async def test_phase1_accepts_real_kalshi_homepage() -> None:
+    """The real Kalshi homepage (Kalshi dominant in <title> and <h1>) is ACCEPTED.
+
+    Companion to the rejection test: proves the hardening does not over-reject a
+    legitimate single-subject homepage."""
+    transport = ResolverTransport({"kalshi.com": (200, HTML_KALSHI_REAL)})
+
+    client = HomepageClient(user_agent=USER_AGENT)
+    async with client:
+        _inject_transport(client, transport)
+        result = await resolve_homepage(
+            client,
+            "kalshi",
+            "Kalshi",
+            tlds=(".com",),
+        )
+
+    assert result is not None
+    assert "kalshi.com" in result
 
 
 # ---------------------------------------------------------------------------

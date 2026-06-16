@@ -566,3 +566,336 @@ async def test_for_sale_page_content_ignores_available_for_purchase(
     await db.refresh(real)
     assert real.website == "https://www.at-bay.com/"
     assert real.description_short is not None
+
+
+# ── Pass (e): wrong-company profile ──────────────────────────────────────────
+
+
+async def test_wrong_company_profile_reset_kalshi(db: AsyncSession) -> None:
+    """The Kalshi/FrenFlow incident.
+
+    Kalshi's stored profile is about FrenFlow: the resolver landed on FrenFlow's
+    site (which merely lists Kalshi as a venue), so description_short opens
+    'FrenFlow is ...' and the scraped page's title is 'FrenFlow — ...'. Pass (e)
+    double-confirms the mismatch and resets the row."""
+    kalshi = _co(
+        "Kalshi",
+        "kalshi-rww-e",
+        website="https://frenflow.com",
+        description_short=(
+            "FrenFlow is a multi-venue prediction-market platform that lets you "
+            "copy-trade the sharpest traders across Polymarket, Kalshi, "
+            "Predict.fun, and Hyperliquid from one dashboard."
+        ),
+        description_long="A copy-trading platform for prediction markets.",
+        primary_category="fintech",
+    )
+    db.add(kalshi)
+    await db.flush()
+    db.add(
+        RawPage(
+            company_id=kalshi.id,
+            url="https://frenflow.com/",
+            content=(
+                "FrenFlow — Multi-Venue Prediction Market Platform\n"
+                "Copy-trade prediction markets across Polymarket, Kalshi, "
+                "Predict.fun and Hyperliquid."
+            ),
+        )
+    )
+    await db.commit()
+
+    summary = await run_repair_wrong_websites(db)
+    assert summary.wrong_company_reset == 1
+
+    await db.refresh(kalshi)
+    assert kalshi.website is None
+    assert kalshi.description_short is None
+    assert kalshi.description_long is None
+    assert "https://frenflow.com" in kalshi.rejected_urls
+    assert (
+        (await db.execute(select(RawPage).where(RawPage.company_id == kalshi.id)))
+        .scalars()
+        .all()
+        == []
+    )
+
+
+async def test_wrong_company_profile_reset_agentmail(db: AsyncSession) -> None:
+    """AgentMail rendered a 'Series V' description — a different company."""
+    agentmail = _co(
+        "AgentMail",
+        "agentmail-rww-e",
+        website="https://seriesv.example",
+        description_short=(
+            "Series V provides early-stage venture capital to technical founders "
+            "building developer infrastructure."
+        ),
+    )
+    db.add(agentmail)
+    await db.flush()
+    db.add(
+        RawPage(
+            company_id=agentmail.id,
+            url="https://seriesv.example/",
+            content=(
+                "Series V — Capital for technical founders\n"
+                "We back developer-first companies from pre-seed to Series A."
+            ),
+        )
+    )
+    await db.commit()
+
+    summary = await run_repair_wrong_websites(db)
+    assert summary.wrong_company_reset == 1
+    await db.refresh(agentmail)
+    assert agentmail.website is None
+    assert agentmail.description_short is None
+
+
+async def test_wrong_company_correct_match_not_flagged(db: AsyncSession) -> None:
+    """PRECISION GUARD: a correctly-matched company (description subject ==
+    company name) is NEVER flagged by pass (e)."""
+    ramp = _co(
+        "Ramp",
+        "ramp-rww-e",
+        website="https://ramp.com",
+        description_short=(
+            "Ramp is an all-in-one spend management platform that combines "
+            "corporate cards, bill pay, and accounting automation."
+        ),
+        description_long="Spend management for finance teams.",
+    )
+    db.add(ramp)
+    await db.flush()
+    db.add(
+        RawPage(
+            company_id=ramp.id,
+            url="https://ramp.com/",
+            content=(
+                "Ramp — The all-in-one finance platform\n"
+                "Ramp is the corporate card and spend management platform that "
+                "helps finance teams save time and money."
+            ),
+        )
+    )
+    await db.commit()
+
+    summary = await run_repair_wrong_websites(db)
+    assert summary.wrong_company_reset == 0
+    await db.refresh(ramp)
+    assert ramp.website == "https://ramp.com"
+    assert ramp.description_short is not None
+
+
+async def test_wrong_company_suffix_variant_not_flagged(db: AsyncSession) -> None:
+    """PRECISION GUARD: a description that opens with the company name plus a
+    corporate suffix (or vice-versa) is NOT a mismatch."""
+    co = _co(
+        "Kalshi",
+        "kalshi-suffix-rww-e",
+        website="https://kalshi.com",
+        description_short=(
+            "Kalshi Inc operates the first CFTC-regulated prediction market in "
+            "the United States."
+        ),
+    )
+    db.add(co)
+    await db.flush()
+    db.add(
+        RawPage(
+            company_id=co.id,
+            url="https://kalshi.com/",
+            content=(
+                "Kalshi — Trade on the outcome of events\n"
+                "Kalshi is the first regulated prediction market in the US."
+            ),
+        )
+    )
+    await db.commit()
+
+    summary = await run_repair_wrong_websites(db)
+    assert summary.wrong_company_reset == 0
+    await db.refresh(co)
+    assert co.website == "https://kalshi.com"
+
+
+async def test_wrong_company_unrecognized_opener_not_flagged(
+    db: AsyncSession,
+) -> None:
+    """PRECISION GUARD: a description that does NOT open with a '<Name> <verb>'
+    pattern yields no extractable subject, so no mismatch is asserted — even
+    though the page title is a different brand."""
+    co = _co(
+        "Acme",
+        "acme-noopener-rww-e",
+        website="https://acme.com",
+        description_short=(
+            "An all-in-one platform for engineering teams to ship software faster."
+        ),
+    )
+    db.add(co)
+    await db.flush()
+    db.add(
+        RawPage(
+            company_id=co.id,
+            url="https://acme.com/",
+            content="Some Other Brand — Homepage\nWelcome to our site.",
+        )
+    )
+    await db.commit()
+
+    summary = await run_repair_wrong_websites(db)
+    assert summary.wrong_company_reset == 0
+    await db.refresh(co)
+    assert co.website == "https://acme.com"
+    assert co.description_short is not None
+
+
+async def test_wrong_company_corroboration_guard_page_is_company(
+    db: AsyncSession,
+) -> None:
+    """PRECISION GUARD: even if the description opens with a different name, pass
+    (e) does NOT fire when the stored page title IS dominated by the company —
+    the page is genuinely the company's, so the odd description is left for
+    re-enrichment, not treated as a wrong-site match."""
+    co = _co(
+        "Ramp",
+        "ramp-corrob-rww-e",
+        website="https://ramp.com",
+        # Description opens naming a different company (a one-off LLM slip)...
+        description_short="Brex is a corporate card company for startups.",
+    )
+    db.add(co)
+    await db.flush()
+    db.add(
+        RawPage(
+            company_id=co.id,
+            url="https://ramp.com/",
+            # ...but the page title is unambiguously Ramp's.
+            content=(
+                "Ramp — The all-in-one finance platform\n"
+                "Ramp helps finance teams save time and money."
+            ),
+        )
+    )
+    await db.commit()
+
+    summary = await run_repair_wrong_websites(db)
+    assert summary.wrong_company_reset == 0
+    await db.refresh(co)
+    assert co.website == "https://ramp.com"
+
+
+async def test_wrong_company_no_raw_page_not_flagged(db: AsyncSession) -> None:
+    """PRECISION GUARD: with no scraped page to corroborate, pass (e) cannot
+    confirm the mismatch and leaves the row alone."""
+    co = _co(
+        "Kalshi",
+        "kalshi-nopage-rww-e",
+        website="https://frenflow.com",
+        description_short="FrenFlow is a multi-venue prediction-market platform.",
+    )
+    db.add(co)
+    await db.commit()
+
+    summary = await run_repair_wrong_websites(db)
+    assert summary.wrong_company_reset == 0
+    await db.refresh(co)
+    assert co.website == "https://frenflow.com"
+
+
+async def test_wrong_company_excluded_row_not_flagged(db: AsyncSession) -> None:
+    """Excluded rows are out of scope for pass (e) (hidden already)."""
+    co = _co(
+        "Kalshi",
+        "kalshi-excl-rww-e",
+        website="https://frenflow.com",
+        description_short="FrenFlow is a multi-venue prediction-market platform.",
+        exclusion_reason="not_a_startup",
+        exclusion_detail="Looks like a directory.",
+    )
+    db.add(co)
+    await db.flush()
+    db.add(
+        RawPage(
+            company_id=co.id,
+            url="https://frenflow.com/",
+            content="FrenFlow — Multi-Venue Prediction Market Platform\nCopy-trade.",
+        )
+    )
+    await db.commit()
+
+    summary = await run_repair_wrong_websites(db)
+    assert summary.wrong_company_reset == 0
+    await db.refresh(co)
+    assert co.website == "https://frenflow.com"
+
+
+async def test_idempotent_wrong_company(db: AsyncSession) -> None:
+    """Second run after pass (e) repair finds nothing to fix."""
+    co = _co(
+        "Kalshi",
+        "kalshi-idem-rww-e",
+        website="https://frenflow.com",
+        description_short=(
+            "FrenFlow is a multi-venue prediction-market platform across "
+            "Polymarket, Kalshi, and Predict.fun."
+        ),
+    )
+    db.add(co)
+    await db.flush()
+    db.add(
+        RawPage(
+            company_id=co.id,
+            url="https://frenflow.com/",
+            content="FrenFlow — Multi-Venue Prediction Market Platform\nCopy-trade.",
+        )
+    )
+    await db.commit()
+
+    first = await run_repair_wrong_websites(db)
+    assert first.wrong_company_reset == 1
+    second = await run_repair_wrong_websites(db)
+    assert second.wrong_company_reset == 0
+    assert second.aggregator_url_reset == 0
+    assert second.parked_desc_reset == 0
+    assert second.page_content_reset == 0
+
+
+async def test_wrong_company_dry_run_writes_nothing(db: AsyncSession) -> None:
+    """--dry-run counts a pass (e) candidate without mutating it."""
+    co = _co(
+        "Kalshi",
+        "kalshi-dry-rww-e",
+        website="https://frenflow.com",
+        description_short=(
+            "FrenFlow is a multi-venue prediction-market platform across "
+            "Polymarket, Kalshi, and Predict.fun."
+        ),
+    )
+    db.add(co)
+    await db.flush()
+    db.add(
+        RawPage(
+            company_id=co.id,
+            url="https://frenflow.com/",
+            content="FrenFlow — Multi-Venue Prediction Market Platform\nCopy-trade.",
+        )
+    )
+    await db.commit()
+
+    summary = await run_repair_wrong_websites(db, dry_run=True)
+    assert summary.dry_run is True
+    assert summary.wrong_company_reset == 1
+    await db.refresh(co)
+    assert co.website == "https://frenflow.com"
+    assert co.description_short is not None
+    assert (
+        len(
+            (await db.execute(select(RawPage).where(RawPage.company_id == co.id)))
+            .scalars()
+            .all()
+        )
+        == 1
+    )
