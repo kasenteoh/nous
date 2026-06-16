@@ -203,3 +203,31 @@ def test_prompt_lists_canonical_industries() -> None:
     prompt = build_prompt(company_name="Acme", cleaned_text="x")
     assert "crypto/web3" in prompt  # a bucket only present via the canonical list
     assert "vertical SaaS" in prompt
+
+
+# ---------------------------------------------------------------------------
+# is_startup rejection guidance — kept consistent with company_eligibility.py
+# (the Manta / Lucra leak fix). The enrichment prompt and the judge-eligibility
+# prompt must reject the same non-startup categories, so assert them here too.
+# ---------------------------------------------------------------------------
+
+
+def test_is_startup_guidance_rejects_nonstartups() -> None:
+    prompt = build_prompt(company_name="Acme", cleaned_text="x").lower()
+    assert "software" in prompt
+    assert "venture-scale" in prompt
+    # The explicit reject categories.
+    assert "directory" in prompt
+    assert "listings site" in prompt
+    assert "coaching" in prompt
+    assert "mindset" in prompt
+    assert "agency" in prompt
+    assert "consultancy" in prompt
+    assert "lifestyle business" in prompt
+    assert "local small business" in prompt
+
+
+def test_is_startup_guidance_guards_precision() -> None:
+    prompt = build_prompt(company_name="Acme", cleaned_text="x").lower()
+    assert "unsure" in prompt
+    assert "hides" in prompt or "hide" in prompt
