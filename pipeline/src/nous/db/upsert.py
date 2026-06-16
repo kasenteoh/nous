@@ -28,7 +28,10 @@ from nous.db.models import (
 )
 from nous.llm.prompts.company_description import PersonExtraction
 from nous.llm.prompts.funding_extraction import FundingExtraction
-from nous.util.investor_name import canonicalize_investor_name
+from nous.util.investor_name import (
+    canonicalize_investor_name,
+    is_junk_investor_name,
+)
 from nous.util.slugify import normalize_name, slug_with_disambiguator, slugify
 from nous.util.url import canonical_domain
 
@@ -627,8 +630,19 @@ async def upsert_investor(
     collision handling seeded by ``name_normalized`` — so the same investor
     always lands on the same slug.
 
+    Rejects non-investor placeholder names (``is_junk_investor_name`` — e.g.
+    "a group of investors", "undisclosed", "angel investors") with a
+    ``ValueError`` so they never become rows. Funding extraction faithfully
+    pulls these out of article phrasing like "raised from a group of
+    investors"; callers (extract-funding) already skip on ValueError, so a junk
+    name silently drops without linking. This is the insert-time half of the
+    cleanup — ``dedup-investors`` removes any junk rows that predate this guard.
+
     Returns ``(row, created)``.
     """
+    if is_junk_investor_name(name):
+        raise ValueError(f"investor name is a non-investor placeholder: {name!r}")
+
     canonical = canonicalize_investor_name(name)
     if not canonical:
         raise ValueError(f"investor name canonicalizes to empty: {name!r}")
