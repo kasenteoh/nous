@@ -8,8 +8,85 @@ import { WatchlistButton } from "@/components/WatchlistButton";
 import { CompareToggle } from "@/components/CompareBar";
 import type { CompanyListRow } from "@/lib/types";
 
+/**
+ * Derive a one-character monogram for the logo fallback: the first
+ * alphanumeric character of the name, uppercased. Punctuation/emoji-led names
+ * ("·Foo", "🚀Bar") skip to the first letter or digit; a name with none (pure
+ * symbols, or empty) falls back to "?" so the square is never blank.
+ */
+function monogram(name: string): string {
+  const match = name.match(/[a-z0-9]/i);
+  return (match?.[0] ?? "?").toUpperCase();
+}
+
+interface CompanyLogoProps {
+  /** companies.logo_url — an external favicon URL, or null/absent (the common
+   *  case until the pipeline backfills it). */
+  logoUrl?: string | null;
+  /** Company name — used for the alt text and the monogram fallback. */
+  name: string;
+  /** Rendered square size in px (width === height). */
+  size: number;
+}
+
+/**
+ * A company's logo as a fixed-size rounded square, with a stable monogram
+ * fallback so the layout never shifts between the two states. When `logoUrl`
+ * is present we render a plain lazy `<img>` with explicit dimensions (these are
+ * external favicon URLs, so no next/image domain config); otherwise the
+ * company's first initial sits in a themed bordered square.
+ *
+ * Exported so the company detail header can reuse the exact same treatment at a
+ * larger size.
+ */
+export function CompanyLogo({ logoUrl, name, size }: CompanyLogoProps) {
+  const dimension = { width: size, height: size };
+
+  if (logoUrl) {
+    return (
+      // Plain <img>, not next/image, by design: these are tiny external favicon
+      // URLs from arbitrary company domains, so next/image's remote-domain
+      // allowlist and optimizer would add config + a proxy hop for no real
+      // benefit at this size. Explicit width/height + lazy loading cover the
+      // perf concern the rule guards against.
+      // eslint-disable-next-line @next/next/no-img-element
+      <img
+        src={logoUrl}
+        alt={`${name} logo`}
+        width={size}
+        height={size}
+        loading="lazy"
+        // object-contain keeps non-square favicons from stretching; the bg +
+        // border give transparent/dark icons a consistent themed plate that
+        // matches the monogram fallback's footprint exactly.
+        className="shrink-0 rounded border border-edge bg-canvas object-contain"
+        style={dimension}
+      />
+    );
+  }
+
+  return (
+    <span
+      aria-hidden="true"
+      className="flex shrink-0 select-none items-center justify-center rounded border border-edge bg-canvas font-semibold text-ink-muted"
+      // Scale the initial to ~45% of the box so it reads at both card and
+      // header sizes without a separate class per call site.
+      style={{ ...dimension, fontSize: Math.round(size * 0.45) }}
+    >
+      {monogram(name)}
+    </span>
+  );
+}
+
 interface CompanyCardProps {
   company: CompanyListRow;
+  /**
+   * Optional `companies.logo_url`. The browse/portfolio projections
+   * (CompanyListRow) don't carry it today, so this is omitted at every current
+   * call site and the monogram fallback renders — wired as an optional prop so
+   * the logo lights up automatically if a future query selects the column.
+   */
+  logoUrl?: string | null;
 }
 
 /**
@@ -21,7 +98,7 @@ interface CompanyCardProps {
  * is invalid HTML: the star is absolutely positioned in the corner, the Compare
  * toggle sits in a footer row below the linked region.
  */
-export function CompanyCard({ company }: CompanyCardProps) {
+export function CompanyCard({ company, logoUrl }: CompanyCardProps) {
   return (
     <div className="group relative flex flex-col rounded-lg border border-edge p-5 hover:border-ink-muted transition-colors">
       {/* Watchlist toggle — kept out of the link flow (absolute sibling). The
@@ -33,8 +110,10 @@ export function CompanyCard({ company }: CompanyCardProps) {
 
       <Link href={`/c/${company.slug}`} className="block">
         {/* Status marker (Acquired / Shut down / IPO) is kept outside
-            the h2 so the group-hover underline applies to the name only. */}
+            the h2 so the group-hover underline applies to the name only.
+            The logo (or monogram fallback) leads the row, left of the name. */}
         <div className="flex flex-wrap items-center gap-2 pr-8">
+          <CompanyLogo logoUrl={logoUrl} name={company.name} size={26} />
           <h2 className="font-semibold text-ink group-hover:underline underline-offset-2 leading-snug">
             {company.name}
           </h2>
