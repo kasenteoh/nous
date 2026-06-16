@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import os
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 
 import httpx
 import pytest
@@ -42,6 +43,8 @@ def _make_company(
     slug: str = "acme",
     website: str | None = None,
     website_resolved_at: datetime | None = None,
+    latest_round_amount: Decimal | None = None,
+    funding_round_count: int = 0,
 ) -> Company:
     return Company(
         name=name,
@@ -50,6 +53,8 @@ def _make_company(
         hq_country="US",
         website=website,
         website_resolved_at=website_resolved_at,
+        latest_round_amount=latest_round_amount,
+        funding_round_count=funding_round_count,
     )
 
 
@@ -290,6 +295,84 @@ async def test_limit_caps_companies_processed(db: AsyncSession) -> None:
     summary = await run_resolve_homepages(db, client, limit=1)
 
     assert summary.companies_seen == 1
+
+
+async def test_limit_prioritizes_highest_raise(db: AsyncSession) -> None:
+    """With a tight --limit, the highest-raise eligible companies are resolved
+    first. A blank-husk marquee company (large raise, no website) must not be
+    starved behind low/zero-raise companies."""
+    # Three eligible companies (no website, never attempted) with distinct raises.
+    big = _make_company(
+        name="BigRaise Inc.",
+        slug="bigraise-prio-resolve",
+        latest_round_amount=Decimal("500000000"),  # $500M
+    )
+    mid = _make_company(
+        name="MidRaise Inc.",
+        slug="midraise-prio-resolve",
+        latest_round_amount=Decimal("10000000"),  # $10M
+    )
+    none = _make_company(
+        name="NoRaise Inc.",
+        slug="noraise-prio-resolve",
+        latest_round_amount=None,  # no funding amount → sorts last
+    )
+    db.add_all([none, mid, big])  # add in non-priority order on purpose
+    await db.flush()
+    await db.commit()
+
+    resolve_map = {
+        "bigraise": "https://bigraise.com/",
+        "midraise": "https://midraise.com/",
+        "noraise": "https://noraise.com/",
+    }
+    client = MockHomepageClient(resolve_map)
+    # limit=2 admits only the two most prominent of the three.
+    summary = await run_resolve_homepages(db, client, limit=2)
+
+    assert summary.companies_seen == 2
+    await db.refresh(big)
+    await db.refresh(mid)
+    await db.refresh(none)
+    # The two highest-raise companies were resolved; the NULL-amount one was not.
+    assert big.website == "https://bigraise.com/"
+    assert mid.website == "https://midraise.com/"
+    assert none.website is None
+    assert none.website_resolved_at is None  # never attempted this run
+
+
+async def test_funding_round_count_breaks_amount_ties(db: AsyncSession) -> None:
+    """When latest_round_amount ties, the company with more funding rounds wins
+    the limited slot."""
+    many_rounds = _make_company(
+        name="ManyRounds Inc.",
+        slug="manyrounds-tie-resolve",
+        latest_round_amount=Decimal("10000000"),
+        funding_round_count=5,
+    )
+    few_rounds = _make_company(
+        name="FewRounds Inc.",
+        slug="fewrounds-tie-resolve",
+        latest_round_amount=Decimal("10000000"),  # same amount
+        funding_round_count=1,
+    )
+    db.add_all([few_rounds, many_rounds])
+    await db.flush()
+    await db.commit()
+
+    resolve_map = {
+        "manyrounds": "https://manyrounds.com/",
+        "fewrounds": "https://fewrounds.com/",
+    }
+    client = MockHomepageClient(resolve_map)
+    summary = await run_resolve_homepages(db, client, limit=1)
+
+    assert summary.companies_seen == 1
+    await db.refresh(many_rounds)
+    await db.refresh(few_rounds)
+    assert many_rounds.website == "https://manyrounds.com/"
+    assert few_rounds.website is None
+    assert few_rounds.website_resolved_at is None
 
 
 class _ParkedAwareClient(MockHomepageClient):

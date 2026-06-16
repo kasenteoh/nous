@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import os
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 
 import pytest
 from sqlalchemy import select
@@ -40,6 +41,8 @@ def _make_company(
     name: str = "Acme Inc.",
     slug: str = "acme",
     website: str | None = "https://acme.com",
+    latest_round_amount: Decimal | None = None,
+    funding_round_count: int = 0,
 ) -> Company:
     return Company(
         name=name,
@@ -47,6 +50,8 @@ def _make_company(
         normalized_name=slug.replace("-", " "),
         hq_country="US",
         website=website,
+        latest_round_amount=latest_round_amount,
+        funding_round_count=funding_round_count,
     )
 
 
@@ -518,3 +523,91 @@ async def test_concurrent_batches_scrape_all_companies(db: AsyncSession) -> None
     )
     company_ids_with_pages = {row[0] for row in rows.all()}
     assert len(company_ids_with_pages) == 5
+
+
+async def test_limit_prioritizes_highest_raise(db: AsyncSession) -> None:
+    """With a tight --limit, the highest-raise eligible companies are scraped
+    first so marquee names get pages (and thus enrichment) ahead of the long
+    tail."""
+    big = _make_company(
+        name="BigRaise Inc.",
+        slug="bigraise-prio-scrape",
+        website="https://bigraise-scrape.com",
+        latest_round_amount=Decimal("500000000"),  # $500M
+    )
+    mid = _make_company(
+        name="MidRaise Inc.",
+        slug="midraise-prio-scrape",
+        website="https://midraise-scrape.com",
+        latest_round_amount=Decimal("10000000"),  # $10M
+    )
+    none = _make_company(
+        name="NoRaise Inc.",
+        slug="noraise-prio-scrape",
+        website="https://noraise-scrape.com",
+        latest_round_amount=None,  # no funding amount → sorts last
+    )
+    db.add_all([none, mid, big])  # add in non-priority order on purpose
+    await db.flush()
+    await db.commit()
+
+    client = MockHomepageClient()
+    # limit=2 admits only the two most prominent of the three.
+    summary = await run_scrape_homepages(db, client, limit=2)
+
+    assert summary.companies_seen == 2
+
+    # The two highest-raise companies were scraped; the NULL-amount one was not.
+    big_pages = (
+        await db.execute(select(RawPage).where(RawPage.company_id == big.id))
+    ).scalars().all()
+    mid_pages = (
+        await db.execute(select(RawPage).where(RawPage.company_id == mid.id))
+    ).scalars().all()
+    none_pages = (
+        await db.execute(select(RawPage).where(RawPage.company_id == none.id))
+    ).scalars().all()
+    assert len(big_pages) == 1
+    assert len(mid_pages) == 1
+    assert none_pages == []
+
+    await db.refresh(none)
+    # The low-priority company was never attempted this run.
+    assert none.last_scrape_attempt_at is None
+
+
+async def test_funding_round_count_breaks_amount_ties(db: AsyncSession) -> None:
+    """When latest_round_amount ties, the company with more funding rounds is
+    scraped first within the limited slot."""
+    many_rounds = _make_company(
+        name="ManyRounds Inc.",
+        slug="manyrounds-tie-scrape",
+        website="https://manyrounds-scrape.com",
+        latest_round_amount=Decimal("10000000"),
+        funding_round_count=5,
+    )
+    few_rounds = _make_company(
+        name="FewRounds Inc.",
+        slug="fewrounds-tie-scrape",
+        website="https://fewrounds-scrape.com",
+        latest_round_amount=Decimal("10000000"),  # same amount
+        funding_round_count=1,
+    )
+    db.add_all([few_rounds, many_rounds])
+    await db.flush()
+    await db.commit()
+
+    client = MockHomepageClient()
+    summary = await run_scrape_homepages(db, client, limit=1)
+
+    assert summary.companies_seen == 1
+    many_pages = (
+        await db.execute(select(RawPage).where(RawPage.company_id == many_rounds.id))
+    ).scalars().all()
+    few_pages = (
+        await db.execute(select(RawPage).where(RawPage.company_id == few_rounds.id))
+    ).scalars().all()
+    assert len(many_pages) == 1
+    assert few_pages == []
+    await db.refresh(few_rounds)
+    assert few_rounds.last_scrape_attempt_at is None
