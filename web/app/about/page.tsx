@@ -58,17 +58,18 @@ export default async function AboutPage() {
             <span className="font-medium text-ink">
               VC portfolios
             </span>{" "}
-            — the public portfolio pages of leading venture firms (Y Combinator,
-            Andreessen Horowitz, Sequoia, Lightspeed, Founders Fund, Greylock,
-            Khosla, and others). The firm that surfaced a company is recorded as
-            an investor.
+            — the public portfolio pages of thirteen leading venture firms: Y
+            Combinator, Andreessen Horowitz, Sequoia, Lightspeed, Founders Fund,
+            Greylock, Khosla, Bessemer, Accel, Index Ventures, Kleiner Perkins,
+            General Catalyst, and Felicis. The firm that surfaced a company is
+            recorded as an investor.
           </li>
           <li>
             <span className="font-medium text-ink">
               Funding news
             </span>{" "}
-            — funding announcements from Google News and TechCrunch’s venture
-            coverage.
+            — funding announcements gathered from Google News, TechCrunch,
+            SiliconANGLE, PR Newswire, and Crunchbase News.
           </li>
         </ul>
       </section>
@@ -80,9 +81,11 @@ export default async function AboutPage() {
         <p className="text-sm text-ink-soft leading-relaxed">
           Once a company is known, nous resolves and reads its public website,
           then uses a large language model to draft the description, category,
-          and leadership details from that page. Funding rounds, amounts, and
-          investors are extracted from the news coverage above; competitors are
-          inferred from a company’s public profile and coverage. Employee-count
+          and leadership details from that page. Funding rounds, amounts,
+          valuations, and investors are extracted from the news coverage above.
+          Competitors are drawn from a company’s own news coverage and a
+          comparison against similar companies in the same industry, and similar
+          and co-invested companies are linked from that graph. Employee-count
           ranges are estimated from public sources where available. The model is
           instructed to leave a field blank rather than guess — unknown values
           stay unknown.
@@ -110,23 +113,19 @@ export default async function AboutPage() {
         <ul className="space-y-2 text-sm text-ink-soft leading-relaxed list-disc pl-5">
           <li>
             <span className="font-medium text-ink">
-              Weekly
+              Several times a day
             </span>{" "}
-            — discovery of new companies from VC portfolios, de-duplication, and
-            competitor analysis.
+            — funding-news ingestion and round extraction, website reading, and
+            the descriptions and leadership the model produces, so new companies
+            and raises appear quickly.
           </li>
           <li>
             <span className="font-medium text-ink">
               Weekly
             </span>{" "}
-            — website reading and the descriptions / leadership it produces.
-          </li>
-          <li>
-            <span className="font-medium text-ink">
-              Daily
-            </span>{" "}
-            — funding news ingestion and round extraction, so new raises appear
-            quickly.
+            — discovery of new companies from the VC portfolio pages,
+            de-duplication, competitor analysis and the related-company graph,
+            and employee-count estimates.
           </li>
         </ul>
         <p className="mt-3 text-sm text-ink-muted leading-relaxed">
