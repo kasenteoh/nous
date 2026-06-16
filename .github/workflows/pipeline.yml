@@ -126,6 +126,20 @@ on:
         description: "Limit for the enrich backfill pass."
         required: false
         type: string
+      run_infer_country:
+        description: "Run infer-hq-country: fetch about/contact/legal pages for shown companies with NULL hq_country and exclude non-US ones. Default: false."
+        required: false
+        type: boolean
+        default: false
+      infer_country_apply:
+        description: "infer-hq-country: actually WRITE exclusions. false = dry-run preview only. Default: false."
+        required: false
+        type: boolean
+        default: false
+      infer_country_limit:
+        description: "infer-hq-country: max companies per run. Default: 40."
+        required: false
+        default: "40"
 
 # Serialize against every other workflow that mutates the companies table (see
 # discovery.yml). resolve / enrich UPDATE company rows and ingest-news /
@@ -435,6 +449,23 @@ jobs:
           JUDGE_LIMIT="${{ inputs.judge_limit }}"
           if [ -z "$JUDGE_LIMIT" ]; then JUDGE_LIMIT=30; fi
           uv run nous judge-eligibility --limit "$JUDGE_LIMIT"
+
+      - name: Infer HQ country (non-US detection backfill)
+        if: ${{ github.event.inputs.run_infer_country == 'true' }}
+        # Dispatch-gated repair: fetch about/contact/legal pages for shown
+        # companies with NULL hq_country and soft-exclude non-US ones, sourced.
+        # Dry-run by default (preview the intended exclusions in the logs); set
+        # infer_country_apply=true to write. Heaviest per-company stage
+        # (<=~8 fetches + 1 DeepSeek call), so it is never on the cron.
+        timeout-minutes: 30
+        continue-on-error: true
+        run: |
+          LIMIT="${{ github.event.inputs.infer_country_limit || '40' }}"
+          if [ "${{ github.event.inputs.infer_country_apply }}" = "true" ]; then
+            uv run nous infer-hq-country --limit "$LIMIT"
+          else
+            uv run nous infer-hq-country --limit "$LIMIT" --dry-run
+          fi
 
       - name: Database stats
         if: ${{ !cancelled() }}

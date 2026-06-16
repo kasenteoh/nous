@@ -141,6 +141,16 @@ class Company(Base):
         index=True,
     )
 
+    # When infer-hq-country last attempted this company (success or not).
+    # Drives that stage's selection (WHERE ... IS NULL), back-off, and
+    # idempotency: a bounded dispatch-gated run drains the shown + hq_country
+    # IS NULL backlog over successive dispatches, and a row that yielded no
+    # country is stamped so it is not re-fetched. Mirrors the other *_checked_at
+    # rotation stamps. Indexed for that WHERE clause.
+    hq_country_checked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
+
     # M3 — how this company first entered the DB.
     # 'vc_portfolio' | 'news' | 'techcrunch'. Discovery paths always set this
     # explicitly; the 'unknown' default is a safe fallback for any other insert
