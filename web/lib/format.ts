@@ -78,17 +78,114 @@ export function formatEmployeeRange(
 }
 
 /**
+ * Full US state / territory name → 2-letter USPS code. Keyed by the lowercased
+ * full name so the lookup is case-insensitive (see {@link stateAbbrev}). Covers
+ * all 50 states, DC, and the five inhabited territories the catalog might carry.
+ * "District of Columbia" also appears under the "Washington DC" spellings the
+ * LLM tends to emit.
+ */
+const US_STATE_ABBREV: Record<string, string> = {
+  alabama: "AL",
+  alaska: "AK",
+  arizona: "AZ",
+  arkansas: "AR",
+  california: "CA",
+  colorado: "CO",
+  connecticut: "CT",
+  delaware: "DE",
+  "district of columbia": "DC",
+  "washington dc": "DC",
+  "washington d.c.": "DC",
+  florida: "FL",
+  georgia: "GA",
+  hawaii: "HI",
+  idaho: "ID",
+  illinois: "IL",
+  indiana: "IN",
+  iowa: "IA",
+  kansas: "KS",
+  kentucky: "KY",
+  louisiana: "LA",
+  maine: "ME",
+  maryland: "MD",
+  massachusetts: "MA",
+  michigan: "MI",
+  minnesota: "MN",
+  mississippi: "MS",
+  missouri: "MO",
+  montana: "MT",
+  nebraska: "NE",
+  nevada: "NV",
+  "new hampshire": "NH",
+  "new jersey": "NJ",
+  "new mexico": "NM",
+  "new york": "NY",
+  "north carolina": "NC",
+  "north dakota": "ND",
+  ohio: "OH",
+  oklahoma: "OK",
+  oregon: "OR",
+  pennsylvania: "PA",
+  "rhode island": "RI",
+  "south carolina": "SC",
+  "south dakota": "SD",
+  tennessee: "TN",
+  texas: "TX",
+  utah: "UT",
+  vermont: "VT",
+  virginia: "VA",
+  washington: "WA",
+  "west virginia": "WV",
+  wisconsin: "WI",
+  wyoming: "WY",
+  // Inhabited US territories (USPS codes).
+  "american samoa": "AS",
+  guam: "GU",
+  "northern mariana islands": "MP",
+  "puerto rico": "PR",
+  "u.s. virgin islands": "VI",
+  "us virgin islands": "VI",
+  "virgin islands": "VI",
+};
+
+/**
+ * Normalize a US state value to its 2-letter USPS code for display.
+ * Some `hq_state` values are stored as full names ("California") and others as
+ * codes ("CA"); this collapses both to the code so locations render uniformly.
+ *
+ * - Full name (case-insensitive) → code:  "California" / "california" → "CA"
+ * - Already a 2-letter code       → unchanged, uppercased:  "ca" → "CA"
+ * - Unrecognized / empty          → returned unchanged (trimmed)
+ *
+ * Display-only: it never touches routing or stored data. Pure, no deps.
+ */
+export function stateAbbrev(value: string): string {
+  const trimmed = value.trim();
+  const mapped = US_STATE_ABBREV[trimmed.toLowerCase()];
+  if (mapped) return mapped;
+  // Already a 2-letter code (any case) — present it canonically uppercased so
+  // "ca" and "Ca" don't slip through looking different from "CA". Longer
+  // unknown strings (a city mistakenly in the state slot, a foreign region)
+  // pass through untouched rather than being mangled.
+  if (/^[A-Za-z]{2}$/.test(trimmed)) return trimmed.toUpperCase();
+  return trimmed;
+}
+
+/**
  * Format a city + state pair for display.
- * Returns "—" when both are absent.
- * Examples: ("San Francisco", "CA") → "San Francisco, CA"
- *           (null, "CA")            → "CA"
- *           ("Austin", null)        → "Austin"
+ * Returns "—" when both are absent. State values are normalized to their USPS
+ * code via {@link stateAbbrev} so "California" and "CA" render identically.
+ * Examples: ("San Francisco", "CA")         → "San Francisco, CA"
+ *           ("San Francisco", "California") → "San Francisco, CA"
+ *           (null, "CA")                    → "CA"
+ *           ("Austin", null)                → "Austin"
  */
 export function formatLocation(
   city: string | null,
   state: string | null,
 ): string {
-  const parts = [city, state].filter(Boolean);
+  const normalizedState = state ? stateAbbrev(state) : state;
+  const parts = [city, normalizedState].filter(Boolean);
   return parts.length > 0 ? parts.join(", ") : "—";
 }
 

@@ -19,6 +19,7 @@ import {
   formatUsd,
   formatUsdExact,
 } from "@/lib/format";
+import { CompanyLogo } from "@/components/CompanyCard";
 import { JsonLd } from "@/components/JsonLd";
 import { Markdown } from "@/components/Markdown";
 import { StatusBadge } from "@/components/StatusBadge";
@@ -325,6 +326,10 @@ export default async function CompanyPage({ params }: Props) {
       {/* ── Company header ─────────────────────────────────────────────── */}
       <header className="mb-10">
         <div className="flex flex-wrap items-center gap-3">
+          {/* Company logo (or monogram fallback) beside the H1. logo_url is an
+              external favicon URL that the pipeline backfills; until then the
+              fallback keeps the header's left edge stable. */}
+          <CompanyLogo logoUrl={company.logo_url} name={company.name} size={44} />
           <h1 className="text-4xl font-semibold tracking-tight text-ink">
             {company.name}
           </h1>
