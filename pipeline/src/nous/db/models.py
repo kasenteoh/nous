@@ -8,6 +8,7 @@ from sqlalchemy import (
     Date,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     Numeric,
     SmallInteger,
@@ -56,6 +57,11 @@ class Company(Base):
             "OR exclusion_reason IS NULL",
             name="ck_companies_exclusion_reason",
         ),
+        # GIN index for array containment / overlap on the /tag pages and the
+        # tag filter (``tags @> ...``). A btree can't index an array for those
+        # operators, hence the explicit GIN here rather than ``index=True`` on
+        # the column. See migration 0030.
+        Index("ix_companies_tags", "tags", postgresql_using="gin"),
     )
 
     name: Mapped[str]
@@ -70,7 +76,8 @@ class Company(Base):
 
     # Location
     hq_city: Mapped[str | None]
-    hq_state: Mapped[str | None]
+    # Indexed: equality filter on the /location pages and the location filter.
+    hq_state: Mapped[str | None] = mapped_column(index=True)
     # hq_country: NULL until evidenced. Do NOT set a Python-level default here;
     # the old default="US" caused every auto-created company to read as US even
     # when the company is foreign. Country is inferred from the website ccTLD or
@@ -79,7 +86,8 @@ class Company(Base):
 
     # Company metadata
     year_incorporated: Mapped[int | None]
-    industry_group: Mapped[str | None]
+    # Indexed: equality filter + industry facet on the /companies browse page.
+    industry_group: Mapped[str | None] = mapped_column(index=True)
 
     # Employee count — stored as a range to accommodate estimated sources
     employee_count_min: Mapped[int | None]
@@ -155,8 +163,9 @@ class Company(Base):
     # 'vc_portfolio' | 'news' | 'techcrunch'. Discovery paths always set this
     # explicitly; the 'unknown' default is a safe fallback for any other insert
     # (replaces the old 'form_d' default removed when Form D ingestion was cut).
+    # Indexed: the discovery-source filter on the /companies browse page.
     discovered_via: Mapped[str] = mapped_column(
-        String, nullable=False, server_default="unknown"
+        String, nullable=False, server_default="unknown", index=True
     )
 
     # Lifecycle status — 'active' | 'acquired' | 'shut_down' | 'ipo' (CHECK in
