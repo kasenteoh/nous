@@ -1215,6 +1215,52 @@ def judge_eligibility(limit: int | None) -> None:
     asyncio.run(_run())
 
 
+@cli.command("infer-hq-country")
+@click.option(
+    "--limit",
+    type=int,
+    default=None,
+    help="Max companies to check (caps fetches + LLM spend per run).",
+)
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    default=False,
+    help="Log intended exclusions/updates without writing.",
+)
+def infer_hq_country(limit: int | None, dry_run: bool) -> None:
+    """Detect non-US HQ for shown companies with hq_country NULL.
+
+    Fetches each company's own about/contact/legal pages and judges country
+    from that text; soft-excludes non-US companies on positive sourced
+    evidence, leaving genuinely-unknown US-plausible companies alone.
+    """
+    import asyncio
+
+    from nous.config import Settings
+    from nous.db.session import get_session_factory
+    from nous.observability import emit_run_telemetry
+    from nous.pipeline.infer_hq_country import run_infer_hq_country
+    from nous.sources.homepage import HomepageClient
+
+    settings = Settings()
+
+    async def _run() -> None:
+        try:
+            async with HomepageClient(
+                settings.SEC_USER_AGENT,
+                requests_per_second_per_domain=1.0,
+            ) as client:
+                summary = await run_infer_hq_country(
+                    get_session_factory(), client, limit=limit, dry_run=dry_run
+                )
+            click.echo(summary.model_dump_json(indent=2))
+        finally:
+            emit_run_telemetry("infer-hq-country")
+
+    asyncio.run(_run())
+
+
 @cli.command("pipeline-health")
 @click.option(
     "--strict",
