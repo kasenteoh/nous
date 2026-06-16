@@ -1035,6 +1035,56 @@ def normalize_taxonomy_cmd() -> None:
     asyncio.run(_run())
 
 
+@cli.command("name-quality")
+@click.option(
+    "--limit",
+    type=int,
+    default=None,
+    help="Maximum number of companies to consider (for testing / partial runs).",
+)
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    default=False,
+    help="Log intended casing upgrades without writing.",
+)
+def name_quality_cmd(limit: int | None, dry_run: bool) -> None:
+    """Improve company display-name CASING from the stored homepage title (zero LLM).
+
+    Reads each company's homepage RawPage (whose stored content begins with the
+    page <title> / og meta that scrape-homepages prepends) and upgrades
+    company.name to the better-cased brand ONLY when the candidate is an
+    unambiguous pure-casing variant of the current name — same normalized_name,
+    only the letter case differs, and the current casing is degenerate
+    (all-lowercase or all-uppercase). e.g. "docusign" -> "DocuSign". Never
+    changes a name to a different word, never touches slug/normalized_name.
+    Idempotent: a second run finds nothing to upgrade. A safe no-op when the
+    stored content carries no usable title/brand line.
+    """
+    import asyncio
+    from datetime import UTC, datetime
+
+    from nous.db.session import AsyncSessionLocal
+    from nous.observability import record_pipeline_run
+    from nous.pipeline.name_quality import run_name_quality
+
+    async def _run() -> None:
+        started = datetime.now(UTC)
+        async with AsyncSessionLocal() as session:
+            summary = await run_name_quality(session, limit=limit, dry_run=dry_run)
+            click.echo(summary.model_dump_json(indent=2))
+        if not dry_run:
+            await record_pipeline_run(
+                "name-quality",
+                started_at=started,
+                inputs_seen=summary.companies_seen,
+                rows_written=summary.names_upgraded,
+                summary=summary,
+            )
+
+    asyncio.run(_run())
+
+
 @cli.command("link-competitors")
 @click.option(
     "--limit",
@@ -1204,7 +1254,21 @@ def db_stats(cap_mb: int | None, warn_pct: int | None) -> None:
     default=None,
     help="Maximum number of companies to judge (caps LLM spend per run).",
 )
-def judge_eligibility(limit: int | None) -> None:
+@click.option(
+    "--rejudge-nonstartup-signals",
+    is_flag=True,
+    default=False,
+    help=(
+        "ALSO re-judge currently-included companies whose stored description "
+        "matches a clearly-non-startup prose signal (business directories, "
+        "coaching/courses shops, agencies, decades-old businesses — the "
+        "Manta/Lucra leak) under the tightened prompt. Resets their "
+        "eligibility stamp so the normal path re-judges them; the LLM still "
+        "makes the final call and already-excluded rows are left untouched. "
+        "Off by default, so the production cron is behaviourally unchanged."
+    ),
+)
+def judge_eligibility(limit: int | None, rejudge_nonstartup_signals: bool) -> None:
     """Backfill the is-this-a-startup judgment for already-enriched companies."""
     import asyncio
 
@@ -1216,7 +1280,11 @@ def judge_eligibility(limit: int | None) -> None:
         # The stage manages its own per-company sessions from the factory, so a
         # wedged free-tier connection skips one company instead of hanging.
         try:
-            summary = await run_judge_eligibility(get_session_factory(), limit=limit)
+            summary = await run_judge_eligibility(
+                get_session_factory(),
+                limit=limit,
+                rejudge_nonstartup_signals=rejudge_nonstartup_signals,
+            )
             click.echo(summary.model_dump_json(indent=2))
         finally:
             emit_run_telemetry("judge-eligibility")
