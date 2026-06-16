@@ -39,7 +39,7 @@ export async function fetchWatchlistCompanies(
   const { data, error } = await supabase
     .from("companies")
     .select(
-      "slug, name, hq_city, hq_state, industry_group, description_short, status, exclusion_reason",
+      "slug, name, hq_city, hq_state, industry_group, description_short, status, logo_url, exclusion_reason",
     )
     .in("slug", wanted);
 
@@ -57,6 +57,7 @@ export async function fetchWatchlistCompanies(
     industry_group: string | null;
     description_short: string | null;
     status: string | null;
+    logo_url?: string | null;
     exclusion_reason?: string | null;
   }[]) {
     if (!c.slug || !c.name || c.exclusion_reason) continue;
@@ -68,6 +69,7 @@ export async function fetchWatchlistCompanies(
       industry_group: c.industry_group ?? null,
       description_short: c.description_short ?? null,
       status: c.status ?? "active",
+      logo_url: c.logo_url ?? null,
     });
   }
 

@@ -7,6 +7,13 @@ import type { CompetitorWithResolved } from "@/lib/types";
 
 interface Props {
   competitors: CompetitorWithResolved[];
+  /**
+   * When set, a discreet "See alternatives →" link to /alternatives/<slug> is
+   * rendered beside the section heading. Omitted ⇒ no link (e.g. previews). The
+   * link only appears when the section itself does (≥1 shown competitor), which
+   * is exactly when the alternatives page has content.
+   */
+  alternativesSlug?: string;
 }
 
 // LLM scratch-notes occasionally leak into a competitor's stored rationale
@@ -16,7 +23,7 @@ interface Props {
 const META_LEAK =
   /should be dropped|for evaluation|temporar|placeholder|do not (include|display|show)|not a (real )?competitor/i;
 
-export function Competitors({ competitors }: Props) {
+export function Competitors({ competitors, alternativesSlug }: Props) {
   const shown = competitors.filter(
     (c) =>
       !META_LEAK.test(c.reasoning ?? "") && !META_LEAK.test(c.description ?? ""),
@@ -29,7 +36,20 @@ export function Competitors({ competitors }: Props) {
 
   return (
     <section className="mb-12">
-      <h2 className="text-lg font-semibold text-ink mb-4">Competitors</h2>
+      {/* Heading row carries an optional, discreet link to the dedicated
+          "alternatives" landing page (a higher-SEO-value standalone view of the
+          same competitor set). */}
+      <div className="mb-4 flex items-baseline justify-between gap-3">
+        <h2 className="text-lg font-semibold text-ink">Competitors</h2>
+        {alternativesSlug && (
+          <Link
+            href={`/alternatives/${alternativesSlug}`}
+            className="text-sm text-ink-muted hover:text-ink underline underline-offset-2 decoration-ink-faint whitespace-nowrap"
+          >
+            See alternatives →
+          </Link>
+        )}
+      </div>
 
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
         {shown.map((c) => (

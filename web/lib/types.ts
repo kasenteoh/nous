@@ -76,6 +76,11 @@ export interface CompanyListRow {
   industry_group: string | null;
   description_short: string | null; // M2 — shown as preview on index cards
   status: string; // 'active' | 'acquired' | 'shut_down' | 'ipo'
+  // External favicon URL backfilled by the pipeline; null/absent until then.
+  // Carried so CompanyCard renders the real logo instead of the monogram
+  // fallback. Optional (`?`): some projections (e.g. the investor-portfolio
+  // join) don't select it — those rows simply fall back to the monogram.
+  logo_url?: string | null;
 }
 
 // ─── M3: funding-history rows ─────────────────────────────────────────────────
@@ -153,6 +158,58 @@ export interface CompetitorRow {
  */
 export interface CompetitorWithResolved extends CompetitorRow {
   resolved: { slug: string; name: string } | null;
+}
+
+// ─── "Alternatives to X" pages (SEO) ──────────────────────────────────────────
+
+/**
+ * A competitor that resolved to an indexed company, shaped for /alternatives/
+ * [slug]. Extends the {@link CompanyListRow} card projection (so it renders in
+ * a CompanyCard, with its logo) with the competitor-edge context — why nous
+ * lists it as an alternative and where that came from.
+ */
+export interface AlternativeCompany extends CompanyListRow {
+  /** Competitor `rank` (1 = most relevant); orders the list. */
+  rank: number;
+  /** LLM rationale for why the two compete, or null. */
+  reasoning: string | null;
+  /** Short competitor description, or null. */
+  description: string | null;
+  /** 'techcrunch' | 'llm_inferred' — provenance of the competitor edge. */
+  source: string;
+  /** The TechCrunch article when source='techcrunch', else null. */
+  source_url: string | null;
+}
+
+/**
+ * An LLM-named competitor that did NOT resolve to an indexed company — there's
+ * no /c/[slug] for it, so it renders as a plain name + reasoning rather than a
+ * linked card.
+ */
+export interface NamedAlternative {
+  name: string;
+  rank: number;
+  reasoning: string | null;
+  description: string | null;
+  source: string;
+  source_url: string | null;
+}
+
+/**
+ * Everything the /alternatives/[slug] page needs: the subject company's
+ * display fields plus its competitors, split into ones resolved to indexed
+ * companies (linked cards) and LLM-named ones (text only). Built by
+ * {@link getAlternatives}; null when the slug is unknown/excluded.
+ */
+export interface AlternativesData {
+  company: {
+    slug: string;
+    name: string;
+    description_short: string | null;
+    industry_group: string | null;
+  };
+  resolved: AlternativeCompany[];
+  named: NamedAlternative[];
 }
 
 /** Row from the `people` table — website-sourced leadership/founders. */
