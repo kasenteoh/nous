@@ -814,14 +814,18 @@ def refresh_latest_round_cmd() -> None:
 
 @cli.command("dedup-investors")
 def dedup_investors_cmd() -> None:
-    """Collapse duplicate investor rows by canonical name (alias-applied).
+    """Purge junk investor rows, collapse duplicates, then classify type.
 
-    Groups investors by their post-alias canonical name, picks the survivor
-    (most links → oldest created_at), merges losers via merge_investors (which
-    repoints company_investors + funding_round_investors and calls
-    refresh-investor-counts). Also sets type='institutional' for known VC firms.
+    First deletes non-investor placeholder rows ("a group of investors",
+    "undisclosed", "angel investors", …) and their noise links. Then groups the
+    rest by post-alias canonical name, picks the survivor (most links → oldest
+    created_at), and merges losers via merge_investors (which repoints
+    company_investors + funding_round_investors and calls
+    refresh-investor-counts). Finally sets type='institutional' for known VC
+    firms and type='angel' for individual-looking names.
 
-    Idempotent: a second run finds no duplicates and is a no-op.
+    Idempotent: a second run finds no junk/duplicates and reclassifies to the
+    same types, so it is a no-op.
     """
     import asyncio
     from datetime import UTC, datetime
@@ -839,7 +843,12 @@ def dedup_investors_cmd() -> None:
             "dedup-investors",
             started_at=started,
             inputs_seen=summary.investors_seen,
-            rows_written=summary.investors_merged + summary.type_classifications,
+            rows_written=(
+                summary.junk_purged
+                + summary.investors_merged
+                + summary.type_classifications
+                + summary.angel_classifications
+            ),
             summary=summary,
         )
 

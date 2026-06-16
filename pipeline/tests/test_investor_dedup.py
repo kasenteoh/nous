@@ -13,6 +13,13 @@ Coverage:
 8. run_dedup_investors groups by canonical name and merges duplicates.
 9. run_dedup_investors is idempotent: a second run is a no-op.
 10. run_dedup_investors classifies known VC firms as type='institutional'.
+11. run_dedup_investors purges junk placeholder rows + their links (idempotent).
+12. run_dedup_investors classifies individuals as type='angel' but never firms.
+13. upsert_investor rejects junk placeholder names at insert time.
+
+The pure-string classification logic (is_junk_investor_name,
+is_individual_investor_name, a16z aliasing) is unit-tested DB-free in
+test_investor_name.py; here we assert the DB-level behaviour.
 """
 
 from __future__ import annotations
@@ -439,11 +446,15 @@ async def test_dedup_investors_classifies_institutional(db: AsyncSession) -> Non
 async def test_dedup_investors_does_not_classify_unknown_firms(
     db: AsyncSession,
 ) -> None:
-    """run_dedup_investors does NOT set type='institutional' for unknown firms."""
+    """run_dedup_investors does NOT set type='institutional' for unknown firms.
+
+    Uses a firm-shaped name (so it is neither a known institutional firm nor an
+    individual) to assert it stays 'unknown'.
+    """
     inv = Investor(
-        name="Random Angel Investor",
-        name_normalized="random angel",
-        slug="random-angel-type-test",
+        name="Obscure Growth Partners",
+        name_normalized="obscure growth",
+        slug="obscure-growth-type-test",
         type="unknown",
     )
     db.add(inv)
@@ -457,3 +468,196 @@ async def test_dedup_investors_does_not_classify_unknown_firms(
     refreshed = await db.get(Investor, inv_id)
     assert refreshed is not None
     assert refreshed.type == "unknown"
+
+
+# ---------------------------------------------------------------------------
+# Junk-row purge (dedup-investors step 0)
+# ---------------------------------------------------------------------------
+
+
+async def test_dedup_investors_purges_junk_rows(db: AsyncSession) -> None:
+    """run_dedup_investors deletes placeholder rows like 'a group of investors'
+    along with their (noise) links, and leaves real investors untouched."""
+    junk = Investor(
+        name="a group of investors",
+        name_normalized=canonicalize_investor_name("a group of investors"),
+        slug="a-group-of-investors-junk",
+    )
+    real = Investor(
+        name="Sequoia Capital",
+        name_normalized=canonicalize_investor_name("Sequoia Capital"),
+        slug="sequoia-purge-test",
+    )
+    company = _make_company("junk-purge")
+    db.add_all([junk, real, company])
+    await db.flush()
+    # Give the junk row both a company link and a funding-round link so we prove
+    # both legs are cleaned up by the cascade-less explicit deletes.
+    rnd = _round(company)
+    db.add(rnd)
+    await db.flush()
+    db.add(_ci(company, junk))
+    db.add(_fri(rnd, junk))
+    db.add(_ci(company, real))
+    await db.flush()
+    await db.commit()
+    junk_id: UUID = junk.id
+    real_id: UUID = real.id
+
+    summary = await run_dedup_investors(db)
+
+    assert summary.junk_purged >= 1
+    # Junk investor and its links are gone.
+    assert await db.get(Investor, junk_id) is None
+    ci_rows = (
+        await db.execute(
+            select(CompanyInvestor).where(CompanyInvestor.investor_id == junk_id)
+        )
+    ).scalars().all()
+    assert ci_rows == []
+    fri_rows = (
+        await db.execute(
+            select(FundingRoundInvestor).where(
+                FundingRoundInvestor.investor_id == junk_id
+            )
+        )
+    ).scalars().all()
+    assert fri_rows == []
+    # The real investor survives.
+    assert await db.get(Investor, real_id) is not None
+
+
+async def test_dedup_investors_purge_is_idempotent(db: AsyncSession) -> None:
+    """A second run finds no junk to purge."""
+    junk = Investor(
+        name="undisclosed",
+        name_normalized=canonicalize_investor_name("undisclosed"),
+        slug="undisclosed-junk-idem",
+    )
+    db.add(junk)
+    await db.flush()
+    await db.commit()
+
+    first = await run_dedup_investors(db)
+    second = await run_dedup_investors(db)
+
+    assert first.junk_purged >= 1
+    assert second.junk_purged == 0
+
+
+# ---------------------------------------------------------------------------
+# Angel classification (dedup-investors step 2b)
+# ---------------------------------------------------------------------------
+
+
+async def test_dedup_investors_classifies_individual_as_angel(
+    db: AsyncSession,
+) -> None:
+    """An individual-looking name (e.g. 'Jeff Bezos') is classified type='angel'."""
+    inv = Investor(
+        name="Jeff Bezos",
+        name_normalized=canonicalize_investor_name("Jeff Bezos"),
+        slug="jeff-bezos-angel-test",
+        type="unknown",
+    )
+    db.add(inv)
+    await db.flush()
+    await db.commit()
+    inv_id: UUID = inv.id
+
+    summary = await run_dedup_investors(db)
+
+    assert summary.angel_classifications >= 1
+    db.expire_all()
+    refreshed = await db.get(Investor, inv_id)
+    assert refreshed is not None
+    assert refreshed.type == "angel"
+
+
+async def test_dedup_investors_does_not_classify_firm_as_angel(
+    db: AsyncSession,
+) -> None:
+    """A surname-pair FIRM name (e.g. 'Draper Fisher') is never tagged angel —
+    it stays 'unknown'. 'Draper Fisher' is two alphabetic tokens with no firm
+    marker, so only the given-name gate keeps it out of the angel bucket; it is
+    deliberately NOT one of the ~13 registry firms (which would go
+    institutional)."""
+    inv = Investor(
+        name="Draper Fisher",
+        name_normalized=canonicalize_investor_name("Draper Fisher"),
+        slug="draper-fisher-angel-test",
+        type="unknown",
+    )
+    db.add(inv)
+    await db.flush()
+    await db.commit()
+    inv_id: UUID = inv.id
+
+    await run_dedup_investors(db)
+
+    db.expire_all()
+    refreshed = await db.get(Investor, inv_id)
+    assert refreshed is not None
+    assert refreshed.type == "unknown"
+
+
+async def test_dedup_investors_angel_does_not_override_institutional(
+    db: AsyncSession,
+) -> None:
+    """Angel classification only touches 'unknown' rows; an institutional firm
+    is left institutional even if it weren't individual-shaped anyway."""
+    # Andreessen Horowitz is a known scraped firm → institutional. Even though
+    # its display name is a two-token surname pair, the institutional pass runs
+    # first and the angel pass skips non-'unknown' rows.
+    inv = Investor(
+        name="Andreessen Horowitz",
+        name_normalized=canonicalize_investor_name("Andreessen Horowitz"),
+        slug="a16z-angel-guard-test",
+        type="unknown",
+    )
+    db.add(inv)
+    await db.flush()
+    await db.commit()
+    inv_id: UUID = inv.id
+
+    await run_dedup_investors(db)
+
+    db.expire_all()
+    refreshed = await db.get(Investor, inv_id)
+    assert refreshed is not None
+    assert refreshed.type == "institutional"
+
+
+# ---------------------------------------------------------------------------
+# upsert_investor rejects junk names at insert time
+# ---------------------------------------------------------------------------
+
+
+async def test_upsert_investor_rejects_junk_name(db: AsyncSession) -> None:
+    """upsert_investor raises ValueError for a placeholder name and inserts no
+    row — the insert-time half of the junk guard."""
+    from nous.db.upsert import upsert_investor
+
+    with pytest.raises(ValueError, match="placeholder"):
+        await upsert_investor(db, name="a group of investors")
+
+    # Nothing was inserted.
+    rows = (
+        await db.execute(
+            select(Investor).where(
+                Investor.name_normalized
+                == canonicalize_investor_name("a group of investors")
+            )
+        )
+    ).scalars().all()
+    assert rows == []
+
+
+async def test_upsert_investor_accepts_real_name(db: AsyncSession) -> None:
+    """A real investor name still inserts normally (no false-positive rejection)."""
+    from nous.db.upsert import upsert_investor
+
+    inv, created = await upsert_investor(db, name="Founders Fund")
+    assert created is True
+    assert inv.name == "Founders Fund"
+    assert inv.name_normalized == canonicalize_investor_name("Founders Fund")
