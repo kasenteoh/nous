@@ -15,11 +15,17 @@ class EligibilityJudgment(BaseModel):
     is_startup: bool | None = Field(
         default=None,
         description=(
-            "True when this reads like an operating startup: an independent, "
-            "private company founded within roughly the last 15 years. False "
-            "when it clearly is not (decades-old enterprise, publicly traded, "
-            "a subsidiary, a fund, a media site). Null when the text does not "
-            "support a confident call — never guess."
+            "True when this reads like a venture-scale SOFTWARE startup: an "
+            "independent, private company, founded within roughly the last 15 "
+            "years, whose core offering is a software product or platform. "
+            "False when it clearly is NOT one — e.g. a business/web directory "
+            "or listings site, a coaching / courses / 'mindset' / info-product "
+            "business, a marketing or dev agency / consultancy, a long-"
+            "established (15+ years) non-venture business, a local/lifestyle "
+            "SMB, a decades-old enterprise, a publicly traded company, a "
+            "subsidiary, a fund, or a media property. Null when the text does "
+            "not support a confident call — never guess, and when genuinely "
+            "unsure prefer null (do NOT exclude a possible real startup)."
         ),
     )
     not_startup_reason: str | None = Field(
@@ -48,12 +54,33 @@ You are curating a discovery catalog of US software startups. Decide whether
 the company below belongs, based ONLY on the text provided.
 
 Rules:
-- `is_startup`: true only for an independent, PRIVATE company founded within
-  roughly the last 15 years. False for decades-old enterprises, publicly
-  traded companies, subsidiaries, funds, or media properties. If the text
-  does not support a confident call, return null. Never guess.
+- `is_startup`: true ONLY for a venture-scale SOFTWARE startup — an
+  independent, PRIVATE company, founded within roughly the last 15 years,
+  whose core offering is a software product or platform (SaaS, a developer
+  tool, an app, an API, AI/data infrastructure, a marketplace platform, etc.).
+  Set it FALSE when the text clearly describes one of these instead:
+    • a business/web directory, listings site, or yellow-pages-style index
+      that aggregates other businesses (e.g. "online directory connecting
+      consumers with local businesses");
+    • a coaching, courses, training, "mindset", masterclass, or other
+      info-product / personal-brand business (selling knowledge, programs,
+      or content rather than software);
+    • a marketing, advertising, design, dev, or other agency / consultancy
+      that sells services or staff-for-hire rather than a product;
+    • a long-established business — roughly 15+ years old, or one that
+      advertises decades of operation — that is plainly not venture-backed;
+    • a lifestyle business or local small business (a single shop,
+      restaurant, salon, clinic, brokerage, local service provider, etc.);
+    • a decades-old enterprise, a publicly traded company, a subsidiary or
+      division of a larger company, an investment fund, or a media/news
+      property.
+  When the text does not support a confident call, return null. Never guess —
+  and when you are genuinely unsure whether a borderline company qualifies,
+  prefer null (or true) over false: excluding a real startup hides it from the
+  catalog, which is worse than briefly keeping a borderline one.
 - `not_startup_reason`: one short factual sentence, only when is_startup is
-  false (e.g. "Founded in 2000; publicly traded enterprise").
+  false (e.g. "Online business directory, not a software product" or
+  "Coaching / courses business, not a software startup").
 - `founded_year`: only when the text states it. Null otherwise — never fabricate.
 - `hq_country`: a 2-letter ISO code (e.g. 'US', 'IN', 'GB'). Set this when
   the text CLEARLY implies a country — a formal HQ line, an address, 'UK-based',

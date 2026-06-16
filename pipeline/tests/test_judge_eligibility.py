@@ -21,17 +21,61 @@ from unittest.mock import AsyncMock
 from uuid import UUID
 
 import pytest
+from sqlalchemy.dialects import postgresql
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from nous.db.models import Company, RawPage
 from nous.llm.client import LLMRateLimitError
 from nous.llm.prompts.company_eligibility import EligibilityJudgment
-from nous.pipeline.judge_eligibility import run_judge_eligibility
+from nous.pipeline.judge_eligibility import (
+    nonstartup_signal_clause,
+    run_judge_eligibility,
+)
+
+# ---------------------------------------------------------------------------
+# Pure-unit tests for nonstartup_signal_clause — no DATABASE_URL required.
+# Compile the predicate to SQL and assert it covers BOTH description columns
+# and the headline non-startup signals (the Manta / Lucra leak). These run in
+# CI without Postgres; they are defined ABOVE the DB ``pytestmark`` below.
+# ---------------------------------------------------------------------------
+
+
+def _compiled_clause_sql() -> str:
+    compiled = nonstartup_signal_clause().compile(
+        dialect=postgresql.dialect(),
+        compile_kwargs={"literal_binds": True},
+    )
+    return str(compiled).lower()
+
+
+def test_signal_clause_covers_both_description_columns() -> None:
+    sql = _compiled_clause_sql()
+    assert "description_short" in sql
+    assert "description_long" in sql
+    assert " ilike " in sql  # case-insensitive matching
+
+
+def test_signal_clause_matches_directory_and_coaching_phrases() -> None:
+    """The two live leaks (Manta = a directory, Lucra = coaching) plus the other
+    rejected categories must each be representable in the predicate."""
+    sql = _compiled_clause_sql()
+    assert "business directory" in sql  # Manta
+    assert "online directory" in sql
+    assert "courses, coaching" in sql  # Lucra
+    assert "mindset" in sql
+    assert "marketing agency" in sql
+    assert "consultancy" in sql
+    # Decades-old wording (Manta: "operating for over 20 years").
+    assert "for over 20 years" in sql
+
 
 pytestmark = pytest.mark.skipif(
     not os.environ.get("DATABASE_URL"),
     reason="DATABASE_URL not set — skipping DB integration tests",
 )
+
+# NB: the module-level ``pytestmark`` above gates every test DEFINED BELOW this
+# line on DATABASE_URL; the pure-unit predicate tests above it always run.
 
 Factory = async_sessionmaker[AsyncSession]
 
@@ -268,3 +312,83 @@ async def test_wedged_db_op_skips_one_company_and_loop_continues(
     # Wedged company's mutations were rolled back — nothing stamped, so the next
     # run re-selects it.
     assert wedged_row is not None and wedged_row.eligibility_checked_at is None
+
+
+async def test_rejudge_signal_path_reexamines_already_judged_leak(
+    committed_session_factory: Factory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A company the looser prompt wrongly KEPT (already judged, still included)
+    whose description matches a non-startup signal is re-judged with the
+    tightened prompt under rejudge_nonstartup_signals=True, and now excluded.
+    A signal-matching company is ONLY re-selected with the flag set — the
+    default run leaves it alone (the production cron is unchanged)."""
+    judged_at = datetime.now(tz=UTC)
+    async with committed_session_factory() as s1:
+        leak = _enriched_company("Manta-ish Co", "rejudge-leak")
+        # Already judged + still included, but the stored copy gives it away.
+        leak.description_short = "An online business directory for local SMBs."
+        leak.eligibility_checked_at = judged_at
+        s1.add(leak)
+        await s1.commit()
+        leak_id: UUID = leak.id
+
+    canned = EligibilityJudgment(
+        is_startup=False,
+        not_startup_reason="Online business directory, not a software product.",
+    )
+    monkeypatch.setattr(
+        "nous.pipeline.judge_eligibility.complete_json",
+        AsyncMock(return_value=canned),
+    )
+
+    # Default run: the row is already stamped and not a signal target, so it is
+    # NOT re-selected — behaviour for the production cron is unchanged.
+    default_summary = await run_judge_eligibility(committed_session_factory)
+    assert default_summary.companies_judged == 0
+    async with committed_session_factory() as s2:
+        still = await s2.get(Company, leak_id)
+    assert still is not None and still.exclusion_reason is None
+
+    # Opt-in re-judge: the stamp is reset, the row is re-judged, now excluded.
+    rejudge_summary = await run_judge_eligibility(
+        committed_session_factory, rejudge_nonstartup_signals=True
+    )
+    assert rejudge_summary.companies_judged == 1
+    assert rejudge_summary.companies_excluded == 1
+    async with committed_session_factory() as s3:
+        refetched = await s3.get(Company, leak_id)
+    assert refetched is not None
+    assert refetched.exclusion_reason == "not_a_startup"
+    assert refetched.eligibility_checked_at is not None
+
+
+async def test_rejudge_signal_path_leaves_clean_company_untouched(
+    committed_session_factory: Factory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A real startup that was already judged and whose description carries NO
+    non-startup signal is never re-selected, even with the flag on — the
+    re-judge is targeted, so genuine companies don't get re-LLM'd (precision +
+    cost)."""
+    judged_at = datetime.now(tz=UTC)
+    async with committed_session_factory() as s1:
+        good = _enriched_company("Real SaaS Co", "rejudge-clean")
+        good.description_short = "A developer platform for shipping APIs faster."
+        good.eligibility_checked_at = judged_at
+        s1.add(good)
+        await s1.commit()
+        good_id: UUID = good.id
+
+    mock = AsyncMock(return_value=EligibilityJudgment(is_startup=True))
+    monkeypatch.setattr("nous.pipeline.judge_eligibility.complete_json", mock)
+
+    summary = await run_judge_eligibility(
+        committed_session_factory, rejudge_nonstartup_signals=True
+    )
+    assert summary.companies_judged == 0
+    assert mock.await_count == 0  # no LLM call — the clean row was never picked.
+    async with committed_session_factory() as s3:
+        refetched = await s3.get(Company, good_id)
+    assert refetched is not None
+    assert refetched.exclusion_reason is None
+    # Stamp untouched (still the original judged_at, not reset).
+    assert refetched.eligibility_checked_at is not None

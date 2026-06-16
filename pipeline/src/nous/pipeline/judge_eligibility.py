@@ -9,6 +9,13 @@ LLMRateLimitError (same pattern as enrich-companies). Selection is stamped via
 eligibility_checked_at, so bounded daily runs drain the backlog and steady
 state selects nothing (new enrichments stamp themselves).
 
+Re-judge path (opt-in, ``rejudge_nonstartup_signals=True``): companies the
+older, looser prompt wrongly KEPT — business directories, coaching/courses
+shops, agencies, decades-old businesses (e.g. Manta, Lucra) — are caught by
+conservative description-prose signals (``nonstartup_signal_clause``), have
+their stamp reset, and are re-judged with the tightened prompt. Off by default,
+so the production cron is unchanged; no CLI flag is wired yet (follow-up).
+
 Connection resilience: each company is processed in its OWN short-lived session
 drawn from a session factory, so every company starts on a freshly pre-pinged
 connection, and the per-company DB operations are bounded by ``db_op_timeout``.
@@ -28,7 +35,7 @@ from datetime import UTC, datetime
 from uuid import UUID
 
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import ColumnElement, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm.exc import StaleDataError
@@ -59,6 +66,59 @@ _DB_OP_TIMEOUT_SECONDS: float = 60.0
 # A wedged connection can hang even the implicit ROLLBACK that close() issues, so
 # the best-effort close is itself bounded by this before the session is abandoned.
 _CLOSE_TIMEOUT_SECONDS: float = 5.0
+
+# Conservative description-prose signals of a clearly-NON-startup business that
+# the original (looser) prompt let through and stamped as eligible — e.g. Manta
+# ("online business directory ... operating for over 20 years") and Lucra
+# ("courses, coaching ... mindset mastery"). Each pattern is a case-insensitive
+# LIKE matched against description_short/description_long. They are deliberately
+# specific multi-word phrases, not bare words, to avoid re-judging real startups
+# whose copy happens to mention "courses" or "directory" in passing — the same
+# precision discipline as repair_catalog's parked-domain patterns. These ONLY
+# pick rows for a SECOND look by the tightened prompt; the LLM still makes the
+# final call, so a borderline match is re-judged, not auto-excluded.
+_NONSTARTUP_DESC_PATTERNS: tuple[str, ...] = (
+    "%business directory%",
+    "%online directory%",
+    "%web directory%",
+    "%listings site%",
+    "%listing service%",
+    "%yellow pages%",
+    "%courses, coaching%",
+    "%coaching and courses%",
+    "%coaching program%",
+    "%online courses%",
+    "%mindset mastery%",
+    "%mindset coaching%",
+    "%life coach%",
+    "%info-product%",
+    "%marketing agency%",
+    "%advertising agency%",
+    "%digital agency%",
+    "%creative agency%",
+    "%consulting firm%",
+    "%consultancy%",
+    "%for over 20 years%",
+    "%for over 25 years%",
+    "%over two decades%",
+    "%for more than 20 years%",
+)
+
+
+def nonstartup_signal_clause() -> ColumnElement[bool]:
+    """SQL predicate selecting rows whose stored description matches a clearly-
+    non-startup prose signal (see ``_NONSTARTUP_DESC_PATTERNS``).
+
+    Pure and DB-free to build, so it is unit-testable without Postgres and
+    reusable by any re-judge entry point. Matches against BOTH description
+    columns: the short blurb is usually enough, but the long body sometimes
+    carries the give-away phrase ("operating for over 20 years") on its own.
+    """
+    clauses: list[ColumnElement[bool]] = []
+    for pattern in _NONSTARTUP_DESC_PATTERNS:
+        clauses.append(Company.description_short.ilike(pattern))
+        clauses.append(Company.description_long.ilike(pattern))
+    return or_(*clauses)
 
 
 class JudgeEligibilitySummary(BaseModel):
@@ -169,11 +229,43 @@ async def run_judge_eligibility(
     *,
     limit: int | None = None,
     db_op_timeout: float = _DB_OP_TIMEOUT_SECONDS,
+    rejudge_nonstartup_signals: bool = False,
 ) -> JudgeEligibilitySummary:
+    """Judge eligibility for enriched companies.
+
+    Default selection (``rejudge_nonstartup_signals=False``): enriched-but-never-
+    judged, still-included rows — the one-shot backfill, unchanged.
+
+    When ``rejudge_nonstartup_signals=True``: ALSO re-judge currently-INCLUDED
+    rows (``exclusion_reason IS NULL``) whose stored description matches a
+    clearly-non-startup prose signal (``nonstartup_signal_clause``), even if
+    they were already judged under the older, looser prompt — the Manta /
+    Lucra leak. Their ``eligibility_checked_at`` stamp is reset so the normal
+    per-company path re-judges them with the tightened prompt; the LLM still
+    makes the final call. Already-excluded rows are left untouched (this path
+    never un-excludes). Idempotent: a re-judge that confirms a row stamps it
+    again, so a follow-up default run re-selects nothing.
+
+    No row is mutated unless this flag is set, so the production cron (which
+    calls this with the default) is behaviourally unchanged.
+    """
     summary = JudgeEligibilitySummary()
 
     # Select the work-list (ids only) in its own short session, then close it.
     async with session_factory() as session:
+        if rejudge_nonstartup_signals:
+            # Reset the stamp on already-judged, still-included signal rows so
+            # the existing selection (eligibility_checked_at IS NULL) re-picks
+            # them. A bounded, idempotent UPDATE — re-judging restamps each row.
+            await session.execute(
+                update(Company)
+                .where(Company.description_short.is_not(None))
+                .where(Company.exclusion_reason.is_(None))
+                .where(Company.eligibility_checked_at.is_not(None))
+                .where(nonstartup_signal_clause())
+                .values(eligibility_checked_at=None)
+            )
+            await session.commit()
         stmt = (
             select(Company.id, Company.name)
             .where(Company.description_short.is_not(None))
