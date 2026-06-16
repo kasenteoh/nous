@@ -13,6 +13,45 @@ bottom of the appropriate section; close items by deleting them.
 
 ---
 
+## 2026-06-16 product review — new top items
+
+Full findings + persona walkthrough:
+[2026-06-16-product-review-and-next-steps.md](docs/superpowers/plans/2026-06-16-product-review-and-next-steps.md).
+A live four-persona pass (VC / CTO / PM / enthusiast) confirmed the 06-14 lanes
+shipped (funding coverage ~31%, VC features, normalized taxonomy, relationship
+graph) and surfaced these **new** items, highest-impact first:
+
+**P0 (the site currently looks wrong)**
+- Suppress the "no full profile yet" husk notice when funding/news/competitor
+  data exists; fix the literal `vc portfoliobut` typo + raw enum. [S] frontend.
+- Prioritise `enrich-companies` by `latest_round_amount` / news volume — marquee
+  companies (Perplexity, Mistral, Fivetran…) are blank husks at the top of
+  "Largest raise". [S–M]
+- Drain & harden non-US detection (extends `infer-hq-country` #109): Mistral (FR),
+  ICEYE (FI), Zepto (IN), Clio (CA), Rohlik (CZ) are live in a "US-only" catalog. [M]
+- Detect wrong-website / mismatched descriptions and re-queue (Kalshi shows
+  FrenFlow's copy; AgentMail shows "Series V"'s) — extends `repair-wrong-websites`. [M]
+
+**P1**
+- Re-judge non-startups that slipped through (Manta = 20-yr directory, Lucra =
+  coaching). [S–M]
+- Funding rows missing dates/round types + duplicate/empty rounds; run
+  `repair-duplicate-rounds` (dry-run today) over the new backlog. [S–M]
+- **Compare entry UI** — `/compare` works but tells users to hand-type a URL;
+  add card checkboxes → "Compare (n)" bar (Wave-4 "Compare view": page done, entry
+  missing). [S]
+- Resolve Google-News redirects to publishers so the Sources list isn't all
+  `news.google.com`. [S]
+- News mis-attribution (Autoscience article on Perplexity's page). [S]
+- Investor pages: populate/render `description` + `website`; paginate the
+  portfolio (a16z renders 678 cards on one page). [S–M] (QA G4/G5)
+
+**P2 quick wins:** humanise the `discovered_via` badge on `/c/[slug]`; merge
+`a16z` → `Andreessen Horowitz` and drop junk investors ("a group of investors");
+remove the stale `repoIssueUrl` "unused until public" comment in `web/lib/site.ts`.
+
+---
+
 ## Pipeline cleanups (P2)
 
 ### Throttle/get helper triplicated across source clients [M]
