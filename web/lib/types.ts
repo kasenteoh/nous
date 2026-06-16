@@ -214,8 +214,20 @@ export interface InvestorDetail {
    * portfolio.length when the column is not yet populated in prod.
    */
   portfolioCount: number;
-  /** Portfolio companies from the company_investors join (shaped for CompanyCard). */
+  /**
+   * Portfolio companies for the requested page (company_investors join unioned
+   * with round-only companies, shaped for CompanyCard). When getInvestorBySlug
+   * is called with a `limit`, this holds only that page's slice; without one it
+   * is the full union.
+   */
   portfolio: CompanyListRow[];
+  /**
+   * Length of the full, deduplicated portfolio union (company-level + round-only
+   * companies) that {@link portfolio} is paged from — the number the page
+   * paginates over. May differ from {@link portfolioCount} (the denormalized
+   * headline total, which can include companies not yet resolvable to a card).
+   */
+  portfolioTotal: number;
   /** Funding rounds this investor led or participated in, newest first. */
   rounds: InvestorRoundRow[];
 }
