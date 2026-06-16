@@ -102,3 +102,37 @@ async def test_companies_table_exists(db: AsyncSession) -> None:
     )
     tables = [row[0] for row in result.fetchall()]
     assert tables == ["companies"]
+
+
+async def test_filter_columns_are_indexed(db: AsyncSession) -> None:
+    """The web filter columns (migration 0030) carry indexes on companies.
+
+    ``hq_state`` / ``industry_group`` / ``discovered_via`` back equality
+    filters and facets; ``tags`` backs array-containment on the /tag pages and
+    must use a GIN index (a btree cannot serve ``@>`` / ``&&`` on an array).
+    """
+    result = await db.execute(
+        text(
+            "SELECT indexname, indexdef FROM pg_indexes "
+            "WHERE schemaname = 'public' AND tablename = 'companies' "
+            "AND indexname IN ("
+            "  'ix_companies_hq_state',"
+            "  'ix_companies_tags',"
+            "  'ix_companies_industry_group',"
+            "  'ix_companies_discovered_via'"
+            ")"
+        )
+    )
+    indexdef_by_name = {row[0]: row[1] for row in result.fetchall()}
+
+    assert set(indexdef_by_name) == {
+        "ix_companies_hq_state",
+        "ix_companies_tags",
+        "ix_companies_industry_group",
+        "ix_companies_discovered_via",
+    }
+    # tags must be a GIN index; the scalar columns default to btree.
+    assert "USING gin" in indexdef_by_name["ix_companies_tags"]
+    assert "USING btree" in indexdef_by_name["ix_companies_hq_state"]
+    assert "USING btree" in indexdef_by_name["ix_companies_industry_group"]
+    assert "USING btree" in indexdef_by_name["ix_companies_discovered_via"]
