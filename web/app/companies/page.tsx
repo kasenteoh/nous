@@ -11,6 +11,7 @@ import {
   type CompanyListOptions,
   type CompanyListSort,
 } from "@/lib/queries";
+import { discoveredViaLabel } from "@/lib/format";
 import { CompanyCard } from "@/components/CompanyCard";
 import { SaveSearch } from "@/components/SaveSearch";
 import { FilterPanel, type ActiveFilterChip } from "@/components/FilterPanel";
@@ -59,17 +60,6 @@ const FUNDED_SINCE_OPTIONS: { value: number; label: string }[] = [
   { value: 730, label: "Last 2 years" },
 ];
 
-// Human-readable labels for discovered_via values. Unknown keys fall back to
-// the raw value (title-cased) so new pipeline values self-heal in the UI.
-const SOURCE_LABELS: Record<string, string> = {
-  vc_portfolio: "VC portfolio",
-  techcrunch: "TechCrunch",
-  news: "News",
-};
-
-function sourceLabel(value: string): string {
-  return SOURCE_LABELS[value] ?? value.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
-}
 
 type SearchParams = {
   q?: string | string[];
@@ -283,7 +273,7 @@ export default async function CompaniesPage({
   if (source) {
     advancedChips.push({
       key: "source",
-      label: `Source: ${sourceLabel(source)}`,
+      label: `Source: ${discoveredViaLabel(source)}`,
       removeHref: hrefWithout("source"),
     });
   }
@@ -448,7 +438,7 @@ export default async function CompaniesPage({
               <option value="">All sources</option>
               {discoveredViaValues.map((value) => (
                 <option key={value} value={value}>
-                  {sourceLabel(value)}
+                  {discoveredViaLabel(value)}
                 </option>
               ))}
             </select>
