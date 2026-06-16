@@ -34,6 +34,7 @@ from selectolax.parser import HTMLParser
 from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
 
 from nous.sources.robots import RobotsBlockedError, RobotsCache
+from nous.util.slugify import strip_corporate_suffix
 from nous.util.ssrf import BlockedAddressError, guarded_async_client
 from nous.util.url import canonical_url, hostname
 
@@ -42,10 +43,12 @@ from nous.util.url import canonical_url, hostname
 __all__ = [
     "FUNDING_KEYWORDS",
     "MIN_BODY_CHARS",
+    "RELEVANCE_BODY_PORTION_CHARS",
     "NewsArticleResult",
     "NewsClient",
     "ResolvedArticle",
     "RobotsBlockedError",
+    "article_mentions_company",
 ]
 
 logger = logging.getLogger(__name__)
@@ -162,6 +165,203 @@ def _matches_funding_keyword(text: str) -> bool:
     """Case-insensitive match against FUNDING_KEYWORDS."""
     lowered = text.lower()
     return any(kw in lowered for kw in FUNDING_KEYWORDS)
+
+
+# How much of a resolved/fetched article body we scan for the company name when
+# the headline alone doesn't contain it. The lede (first paragraph or two) names
+# the funded company; scanning the whole body would re-admit the false positives
+# we're guarding against (a generic word like "ramp" appearing incidentally deep
+# in an unrelated piece).
+RELEVANCE_BODY_PORTION_CHARS: int = 600
+
+# Common English words that double as single-word startup names (e.g. the
+# "Aardvark" biotech). A Google News query of ``"<word>" funding`` for any of
+# these matches a flood of unrelated articles that merely use the word, so a
+# name built from one of these needs the *full* name phrase in the headline (or
+# a funding-flavored headline plus a body mention) before we attribute the
+# article. The single-token / <=2-token rule below already makes every short
+# name strict; this set additionally hardens longer names whose head token is a
+# generic word. Deliberately small and hand-curated — it is a false-positive
+# guard, not a dictionary; unknown short names are caught by the token-count
+# rule regardless.
+_COMMON_NAME_WORDS: frozenset[str] = frozenset(
+    {
+        "aardvark",
+        "anchor",
+        "apple",
+        "arc",
+        "atom",
+        "beam",
+        "bench",
+        "block",
+        "bolt",
+        "brave",
+        "bridge",
+        "cake",
+        "canvas",
+        "cargo",
+        "chime",
+        "clear",
+        "cloud",
+        "coda",
+        "compass",
+        "cricket",
+        "current",
+        "dash",
+        "drift",
+        "echo",
+        "ember",
+        "fast",
+        "flow",
+        "forge",
+        "front",
+        "glow",
+        "grid",
+        "harvest",
+        "hive",
+        "honey",
+        "ivy",
+        "jet",
+        "lattice",
+        "leap",
+        "lemon",
+        "level",
+        "lime",
+        "loop",
+        "mint",
+        "monarch",
+        "notion",
+        "oak",
+        "orbit",
+        "otter",
+        "owl",
+        "pace",
+        "panda",
+        "patch",
+        "pepper",
+        "pilot",
+        "pinecone",
+        "plaid",
+        "pulse",
+        "ramp",
+        "raven",
+        "ripple",
+        "river",
+        "rocket",
+        "root",
+        "scale",
+        "shield",
+        "slack",
+        "slate",
+        "spark",
+        "splash",
+        "sprout",
+        "square",
+        "stack",
+        "stripe",
+        "summit",
+        "swift",
+        "tide",
+        "torch",
+        "vault",
+        "wave",
+        "wren",
+        "zest",
+    }
+)
+
+_TOKEN_RE = re.compile(r"[a-z0-9]+")
+
+
+def _tokenize(text: str) -> list[str]:
+    """Lowercase, fold to alphanumerics, split into tokens for phrase matching.
+
+    Tokenizing both sides (name and text) and matching on a contiguous token
+    *sub-sequence* — rather than a substring — avoids boundary false positives
+    ("Ramp" must not match inside "cRAMPed") while staying punctuation/spacing
+    insensitive ("Acme, Inc." vs "Acme Inc" vs "acme").
+    """
+    return _TOKEN_RE.findall(text.lower())
+
+
+def _phrase_in_tokens(needle: list[str], haystack: list[str]) -> bool:
+    """True if ``needle`` appears as a contiguous sub-sequence of ``haystack``."""
+    if not needle or len(needle) > len(haystack):
+        return False
+    first = needle[0]
+    width = len(needle)
+    return any(
+        tok == first and haystack[i : i + width] == needle
+        for i, tok in enumerate(haystack)
+    )
+
+
+def _company_name_tokens(name: str) -> list[str]:
+    """Tokens of a company name with its corporate suffix stripped.
+
+    "Aardvark Therapeutics, Inc." -> ["aardvark", "therapeutics"]; "Acme Inc"
+    -> ["acme"]. Suffix-stripping keeps the token count (and the short-name
+    riskiness test) about the *distinctive* part of the name, not boilerplate.
+    """
+    return _tokenize(strip_corporate_suffix(name))
+
+
+def article_mentions_company(
+    company_name: str,
+    title: str,
+    *,
+    snippet: str = "",
+    body: str | None = None,
+) -> bool:
+    """Relevance guard for the per-company Google News path.
+
+    Google News ranks ``"<name>" funding`` loosely, so for generic or
+    common-word company names it returns articles that merely contain the word
+    — e.g. the "Aardvark" biotech matched a PBS-funding story, a rugby
+    fundraiser, and a day-care-funding piece, none about the company. This
+    requires the company name to *actually appear* (as a whole-token phrase)
+    before an article is attributed, biased toward dropping borderline matches.
+
+    Tiers (strictness rises as the name gets more collision-prone):
+
+    - Distinctive names (>= 3 tokens after suffix-strip, head token not a common
+      word): keep when the full name phrase is in the title OR the first
+      ``RELEVANCE_BODY_PORTION_CHARS`` of the resolved body. Long names rarely
+      collide, so a lede mention is trustworthy.
+    - Risky names (<= 2 tokens, or head token a common dictionary word): the
+      headline is the strongest curated signal — keep when the full name phrase
+      is in the *title*. A body-only mention is trusted only when the *title*
+      itself is funding-flavored (so a stray "ramp"/"scale" deep in an unrelated
+      article does not qualify).
+
+    ``snippet`` (the RSS summary) is accepted for symmetry / future use but is
+    intentionally NOT treated as strong as the title — Google News snippets are
+    often a generic sentence that repeats the query terms.
+    """
+    name_tokens = _company_name_tokens(company_name)
+    if not name_tokens:
+        # No distinctive token to anchor on (e.g. a name that was all
+        # punctuation/suffix). Fail closed — better to drop than misattribute.
+        return False
+
+    title_tokens = _tokenize(title)
+    title_has = _phrase_in_tokens(name_tokens, title_tokens)
+
+    body_has = False
+    if body:
+        body_has = _phrase_in_tokens(
+            name_tokens, _tokenize(body[:RELEVANCE_BODY_PORTION_CHARS])
+        )
+
+    risky = len(name_tokens) <= 2 or name_tokens[0] in _COMMON_NAME_WORDS
+    if not risky:
+        return title_has or body_has
+
+    if title_has:
+        return True
+    # Risky name, name only in the body: require a funding-flavored headline so
+    # an incidental body mention of a generic word doesn't get attributed.
+    return body_has and _matches_funding_keyword(title)
 
 
 def _strip_html(text: str) -> str:
