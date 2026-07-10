@@ -8,7 +8,7 @@ You are the user's CTO partner on this project. The user owns product direction;
 
 ## Repo layout
 
-- `pipeline/` — Python data pipeline. Idempotent stages invoked as CLI commands; runs weekly via GitHub Actions.
+- `pipeline/` — Python data pipeline. Idempotent stages invoked as CLI commands; runs via GitHub Actions cron (`pipeline.yml` every 3h for news/enrichment, `discovery.yml` weekly for discovery/dedup/competitors).
 - `web/` — Next.js 16 frontend (App Router). Server components read from Supabase. `params` is a Promise in async pages — see `web/AGENTS.md`.
 - `.github/workflows/` — Weekly pipeline cron and CI lint/typecheck.
 - `nous-technical-spec.md` — full product and technical spec. Reference for design decisions.
@@ -33,7 +33,7 @@ Pipeline (run from `pipeline/`):
 - `uv run ruff check .` — lint
 - `uv run mypy src` — typecheck
 - `uv run alembic upgrade head` — apply migrations
-- `uv run alembic revision --autogenerate -m "msg"` — create a migration
+- `uv run alembic revision -m "msg"` — create an empty migration to hand-write (never `--autogenerate`; see Database conventions)
 - `uv run python -m nous.cli <stage>` — invoke a pipeline stage
 
 Web (run from `web/`):
@@ -79,7 +79,7 @@ Before considering any task complete: run `ruff check`, `mypy src`, and `pytest`
 - Every outbound scrape must send a `User-Agent` header with a contact email (the `SEC_USER_AGENT` setting). Many sites block anonymous traffic, and it is basic scraping etiquette.
 - Respect `robots.txt` on every external site scraped. Throttle to 1 request per second per domain.
 - Every fact rendered on a company page must have a source recorded in the database. No unattributed numbers.
-- Stay on free tiers. If a change would incur cost, flag it before implementing.
+- Stay on free tiers, with one standing exception: DeepSeek LLM calls are paid (see Stack). Any *new* cost — a new paid API, a tier upgrade, a change that materially raises DeepSeek volume — gets flagged before implementing.
 - Pipeline stages are idempotent. Re-running a stage must never duplicate or corrupt data.
 
 ## Where things go
@@ -94,5 +94,5 @@ Before considering any task complete: run `ruff check`, `mypy src`, and `pytest`
 ## Workflow
 
 - Work on feature branches. Never push directly to `main`.
-- Create migrations with `--autogenerate` then read the diff before running `upgrade head`.
+- Write migrations **by hand** — never `--autogenerate`. Autogenerate cannot model the trigram/partial/unique indexes this schema depends on and silently drops them (see the docstring warning repeated in every migration from 0015 on). Chain the revision off the current head and write both `upgrade()` and `downgrade()`.
 - When unsure about a design decision, check `nous-technical-spec.md` before improvising.
