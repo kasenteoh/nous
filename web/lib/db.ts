@@ -1,3 +1,8 @@
+// Build-time boundary guard: importing this module from any client-component
+// graph fails the build (the `server-only` package throws outside a
+// react-server environment). See web/AGENTS.md "Server-only boundary".
+import "server-only";
+
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 
 // Server-only Supabase client. The service role key bypasses RLS, so this must
