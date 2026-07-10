@@ -8,6 +8,23 @@ permissions:
   contents: read
 
 jobs:
+  # Secret-scanning gate: fails the build if a secret is committed anywhere in
+  # history. False positives are suppressed by exact fingerprint in
+  # .gitleaksignore (never by path/pattern — see .gitleaks.toml). The same scan
+  # is available locally as an opt-in pre-commit hook (.pre-commit-config.yaml).
+  secrets:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history: gitleaks scans every commit, not just the tip.
+          fetch-depth: 0
+
+      - name: Gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
   pipeline:
     runs-on: ubuntu-latest
     defaults:
@@ -74,7 +91,24 @@ jobs:
         run: npm run lint
 
       - name: Build (also typechecks)
+        # The canary values below are FAKE (this job has no real secrets — see
+        # the smoke-test comment). They exist so the bundle-safety step can
+        # prove no build path inlines or serializes a server secret into a
+        # client-visible artifact. Only the key/DB URL are planted: SUPABASE_URL
+        # stays unset so lib/db.ts keeps taking its "not configured" path and
+        # the build behaves exactly like the secret-free contract expects.
+        env:
+          SUPABASE_SERVICE_ROLE_KEY: nous-ci-canary-service-role-key-not-a-real-secret
+          DATABASE_URL: postgresql+psycopg://canary:nous-ci-canary-db-password@canary.invalid:5432/canary
         run: npm run build
+
+      - name: Client-bundle safety (no server secrets reach the browser)
+        # Must run with the same env as the build so the canary *values* are
+        # scanned for, in addition to the server-only identifier names.
+        env:
+          SUPABASE_SERVICE_ROLE_KEY: nous-ci-canary-service-role-key-not-a-real-secret
+          DATABASE_URL: postgresql+psycopg://canary:nous-ci-canary-db-password@canary.invalid:5432/canary
+        run: npm run check:bundle
 
       # Release-blocking route smoke (Task B3 / Phase 7.2). CI has no Supabase
       # secrets, so SMOKE_HAS_DATA is intentionally unset: the harness runs its

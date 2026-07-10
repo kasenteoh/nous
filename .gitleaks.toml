@@ -1,0 +1,11 @@
+# Gitleaks configuration — CI gate (lint.yml `secrets` job) + opt-in pre-commit
+# hook (.pre-commit-config.yaml).
+#
+# Policy: extend the default ruleset, allowlist nothing by pattern or path.
+# Known false positives are suppressed individually by fingerprint in
+# .gitleaksignore — a path/regex allowlist here could mask a real leak in a
+# future file, which defeats the gate (this repo's catastrophic case is the
+# Supabase service-role key or the DATABASE_URL reaching a commit).
+
+[extend]
+useDefault = true
