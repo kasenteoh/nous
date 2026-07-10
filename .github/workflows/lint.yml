@@ -73,6 +73,11 @@ jobs:
       - name: Lint
         run: npm run lint
 
+      # Vitest unit/component suite (jsdom). Needs no Supabase secrets — the
+      # query layer is tested against a mocked client.
+      - name: Test
+        run: npm run test
+
       - name: Build (also typechecks)
         run: npm run build
 

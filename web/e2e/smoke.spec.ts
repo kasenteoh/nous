@@ -25,6 +25,12 @@ const COLD_START_PROSE = "Run the discovery pipeline";
 const COLD_START_CMD = "nous refresh-vc-portfolios";
 
 const HAS_DATA = process.env.SMOKE_HAS_DATA === "1";
+// Exact header row of /api/export (COLUMNS in app/api/export/route.ts) — the
+// contract a VC's spreadsheet import depends on.
+const CSV_HEADER =
+  "name,slug,website,industry,hq_city,hq_state,latest_round_type," +
+  "latest_round_amount_usd,latest_round_date,total_raised_usd," +
+  "employees_min,employees_max,investors";
 // Slugs are injected at runtime (never committed). Fallbacks keep the excluded
 // check meaningful even if the env var is unset: an excluded OR nonexistent
 // slug both 404, which is exactly the assertion.
@@ -122,6 +128,62 @@ test.describe("structural smoke (no data required — CI contract)", () => {
       page.getByRole("heading", { level: 1, name: /not found/i }),
     ).toBeVisible();
   });
+
+  test("/companies with the full filter querystring stays a valid page (200)", async ({
+    page,
+  }) => {
+    // Every filter param at once must never crash the parser — with no data
+    // the result set is just empty, which is fine structurally.
+    const res = await page.goto(
+      "/companies?q=zzz&industry=Fintech&source=techcrunch&stage=Series+A" +
+        "&funded_since_days=30&min_raised=1000000&max_raised=90000000" +
+        "&founded_after=2019&founded_before=2026&emp_min=5&emp_max=500&sort=funding_desc",
+    );
+    expect(res?.status(), "filtered /companies status").toBe(200);
+    await expectSiteChrome(page);
+  });
+
+  test("/compare renders its empty state (200)", async ({ page }) => {
+    const res = await page.goto("/compare");
+    expect(res?.status(), "GET /compare status").toBe(200);
+    await expectSiteChrome(page);
+    await expect(
+      page.getByRole("heading", { level: 1, name: "Compare companies" }),
+    ).toBeVisible();
+    await expect(
+      page.getByText("No companies selected to compare."),
+    ).toBeVisible();
+  });
+
+  test("/compare with unknown slugs stays a valid page (200)", async ({
+    page,
+  }) => {
+    // Unknown (or, secret-free, ALL) slugs resolve to no listed companies;
+    // the page must degrade to its explanatory empty state, never 500.
+    const res = await page.goto("/compare?slugs=zzz-nope-a,zzz-nope-b");
+    expect(res?.status(), "GET /compare?slugs=… status").toBe(200);
+    await expectSiteChrome(page);
+    await expect(
+      page.getByText("None of those companies are listed."),
+    ).toBeVisible();
+  });
+
+  test("/api/export responds deliberately: 200 CSV with data, 503 without a backend", async ({
+    page,
+  }) => {
+    // Secret-free CI has no Supabase env, so the route answers a deliberate
+    // 503 (plain text) rather than crashing; with credentials it streams CSV.
+    // Both are correct — what must never happen is an unhandled 500.
+    const res = await page.request.get("/api/export");
+    expect([200, 503], "GET /api/export status").toContain(res.status());
+    if (res.status() === 200) {
+      expect(res.headers()["content-type"]).toContain("text/csv");
+      const firstLine = (await res.text()).split("\n")[0];
+      expect(firstLine).toBe(CSV_HEADER);
+    } else {
+      expect(res.headers()["content-type"]).toContain("text/plain");
+    }
+  });
 });
 
 test.describe("data-backed smoke (SMOKE_HAS_DATA=1 — local / prod-backed)", () => {
@@ -157,5 +219,75 @@ test.describe("data-backed smoke (SMOKE_HAS_DATA=1 — local / prod-backed)", ()
     // Company name is the page <h1>; "Discovered via …" is on every profile.
     await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
     await expect(page.getByText(/Discovered via/i)).toBeVisible();
+  });
+
+  test("journey: browse → filter → company page → compare → CSV export", async ({
+    page,
+  }) => {
+    // Generous ceiling: five navigations against free-tier Supabase.
+    test.setTimeout(90_000);
+
+    // 1 — Browse: the card grid renders.
+    await page.goto("/companies");
+    const cardNames = page.locator('main a[href^="/c/"] h2');
+    await expect(cardNames.first()).toBeVisible();
+    // Prefer a name without characters the ilike sanitizer strips (%, *, (),
+    // commas) — searching for e.g. "Acme (AI)" can't round-trip exactly.
+    const names = (await cardNames.allInnerTexts()).map((n) => n.trim());
+    const companyName =
+      names.find((n) => /^[a-z0-9 .&'-]+$/i.test(n)) ?? names[0];
+
+    // 2 — Filter: searching for that exact name must keep the company in the
+    // (server-filtered) result set.
+    const searchBox = page.getByPlaceholder("Search companies…");
+    await searchBox.fill(companyName);
+    await searchBox.press("Enter");
+    await expect(page).toHaveURL(/[?&]q=/);
+    const filteredCard = page
+      .locator('main a[href^="/c/"]')
+      .filter({ hasText: companyName })
+      .first();
+    await expect(filteredCard).toBeVisible();
+
+    // 3 — Company page: the filtered card links to a live profile.
+    await filteredCard.click();
+    await expect(page).toHaveURL(/\/c\/[^/]+$/);
+    const companySlug = new URL(page.url()).pathname.split("/").pop() ?? "";
+    expect(companySlug).not.toBe("");
+    await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
+    await expect(page.getByText(/Discovered via/i)).toBeVisible();
+
+    // 4 — Compare: tick two cards' Compare checkboxes, follow the sticky bar.
+    // After a check the toggle's accessible name flips to "Remove … from
+    // compare", so first() always targets the next still-unchecked card.
+    await page.goto("/companies");
+    const addToggles = page.getByRole("checkbox", {
+      name: /^Add .+ to compare$/,
+    });
+    await addToggles.first().check();
+    await addToggles.first().check();
+    const bar = page.getByRole("region", { name: "Compare selection" });
+    await expect(bar).toBeVisible();
+    await bar.getByRole("link", { name: /^Compare 2/ }).click();
+    await expect(page).toHaveURL(/\/compare\?slugs=/);
+    await expect(
+      page.getByRole("heading", { level: 1, name: "Compare companies" }),
+    ).toBeVisible();
+    // Both companies appear as linked column headers of the comparison table.
+    await expect(page.locator('thead a[href^="/c/"]')).toHaveCount(2);
+
+    // 5 — CSV export: same filter as step 2, exact header row, and the
+    // filtered company's row present.
+    const res = await page.request.get(
+      `/api/export?q=${encodeURIComponent(companyName)}`,
+    );
+    expect(res.status(), "GET /api/export status").toBe(200);
+    expect(res.headers()["content-type"]).toContain("text/csv");
+    expect(res.headers()["content-disposition"]).toContain(
+      'attachment; filename="nous-companies.csv"',
+    );
+    const body = await res.text();
+    expect(body.split("\n")[0]).toBe(CSV_HEADER);
+    expect(body).toContain(`"${companySlug}"`);
   });
 });
