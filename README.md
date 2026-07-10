@@ -1,5 +1,7 @@
 # nous
 
+**Live site: [nous-umber.vercel.app](https://nous-umber.vercel.app)**
+
 nous is a free, public-facing site for discovering and reading about US software
 startups. It aggregates VC portfolio listings, funding news, and public web
 sources, then uses LLM enrichment to turn them into readable, source-attributed
