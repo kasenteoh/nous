@@ -2,9 +2,10 @@
 
 Mirrors the discipline of ``sources/homepage.py``:
 
-- Per-domain 1 req/sec throttle (spec §3.2 + §11).
+- Per-domain 1 req/sec throttle (spec §3.2 + §11), shared process-wide via
+  ``nous.sources._http`` so it cooperates with every other client on a host.
 - robots.txt checked on every fetch via RobotsCache.
-- Tenacity retries on 429 / 5xx / network blips.
+- Tenacity retries on 429 / 5xx / timeouts (shared policy in ``_http``).
 - User-Agent identifies nous on every request — reuse SEC_USER_AGENT site-wide.
 
 Boundaries:
@@ -20,19 +21,17 @@ Boundaries:
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import re
-import time
 from datetime import UTC, date, datetime, timedelta
-from urllib.parse import quote_plus, urlparse
+from urllib.parse import quote_plus
 
 import feedparser
 import httpx
 from pydantic import BaseModel
 from selectolax.parser import HTMLParser
-from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
 
+from nous.sources._http import DomainThrottle, ThrottledHTTPClient
 from nous.sources.robots import RobotsBlockedError, RobotsCache
 from nous.util.slugify import strip_corporate_suffix
 from nous.util.ssrf import BlockedAddressError, guarded_async_client
@@ -152,13 +151,6 @@ class ResolvedArticle(BaseModel):
     url: str  # the final publisher URL after the redirect chain
     source: str  # publisher hostname (e.g. "reuters.com")
     body: str  # cleaned visible article text (>= MIN_BODY_CHARS)
-
-
-def _is_retryable(exc: BaseException) -> bool:
-    """Retry on 429 / 5xx / timeouts. ConnectError (DNS, refused, TLS) is permanent."""
-    if isinstance(exc, httpx.HTTPStatusError):
-        return exc.response.status_code == 429 or exc.response.status_code >= 500
-    return isinstance(exc, httpx.TimeoutException)
 
 
 def _matches_funding_keyword(text: str) -> bool:
@@ -415,6 +407,7 @@ class NewsClient:
         self,
         user_agent: str,
         requests_per_second_per_domain: float = 1.0,
+        throttle: DomainThrottle | None = None,
     ) -> None:
         if not user_agent or not user_agent.strip():
             raise ValueError(
@@ -422,12 +415,12 @@ class NewsClient:
                 "Most news sites block anonymous crawlers."
             )
         self._user_agent = user_agent
-        self._rps = requests_per_second_per_domain
-        self._min_interval: float = 1.0 / requests_per_second_per_domain
-
-        self._domain_last_request: dict[str, float] = {}
-        self._domain_locks: dict[str, asyncio.Lock] = {}
-        self._registry_lock = asyncio.Lock()
+        # Throttle state is process-wide by default (nous.sources._http), so
+        # this client and e.g. HomepageClient take turns on a shared host.
+        self._http = ThrottledHTTPClient(
+            requests_per_second_per_domain=requests_per_second_per_domain,
+            throttle=throttle,
+        )
 
         self._client: httpx.AsyncClient | None = None
         self._robots: RobotsCache | None = None
@@ -461,39 +454,11 @@ class NewsClient:
             raise RuntimeError("NewsClient must be used as an async context manager.")
         return self._client, self._robots
 
-    async def _get_domain_lock(self, domain: str) -> asyncio.Lock:
-        async with self._registry_lock:
-            if domain not in self._domain_locks:
-                self._domain_locks[domain] = asyncio.Lock()
-            return self._domain_locks[domain]
-
-    async def _throttled_get(self, url: str) -> httpx.Response:
-        """Rate-limited GET, serialised per domain."""
-        parsed = urlparse(url)
-        domain = parsed.netloc
-
-        domain_lock = await self._get_domain_lock(domain)
-        async with domain_lock:
-            now = time.monotonic()
-            last = self._domain_last_request.get(domain, 0.0)
-            wait = self._min_interval - (now - last)
-            if wait > 0:
-                await asyncio.sleep(wait)
-
-            client, _ = self._assert_open()
-            resp = await client.get(url)
-            self._domain_last_request[domain] = time.monotonic()
-            resp.raise_for_status()
-            return resp
-
-    @retry(
-        retry=retry_if_exception(_is_retryable),
-        wait=wait_exponential(multiplier=1, min=1, max=10),
-        stop=stop_after_attempt(3),
-        reraise=True,
-    )
     async def _get_with_retry(self, url: str) -> httpx.Response:
-        return await self._throttled_get(url)
+        """Rate-limited GET, serialised per domain, with the shared retry policy
+        (429 / 5xx / timeouts — see nous.sources._http)."""
+        client, _ = self._assert_open()
+        return await self._http.get(client, url)
 
     async def fetch_text(self, url: str) -> str:
         """Robots-checked, throttled, retried GET. Returns response body text.
