@@ -51,6 +51,21 @@ def _reset_ledger() -> Generator[None, None, None]:
     reset_ledger()
 
 
+@pytest.fixture(autouse=True)
+def _reset_domain_throttle() -> Generator[None, None, None]:
+    """Reset the process-wide per-domain throttle registry around each test.
+
+    The default registry is deliberately shared across client instances (that
+    sharing is the W-C.1 fix); without a reset, a test that hits example.com
+    would make the next test's example.com fetch wait out the interval.
+    """
+    from nous.sources._http import DEFAULT_THROTTLE
+
+    DEFAULT_THROTTLE.reset()
+    yield
+    DEFAULT_THROTTLE.reset()
+
+
 # ---------------------------------------------------------------------------
 # Shared DeepSeek HTTP-mock helpers
 # ---------------------------------------------------------------------------
