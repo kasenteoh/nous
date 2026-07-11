@@ -1,8 +1,8 @@
 {
-  "provenance": "simulated",
-  "model": null,
-  "recorded_at": null,
+  "provenance": "deepseek",
+  "model": "deepseek-chat",
+  "recorded_at": "2026-07-11T08:56:02+00:00",
   "response": {
-    "description_long": "Snipvault is a code-snippet manager for individuals and teams: save snippets, organize them with tags and collections, share them in team libraries with permissions, and sync across devices with end-to-end encryption. The feature list names syntax highlighting for 40+ languages, search across every snippet in milliseconds, and editor extensions for VS Code and JetBrains, with desktop apps for Mac, Windows, and Linux.\n\nThe model is a simple freemium split — free for personal use, $5 per user per month for teams. The site is a terse feature page beyond that: it says nothing about the company, its team, its origins, or its customers, so how Snipvault positions itself against the many snippet tools in this space is not stated."
+    "description_long": "Software teams waste time hunting for snippets they've written before \u2014 that clever regex, that config block, that reusable SQL. Snipvault solves this by providing a dedicated tool for saving, organizing, and sharing code snippets across a team, with end-to-end encrypted sync across devices.\n\nThe product works as a desktop app for Mac, Windows, and Linux, with syntax highlighting for over 40 languages, near-instant search across all snippets, and organization via tags and collections. Team libraries come with permission controls. Integrations are available for VS Code and JetBrains IDEs, meaning developers can access their snippet library without leaving their editor.\n\nSnipvault offers a free personal tier and charges $5 per user per month for teams. The website does not explain how the technical approach differs from alternatives, nor does it name any customers or traction metrics. The pitch is straightforward: stop scattering snippets in personal gists, local files, or chat messages, and use a tool built for the job.\n\nBecause the site provides only a feature list and pricing, the profile is necessarily short. The company appears to be an early-stage tool competing with general-purpose snippet managers (like GitHub Gists) and note-taking apps, differentiated by its team-sharing features and encrypted sync."
   }
 }

@@ -1,15 +1,15 @@
 {
-  "provenance": "simulated",
-  "model": null,
-  "recorded_at": null,
+  "provenance": "deepseek",
+  "model": "deepseek-chat",
+  "recorded_at": "2026-07-11T08:55:10+00:00",
   "response": {
-    "description_short": "Crateful is a wholesale marketplace where independent restaurants order from local farms and specialty producers in one cart with consolidated delivery.",
+    "description_short": "Wholesale marketplace connecting independent restaurants with local farms and specialty food producers for next-day delivery.",
     "primary_category": "vertical SaaS",
     "tags": [
-      "marketplace",
-      "food",
-      "restaurants",
-      "wholesale",
+      "wholesale-marketplace",
+      "food-tech",
+      "restaurant-supply-chain",
+      "local-food",
       "logistics"
     ],
     "people": [],

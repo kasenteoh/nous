@@ -1,8 +1,9 @@
 {
-  "provenance": "simulated",
-  "model": null,
-  "recorded_at": null,
+  "provenance": "deepseek",
+  "model": "deepseek-chat",
+  "recorded_at": "2026-07-11T08:56:39+00:00",
   "response": {
+    "is_funding_announcement": true,
     "round_type": "Seed",
     "amount_raised_usd": null,
     "valuation_post_money_usd": null,
@@ -12,10 +13,9 @@
       "Sequoia"
     ],
     "other_investors": [],
+    "confidence": "medium",
     "status_event": null,
     "status_confidence": null,
-    "total_raised_usd": null,
-    "is_funding_announcement": true,
-    "confidence": "high"
+    "total_raised_usd": null
   }
 }

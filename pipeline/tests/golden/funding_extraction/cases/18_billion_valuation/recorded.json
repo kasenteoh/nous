@@ -1,11 +1,12 @@
 {
-  "provenance": "simulated",
-  "model": null,
-  "recorded_at": null,
+  "provenance": "deepseek",
+  "model": "deepseek-chat",
+  "recorded_at": "2026-07-11T08:56:37+00:00",
   "response": {
+    "is_funding_announcement": true,
     "round_type": null,
-    "amount_raised_usd": 95000000,
-    "valuation_post_money_usd": 1200000000,
+    "amount_raised_usd": "95000000",
+    "valuation_post_money_usd": "1200000000",
     "valuation_source": null,
     "announced_date": null,
     "lead_investors": [
@@ -14,10 +15,9 @@
     "other_investors": [
       "Bay Laurel Capital"
     ],
+    "confidence": "high",
     "status_event": null,
     "status_confidence": null,
-    "total_raised_usd": null,
-    "is_funding_announcement": true,
-    "confidence": "high"
+    "total_raised_usd": null
   }
 }

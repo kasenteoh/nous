@@ -1,8 +1,8 @@
 {
-  "provenance": "simulated",
-  "model": null,
-  "recorded_at": null,
+  "provenance": "deepseek",
+  "model": "deepseek-chat",
+  "recorded_at": "2026-07-11T08:56:10+00:00",
   "response": {
-    "description_long": "Glowharbor is scheduling software for wellness studios, serving yoga, pilates, massage, and spa businesses with a modern booking experience. Clients book online, pay deposits, and get reminders, while studios manage staff calendars and class capacity from one dashboard.\n\nThe wellness industry has long struggled with no-shows, double bookings, and the administrative weight of managing appointments by phone and paper. Studio owners juggle instructor schedules, room availability, and client expectations, often across multiple software tools that were never designed to work together. This is the gap booking platforms set out to close, and it remains one of the most persistent operational challenges for small wellness businesses everywhere.\n\nBy bringing bookings, payments, and reminders into one place, the platform aims to reduce the friction between studios and their clients. Deposits collected at booking time protect studios from the revenue loss of missed appointments, while automated reminders help clients keep the commitments they make. Capacity management ensures classes neither overfill nor run empty, and staff calendars keep every practitioner's day organized.\n\nPricing is straightforward at $29 per month per location, with a 14-day free trial that lets studios evaluate the platform before committing. For small studios weighing the cost of missed appointments against the price of software, the flat monthly rate is designed to make that comparison easy, keeping the value proposition simple and predictable for owners at every stage of growth."
+    "description_long": null
   }
 }

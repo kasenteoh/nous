@@ -1,16 +1,18 @@
 {
-  "provenance": "simulated",
-  "model": null,
-  "recorded_at": null,
+  "provenance": "deepseek",
+  "model": "deepseek-chat",
+  "recorded_at": "2026-07-11T08:55:01+00:00",
   "response": {
-    "description_short": "Atlas Relay is a developer platform whose SDK and API add chat, comments, and notifications to products, with moderation and translation built in.",
+    "description_short": "Developer platform providing a messaging API for in-app chat, comments, and notifications with prebuilt UI kits and built-in moderation, translation, and offline sync.",
     "primary_category": "developer tools",
     "tags": [
-      "messaging",
+      "messaging-api",
+      "in-app-messaging",
+      "chat-sdk",
+      "notifications",
+      "developer-tools",
       "api",
-      "sdk",
-      "chat",
-      "developer-tools"
+      "saas"
     ],
     "people": [
       {
@@ -20,10 +22,6 @@
       {
         "name": "James Whitaker",
         "role": "Co-founder & CTO"
-      },
-      {
-        "name": "Priya Nair",
-        "role": "VP of Engineering"
       }
     ],
     "hq_city": "New York",

@@ -1,23 +1,27 @@
 {
-  "provenance": "simulated",
-  "model": null,
-  "recorded_at": null,
+  "provenance": "deepseek",
+  "model": "deepseek-chat",
+  "recorded_at": "2026-07-11T08:54:53+00:00",
   "response": {
-    "description_short": "Ledgerock Systems is a Columbus, OH accounting software vendor that has sold general-ledger and AP products to mid-market distributors and manufacturers since 1998.",
-    "primary_category": "fintech",
+    "description_short": "Ledgerock Systems provides accounting and general-ledger software to mid-market distributors and manufacturers, serving over 4,200 companies since 1998.",
+    "primary_category": "vertical SaaS",
     "tags": [
       "accounting",
+      "general-ledger",
+      "ap-automation",
+      "mid-market",
+      "manufacturing",
+      "distribution",
       "erp",
-      "b2b",
-      "enterprise-software"
+      "financial-reporting"
     ],
     "people": [],
     "hq_city": "Columbus",
     "hq_state": "OH",
-    "industry": "fintech",
+    "industry": "vertical SaaS",
     "website_state": "ok",
     "is_startup": false,
-    "not_startup_reason": "Long-established (since 1998) software vendor, not a startup.",
+    "not_startup_reason": "Founded in 1998, over 25 years old, serving mid-market as an established software vendor.",
     "founded_year": 1998,
     "hq_country": "US"
   }

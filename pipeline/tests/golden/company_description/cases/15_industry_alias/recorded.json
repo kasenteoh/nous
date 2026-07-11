@@ -1,20 +1,29 @@
 {
-  "provenance": "simulated",
-  "model": null,
-  "recorded_at": null,
+  "provenance": "deepseek",
+  "model": "deepseek-chat",
+  "recorded_at": "2026-07-11T08:55:04+00:00",
   "response": {
-    "description_short": "PayLattice is a payment orchestration platform that routes each transaction across 30+ PSPs, retries soft declines, and reconciles volume to one ledger.",
+    "description_short": "Payment orchestration platform that routes transactions to the best acquirer in real time, supporting 30+ PSPs and local payment methods, with features like smart routing, network tokens, and automated failover.",
     "primary_category": "fintech",
     "tags": [
-      "payments",
       "payment-orchestration",
       "fintech",
-      "api"
+      "payment-routing",
+      "psp-aggregation",
+      "network-tokens",
+      "auth-rate-optimization",
+      "global-payments",
+      "pci-compliant"
     ],
-    "people": [],
+    "people": [
+      {
+        "name": "PayLattice",
+        "role": "Founder"
+      }
+    ],
     "hq_city": null,
     "hq_state": null,
-    "industry": "payments",
+    "industry": "fintech",
     "website_state": "ok",
     "is_startup": true,
     "not_startup_reason": null,

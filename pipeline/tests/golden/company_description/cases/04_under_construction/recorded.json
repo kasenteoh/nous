@@ -1,11 +1,14 @@
 {
-  "provenance": "simulated",
-  "model": null,
-  "recorded_at": null,
+  "provenance": "deepseek",
+  "model": "deepseek-chat",
+  "recorded_at": "2026-07-11T08:54:40+00:00",
   "response": {
-    "description_short": "Nimbus Kitchen's site is a launching-soon placeholder with no product information.",
-    "primary_category": "unknown",
-    "tags": [],
+    "description_short": "The website is a simple launching-soon page for Nimbus Kitchen, with no product description or details.",
+    "primary_category": "consumer",
+    "tags": [
+      "launching-soon",
+      "placeholder"
+    ],
     "people": [],
     "hq_city": null,
     "hq_state": null,

@@ -1,11 +1,12 @@
 {
-  "provenance": "simulated",
-  "model": null,
-  "recorded_at": null,
+  "provenance": "deepseek",
+  "model": "deepseek-chat",
+  "recorded_at": "2026-07-11T08:56:14+00:00",
   "response": {
+    "is_funding_announcement": true,
     "round_type": "Series B",
-    "amount_raised_usd": 40000000,
-    "valuation_post_money_usd": 400000000,
+    "amount_raised_usd": "40000000",
+    "valuation_post_money_usd": "400000000",
     "valuation_source": "TechCrunch, June 2026",
     "announced_date": "2026-06-03",
     "lead_investors": [
@@ -14,10 +15,9 @@
     "other_investors": [
       "Ridgepath Capital"
     ],
+    "confidence": "high",
     "status_event": null,
     "status_confidence": null,
-    "total_raised_usd": null,
-    "is_funding_announcement": true,
-    "confidence": "high"
+    "total_raised_usd": null
   }
 }

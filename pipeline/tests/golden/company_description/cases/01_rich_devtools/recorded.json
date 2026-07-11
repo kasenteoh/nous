@@ -1,17 +1,19 @@
 {
-  "provenance": "simulated",
-  "model": null,
-  "recorded_at": null,
+  "provenance": "deepseek",
+  "model": "deepseek-chat",
+  "recorded_at": "2026-07-11T08:54:34+00:00",
   "response": {
-    "description_short": "Fluxline is a CI observability platform that ingests build telemetry from providers like GitHub Actions and CircleCI to surface flaky tests, slow pipelines, and regressions.",
+    "description_short": "Fluxline provides CI observability for engineering teams, ingesting build, test, and deploy events from GitHub Actions, CircleCI, and Buildkite to surface flaky tests, slow pipelines, and regressions.",
     "primary_category": "developer tools",
     "tags": [
-      "ci-cd",
-      "developer-tools",
-      "observability",
-      "testing",
+      "ci-observability",
+      "flaky-test-detection",
+      "pipeline-monitoring",
       "devops",
-      "saas"
+      "github-actions",
+      "circleci",
+      "buildkite",
+      "continuous-integration"
     ],
     "people": [
       {

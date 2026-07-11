@@ -1,10 +1,10 @@
 {
-  "provenance": "simulated",
-  "model": null,
-  "recorded_at": null,
+  "provenance": "deepseek",
+  "model": "deepseek-chat",
+  "recorded_at": "2026-07-11T08:54:38+00:00",
   "response": {
-    "description_short": "The domain cobaltine.com is parked and listed for sale by a broker; the page contains no company information.",
-    "primary_category": "unknown",
+    "description_short": "The domain cobaltine.com is for sale via a parking/registrar page; no company website exists at this address.",
+    "primary_category": "other",
     "tags": [],
     "people": [],
     "hq_city": null,

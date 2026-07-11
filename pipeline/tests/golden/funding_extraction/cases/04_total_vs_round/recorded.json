@@ -1,10 +1,11 @@
 {
-  "provenance": "simulated",
-  "model": null,
-  "recorded_at": null,
+  "provenance": "deepseek",
+  "model": "deepseek-chat",
+  "recorded_at": "2026-07-11T08:56:16+00:00",
   "response": {
+    "is_funding_announcement": true,
     "round_type": "Series A",
-    "amount_raised_usd": 30000000,
+    "amount_raised_usd": "30000000",
     "valuation_post_money_usd": null,
     "valuation_source": null,
     "announced_date": "2026-01-22",
@@ -14,10 +15,9 @@
     "other_investors": [
       "Souter Ventures"
     ],
+    "confidence": "high",
     "status_event": null,
     "status_confidence": null,
-    "total_raised_usd": 45000000,
-    "is_funding_announcement": true,
-    "confidence": "high"
+    "total_raised_usd": "45000000"
   }
 }

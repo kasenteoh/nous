@@ -1,16 +1,18 @@
 {
-  "provenance": "simulated",
-  "model": null,
-  "recorded_at": null,
+  "provenance": "deepseek",
+  "model": "deepseek-chat",
+  "recorded_at": "2026-07-11T08:54:59+00:00",
   "response": {
-    "description_short": "Harborlight Health makes care coordination software for community health centers, closing referral loops and tracking quality measures for UDS reporting.",
-    "primary_category": "healthcare",
+    "description_short": "Harborlight Health provides care coordination software for community health centers, helping manage patient visits, referrals, and follow-ups with integrated EHR workflows and UDS reporting.",
+    "primary_category": "vertical SaaS",
     "tags": [
-      "healthcare",
       "care-coordination",
-      "clinics",
-      "saas",
-      "hipaa"
+      "fqhc",
+      "ehr-integration",
+      "hipaa-compliant",
+      "referral-management",
+      "health-it",
+      "community-health"
     ],
     "people": [],
     "hq_city": "Boston",

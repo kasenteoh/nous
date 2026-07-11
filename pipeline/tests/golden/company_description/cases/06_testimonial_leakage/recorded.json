@@ -1,16 +1,19 @@
 {
-  "provenance": "simulated",
-  "model": null,
-  "recorded_at": null,
+  "provenance": "deepseek",
+  "model": "deepseek-chat",
+  "recorded_at": "2026-07-11T08:54:45+00:00",
   "response": {
-    "description_short": "Shipstream is freight visibility software that tracks shipments across ocean, air, and road, producing predictive ETAs and automated exception alerts for logistics teams.",
-    "primary_category": "vertical SaaS",
+    "description_short": "Shipstream provides freight visibility software that tracks shipments across ocean, air, and road in one dashboard, offering predictive ETAs and automated exception alerts for logistics teams.",
+    "primary_category": "logistics & supply chain",
     "tags": [
-      "logistics",
-      "freight",
+      "freight-visibility",
       "supply-chain",
-      "visibility",
-      "saas"
+      "logistics",
+      "sass",
+      "etl",
+      "carrier-tracking",
+      "exception-alerts",
+      "predictive-etas"
     ],
     "people": [
       {
@@ -20,18 +23,6 @@
       {
         "name": "Lena Fischer",
         "role": "Co-founder & CTO"
-      },
-      {
-        "name": "Tiffany Jones",
-        "role": "Co-Founder, COO"
-      },
-      {
-        "name": "Nancey Harris",
-        "role": "Co-Founder, COO"
-      },
-      {
-        "name": "Wendy Webster",
-        "role": "Co-Founder, COO"
       }
     ],
     "hq_city": "Oakland",

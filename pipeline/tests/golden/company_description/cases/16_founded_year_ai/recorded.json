@@ -1,17 +1,18 @@
 {
-  "provenance": "simulated",
-  "model": null,
-  "recorded_at": null,
+  "provenance": "deepseek",
+  "model": "deepseek-chat",
+  "recorded_at": "2026-07-11T08:55:06+00:00",
   "response": {
-    "description_short": "Tensorforge AI is a platform for fine-tuning and serving open-weight language models, with deployments that run in the customer's own cloud account.",
+    "description_short": "Tensorforge AI is a platform for training, fine-tuning, and serving open-weight language models, offering managed clusters and cost controls while keeping data in the customer's cloud.",
     "primary_category": "AI infrastructure",
     "tags": [
-      "ai",
-      "llm",
       "fine-tuning",
-      "inference",
+      "open-source-models",
+      "llm-serving",
       "mlops",
-      "gpu"
+      "ai-infrastructure",
+      "cloud-native",
+      "gpu-management"
     ],
     "people": [],
     "hq_city": "Seattle",

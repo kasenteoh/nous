@@ -1,18 +1,18 @@
 {
-  "provenance": "simulated",
-  "model": null,
-  "recorded_at": null,
+  "provenance": "deepseek",
+  "model": "deepseek-chat",
+  "recorded_at": "2026-07-11T08:54:42+00:00",
   "response": {
-    "description_short": "The scraped site describes Brightsmile Dental Care, a dental practice in Riverside, CA — not Quanta Metrics.",
-    "primary_category": "unknown",
+    "description_short": "The website describes a dental practice called Brightsmile Dental Care, not Quanta Metrics.",
+    "primary_category": "consumer",
     "tags": [],
     "people": [],
     "hq_city": null,
     "hq_state": null,
     "industry": null,
     "website_state": "unrelated_site",
-    "is_startup": null,
-    "not_startup_reason": null,
+    "is_startup": false,
+    "not_startup_reason": "The page is about a completely different business, a dental practice.",
     "founded_year": null,
     "hq_country": null
   }

@@ -1,16 +1,19 @@
 {
-  "provenance": "simulated",
-  "model": null,
-  "recorded_at": null,
+  "provenance": "deepseek",
+  "model": "deepseek-chat",
+  "recorded_at": "2026-07-11T08:55:12+00:00",
   "response": {
-    "description_short": "Meridian Ops is an incident management platform used by more than 12,000 engineering teams: when an alert fires it assembles responders, opens a Slack channel, and drafts status updates automatically.",
+    "description_short": "Incident management platform that automates alert response, Slack channel creation, runbook retrieval, status-page updates, and postmortem generation for engineering teams.",
     "primary_category": "developer tools",
     "tags": [
       "incident-management",
+      "on-call",
       "devops",
       "sre",
-      "on-call",
-      "saas"
+      "alerting",
+      "postmortem",
+      "slack-integration",
+      "jira-integration"
     ],
     "people": [],
     "hq_city": "Austin",

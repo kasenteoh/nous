@@ -1,8 +1,8 @@
 {
-  "provenance": "simulated",
-  "model": null,
-  "recorded_at": null,
+  "provenance": "deepseek",
+  "model": "deepseek-chat",
+  "recorded_at": "2026-07-11T08:55:58+00:00",
   "response": {
-    "description_long": "Auralane is pre-launch, and its site says only a little: the company is building a planning tool for product teams that aims to keep roadmaps, capacity, and decisions connected in one place. The product is in private beta behind a waitlist.\n\nBeyond that one-line scope, the site offers no product detail — no description of how the tool works, no pricing, no team or customer information. It mentions being backed by investors without naming them, and notes it will be hiring soon. A fuller profile will have to wait until the company publishes more than a waitlist page."
+    "description_long": null
   }
 }

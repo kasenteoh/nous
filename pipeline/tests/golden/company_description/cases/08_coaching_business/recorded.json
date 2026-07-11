@@ -1,14 +1,16 @@
 {
-  "provenance": "simulated",
-  "model": null,
-  "recorded_at": null,
+  "provenance": "deepseek",
+  "model": "deepseek-chat",
+  "recorded_at": "2026-07-11T08:54:49+00:00",
   "response": {
-    "description_short": "Momentum Mind Academy sells coaching programs and courses, including a 12-week Founder Mindset Masterclass, rather than a software product.",
-    "primary_category": "unknown",
+    "description_short": "Premium coaching programs offering mindset training for ambitious professionals, including a 12-week Founder Mindset Masterclass.",
+    "primary_category": "coaching",
     "tags": [
       "coaching",
-      "courses",
-      "info-product"
+      "mindset",
+      "professional-development",
+      "masterclass",
+      "founder"
     ],
     "people": [],
     "hq_city": null,

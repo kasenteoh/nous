@@ -1,10 +1,11 @@
 {
-  "provenance": "simulated",
-  "model": null,
-  "recorded_at": null,
+  "provenance": "deepseek",
+  "model": "deepseek-chat",
+  "recorded_at": "2026-07-11T08:56:11+00:00",
   "response": {
+    "is_funding_announcement": true,
     "round_type": "Series A",
-    "amount_raised_usd": 18000000,
+    "amount_raised_usd": "18000000",
     "valuation_post_money_usd": null,
     "valuation_source": null,
     "announced_date": "2026-03-12",
@@ -15,10 +16,9 @@
       "Foxglove Capital",
       "Northgate Partners"
     ],
+    "confidence": "high",
     "status_event": null,
     "status_confidence": null,
-    "total_raised_usd": null,
-    "is_funding_announcement": true,
-    "confidence": "high"
+    "total_raised_usd": null
   }
 }
