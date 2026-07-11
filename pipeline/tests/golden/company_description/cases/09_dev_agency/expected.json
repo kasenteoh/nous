@@ -1,0 +1,20 @@
+{
+  "description_short": "Brightforge Digital is a web and mobile development agency in Denver, CO that builds custom software and embeds senior engineers with client teams.",
+  "description_long": "Brightforge Digital sells software development services: custom web applications, iOS and Android apps, design sprints, and staff augmentation. Engagements start with a two-week discovery sprint and a fixed-price proposal.\n\nOperating since 2012 with over 300 shipped projects, it is a services consultancy selling staff-for-hire rather than a software product of its own. Clients include health systems, a restaurant chain, and funded startups.",
+  "primary_category": "unknown",
+  "tags": [
+    "agency",
+    "consulting",
+    "web-development",
+    "mobile-development"
+  ],
+  "people": [],
+  "hq_city": "Denver",
+  "hq_state": "CO",
+  "industry": null,
+  "website_state": "ok",
+  "is_startup": false,
+  "not_startup_reason": "Development agency selling services, not a software product.",
+  "founded_year": 2012,
+  "hq_country": "US"
+}

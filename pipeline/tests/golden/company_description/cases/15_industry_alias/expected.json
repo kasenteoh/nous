@@ -1,0 +1,20 @@
+{
+  "description_short": "PayLattice is a payment orchestration platform that routes each transaction across 30+ PSPs, retries soft declines, and reconciles volume to one ledger.",
+  "description_long": "PayLattice sits between merchants and payment providers, routing each transaction to the best acquirer in real time. One integration reaches 30+ PSPs and local payment methods; the engine retries soft declines, balances volume across providers, and reconciles everything to a single ledger.\n\nThe company says smart routing and network tokens typically lift authorization rates by 2-5 points, with failover keeping checkout alive when a provider degrades. It is PCI Level 1 certified and was founded in 2023 by payments engineers from major PSPs.",
+  "primary_category": "fintech",
+  "tags": [
+    "payments",
+    "payment-orchestration",
+    "fintech",
+    "api"
+  ],
+  "people": [],
+  "hq_city": null,
+  "hq_state": null,
+  "industry": "fintech",
+  "website_state": "ok",
+  "is_startup": true,
+  "not_startup_reason": null,
+  "founded_year": 2023,
+  "hq_country": null
+}

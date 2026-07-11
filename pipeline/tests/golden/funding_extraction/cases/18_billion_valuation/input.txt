@@ -1,0 +1,12 @@
+Skyvault raises $95M as demand for sovereign cloud storage grows
+
+Skyvault, the encrypted-storage company, said this week it has raised $95 million in
+new funding led by Halcyon Growth, valuing the company at $1.2 billion. Existing
+investor Bay Laurel Capital also participated.
+
+The company sells storage that lets customers keep encryption keys entirely on their
+own hardware, a pitch that has resonated with European governments and healthcare
+systems.
+
+Skyvault said annual recurring revenue has doubled in the past year, driven by
+regulated industries moving off shared infrastructure.

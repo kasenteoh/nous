@@ -1,0 +1,17 @@
+Kinetic Circuits — Boards, kits, and tools for embedded builders
+
+Kinetic Circuits supplies development boards, sensor kits, and debugging tools for
+embedded engineers and serious hobbyists. Our catalog spans ARM and RISC-V dev boards,
+LoRa and CAN transceivers, logic analyzers, and our own KC-Link programmer.
+
+Our software
+
+KC Studio, our free desktop app, flashes firmware, decodes serial traffic, and manages
+board profiles for everything we sell.
+
+Fast shipping, real support
+
+Orders placed by 3pm ship same day. Our support inbox is staffed by engineers who have
+used every product in the catalog.
+
+Wholesale and education pricing available. Distributors welcome.

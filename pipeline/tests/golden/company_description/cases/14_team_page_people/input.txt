@@ -1,0 +1,29 @@
+Atlas Relay — The messaging API for product teams
+
+Atlas Relay is a developer platform for in-app messaging. One SDK adds chat, comments,
+and notifications to your product, with moderation, translation, and offline sync
+built in.
+
+Ship messaging in a sprint
+
+Prebuilt UI kits for web, iOS, and Android get you to production fast; the underlying
+API lets you customize everything later. Usage-based pricing scales from side project
+to enterprise.
+
+Reliability
+
+99.95% uptime over the last twelve months across three regions, with full data
+residency options for EU customers.
+
+About Atlas Relay
+
+Atlas Relay was founded in 2020 in New York, NY.
+
+Team
+
+Sofia Marchetti — Co-founder & CEO
+James Whitaker — Co-founder & CTO
+Priya Nair — VP of Engineering
+Tom Delaney — Head of Developer Relations
+
+We're hiring across engineering and developer relations.

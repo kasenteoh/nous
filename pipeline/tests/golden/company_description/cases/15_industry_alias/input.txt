@@ -1,0 +1,19 @@
+PayLattice — Payment orchestration for global commerce
+
+PayLattice routes each transaction to the best acquirer in real time. Merchants
+connect once and reach 30+ PSPs and local payment methods; our engine retries soft
+declines, balances volume across providers, and reconciles everything to one ledger.
+
+Raise your auth rate
+
+Smart routing and network tokens typically lift authorization rates by 2-5 points.
+Failover keeps checkout alive when a provider degrades.
+
+One integration, everywhere
+
+Accept cards, wallets, and bank transfers across North America, Europe, and Latin
+America without new contracts for each market. PCI Level 1 certified.
+
+Founded in 2023 by payments engineers from major PSPs.
+
+Request a demo — see your routing table live within a week.

@@ -1,0 +1,17 @@
+{
+  "round_type": "Seed",
+  "amount_raised_usd": 3500000,
+  "valuation_post_money_usd": null,
+  "valuation_source": null,
+  "announced_date": null,
+  "lead_investors": [],
+  "other_investors": [
+    "Cindercone Ventures",
+    "Harbor Street Capital"
+  ],
+  "status_event": null,
+  "status_confidence": null,
+  "total_raised_usd": null,
+  "is_funding_announcement": true,
+  "confidence": "medium"
+}

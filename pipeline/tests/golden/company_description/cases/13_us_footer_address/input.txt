@@ -1,0 +1,27 @@
+Harborlight Health — Care coordination software for community clinics
+
+Harborlight Health helps community health centers coordinate patient care across
+visits, referrals, and follow-ups. Our platform gives care teams a shared worklist,
+closes referral loops with two-way faxing and e-referrals, and tracks quality measures
+for UDS reporting.
+
+Built for FQHCs
+
+Federally qualified health centers run on thin margins and complex reporting
+requirements. Harborlight integrates with the EHRs clinics already use, flags missed
+follow-ups, and drafts the outreach lists staff work through each morning.
+
+Outcomes
+
+Clinics using Harborlight report fewer missed referrals and stronger quality-measure
+performance within two quarters.
+
+Security
+
+HIPAA-compliant infrastructure with SOC 2 Type II certification. PHI is encrypted in
+transit and at rest.
+
+Contact us
+
+Harborlight Health, 77 Summer Street, Boston, MA 02110
+sales@harborlighthealth.com

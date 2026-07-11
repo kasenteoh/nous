@@ -1,0 +1,11 @@
+Ridgeline buys DataKettle to add pipeline monitoring
+
+Ridgeline, the data-quality platform, announced Wednesday that it has acquired
+DataKettle, a five-person startup whose open-source tool monitors data pipeline
+freshness. Financial terms were not disclosed.
+
+DataKettle's founders will join Ridgeline's engineering team, and the open-source
+project will continue under Ridgeline's stewardship. It is Ridgeline's second
+acquisition this year as it builds out an end-to-end data reliability suite.
+
+Ridgeline last raised funding in 2024 and says it is not currently fundraising.

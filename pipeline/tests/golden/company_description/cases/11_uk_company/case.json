@@ -1,0 +1,5 @@
+{
+  "company_name": "Farepoint",
+  "variant": "default",
+  "notes": "Non-US company: London address clearly implies GB. Recorded response extracts the city but misses the country \u2014 a recall miss on the country slot."
+}

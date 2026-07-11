@@ -1,0 +1,15 @@
+Talus Grid — Grid simulation software for utilities
+
+Talus Grid builds simulation software that helps utilities plan distribution upgrades
+for electrification. Model feeder load, test interconnection scenarios, and prioritize
+capital projects from one platform.
+
+News
+
+March 4, 2026 — We're thrilled to announce that Talus Grid has raised a $20 million
+Series B led by Index Ventures. The new funding will accelerate our roadmap and grow
+our engineering team. Thank you to our customers and partners for getting us here.
+
+Careers — we're hiring across simulation, product, and sales.
+
+Contact: hello@talusgrid.com

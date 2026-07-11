@@ -1,0 +1,41 @@
+Fluxline — CI observability for fast-moving teams
+
+Fluxline gives engineering teams a single view of every build, test, and deploy.
+Our platform ingests events from GitHub Actions, CircleCI, and Buildkite, then
+surfaces flaky tests, slow pipelines, and regressions before they block a release.
+
+How it works
+
+Connect your CI provider in under five minutes. Fluxline's collectors stream build
+telemetry into a queryable timeline: every job, every retry, every artifact. Our
+flake detector replays failing tests in isolation and flags the ones that fail
+nondeterministically, so your team stops re-running whole suites to get a green check.
+Dashboards break down pipeline time by stage, repository, and team, and budget alerts
+fire when a merge queue starts to back up.
+
+Who uses Fluxline
+
+Platform teams at companies with 50 to 5,000 engineers use Fluxline to cut CI spend
+and keep merge queues moving. Customers typically reduce time-to-green by a third
+within the first month.
+
+About us
+
+Fluxline was founded in 2021 by engineers who ran build infrastructure at scale and
+were tired of guessing why the pipeline was red. We are a remote-first company
+headquartered in San Francisco, CA.
+
+Team
+
+Maya Okafor — Co-founder & CEO. Previously led developer productivity at a large
+fintech company.
+Daniel Reyes — Co-founder & CTO. Formerly a staff engineer on build systems.
+
+Pricing
+
+Free for open-source projects. Team plans start at $49 per month per repository.
+Enterprise plans include SSO, audit logs, and a dedicated support channel.
+
+Contact
+
+hello@fluxline.dev — 548 Market Street, San Francisco, CA 94104

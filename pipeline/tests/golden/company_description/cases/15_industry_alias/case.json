@@ -1,0 +1,5 @@
+{
+  "company_name": "PayLattice",
+  "variant": "default",
+  "notes": "Recorded industry label 'payments' differs from expected 'fintech' but the runtime canonicalization maps them together \u2014 the harness must apply it."
+}

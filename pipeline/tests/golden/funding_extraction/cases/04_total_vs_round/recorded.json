@@ -1,0 +1,23 @@
+{
+  "provenance": "simulated",
+  "model": null,
+  "recorded_at": null,
+  "response": {
+    "round_type": "Series A",
+    "amount_raised_usd": 30000000,
+    "valuation_post_money_usd": null,
+    "valuation_source": null,
+    "announced_date": "2026-01-22",
+    "lead_investors": [
+      "Larchmont Capital"
+    ],
+    "other_investors": [
+      "Souter Ventures"
+    ],
+    "status_event": null,
+    "status_confidence": null,
+    "total_raised_usd": 45000000,
+    "is_funding_announcement": true,
+    "confidence": "high"
+  }
+}
