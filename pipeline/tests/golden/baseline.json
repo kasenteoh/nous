@@ -13,11 +13,11 @@
     "website_state_accuracy": 0.9
   },
   "company_description_long": {
-    "grounding_mean": 0.95,
-    "grounding_min": 0.75,
-    "insufficiency_accuracy": 0.85,
+    "grounding_mean": 0.969,
+    "grounding_min": 0.692,
+    "insufficiency_accuracy": 0.937,
     "parse_rate": 1.0,
-    "structure_pass_rate": 0.933
+    "structure_pass_rate": 0.785
   },
   "funding_extraction": {
     "announcement_accuracy": 0.95,
