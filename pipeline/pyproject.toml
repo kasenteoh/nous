@@ -17,6 +17,11 @@ dependencies = [
     "feedparser>=6.0",
     "curl_cffi>=0.7",
     "playwright>=1.40",
+    # SQLAlchemy Vector type for companies.embedding (migration 0033). Main
+    # dependency (not the embeddings group): db/models.py imports it
+    # unconditionally, and it's a tiny pure-Python package. The heavy model
+    # runtime (fastembed/onnx) is what lives in the optional group.
+    "pgvector>=0.5.0",
 ]
 
 [project.scripts]
@@ -28,6 +33,14 @@ dev = [
     "pytest-asyncio>=0.23",
     "ruff>=0.6",
     "mypy>=1.11",
+]
+# Optional: the embed-companies stage's local CPU model runtime (fastembed →
+# onnxruntime + tokenizers, heavy). Deliberately NOT a default dependency so
+# the everyday `uv sync` stays light; pipeline.yml installs it explicitly with
+# `uv sync --group embeddings`. Tests never need it — they inject the fake
+# embedder through the Embedder Protocol seam.
+embeddings = [
+    "fastembed>=0.8.0",
 ]
 
 [build-system]
@@ -62,6 +75,17 @@ ignore_missing_imports = true
 [[tool.mypy.overrides]]
 module = ["playwright", "playwright.*"]
 ignore_missing_imports = true
+
+# fastembed lives in the optional `embeddings` dependency group above and is
+# absent under the default `uv sync` — e.g. in the lint workflow, where mypy
+# still runs. `follow_imports = "skip"` keeps local (group installed) and CI
+# (group absent) runs equivalent: fastembed is Any in both. It is imported
+# lazily behind the Embedder Protocol seam in pipeline/embed_companies.py, so
+# the Any surface is one adapter constructor.
+[[tool.mypy.overrides]]
+module = ["fastembed", "fastembed.*"]
+ignore_missing_imports = true
+follow_imports = "skip"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
