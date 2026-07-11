@@ -1,0 +1,30 @@
+{
+  "description_short": "Atlas Relay is a developer platform whose SDK and API add chat, comments, and notifications to products, with moderation and translation built in.",
+  "description_long": "Atlas Relay sells in-app messaging as an API: one SDK adds chat, comments, and notifications, with moderation, translation, and offline sync included. Prebuilt UI kits for web, iOS, and Android are designed to get teams to production in a sprint, while the underlying API allows later customization.\n\nThe company cites 99.95% uptime over the last twelve months across three regions and offers EU data residency. Founded in 2020 in New York, NY, it is led by co-founders Sofia Marchetti (CEO) and James Whitaker (CTO), and prices by usage.",
+  "primary_category": "developer tools",
+  "tags": [
+    "messaging",
+    "api",
+    "sdk",
+    "chat",
+    "developer-tools"
+  ],
+  "people": [
+    {
+      "name": "Sofia Marchetti",
+      "role": "Co-founder & CEO"
+    },
+    {
+      "name": "James Whitaker",
+      "role": "Co-founder & CTO"
+    }
+  ],
+  "hq_city": "New York",
+  "hq_state": "NY",
+  "industry": "developer tools",
+  "website_state": "ok",
+  "is_startup": true,
+  "not_startup_reason": null,
+  "founded_year": 2020,
+  "hq_country": "US"
+}

@@ -1,4 +1,5 @@
 import logging
+from pathlib import Path
 
 import click
 
@@ -1608,6 +1609,121 @@ def unexclude_company(slug: str) -> None:
             click.echo(result.model_dump_json(indent=2))
 
     asyncio.run(_run())
+
+
+@cli.command("eval-prompts")
+@click.option(
+    "--record",
+    is_flag=True,
+    default=False,
+    help=(
+        "Re-run every fixture input against live DeepSeek (paid, requires "
+        "DEEPSEEK_API_KEY) and rewrite recorded.json files before scoring. "
+        "Without this flag the command is fully offline."
+    ),
+)
+@click.option(
+    "--update-baseline",
+    is_flag=True,
+    default=False,
+    help=(
+        "Rewrite tests/golden/baseline.json floors from the current scores "
+        "(rounded down). Review the diff before committing."
+    ),
+)
+@click.option(
+    "--prompt",
+    "prompt_name",
+    type=str,
+    default=None,
+    help="Only evaluate/record this prompt (e.g. 'funding_extraction').",
+)
+@click.option(
+    "--golden-dir",
+    type=click.Path(exists=False, file_okay=False, path_type=Path),
+    default=None,
+    help="Override the golden fixtures directory (default: pipeline/tests/golden).",
+)
+def eval_prompts(
+    record: bool,
+    update_baseline: bool,
+    prompt_name: str | None,
+    golden_dir: Path | None,
+) -> None:
+    """Score LLM prompts against the golden set; optionally re-record live.
+
+    Offline by default (deterministic, free): replays committed recorded.json
+    responses through the runtime parse/validate path and gates the metrics
+    against tests/golden/baseline.json, printing a per-metric delta table.
+    Exits non-zero when any gated metric falls below its floor.
+    """
+    import asyncio
+
+    from nous.evals import (
+        PROMPT_SPECS,
+        PromptSpec,
+        check_floors,
+        evaluate_prompt,
+        floors_from_report,
+        get_spec,
+        load_baseline,
+        render_report,
+        save_baseline,
+    )
+    from nous.evals.harness import GoldenFixtureError, default_golden_dir
+    from nous.evals.record import MissingAPIKeyError, record_prompt
+
+    directory = golden_dir if golden_dir is not None else default_golden_dir()
+    specs: tuple[PromptSpec, ...]
+    if prompt_name is not None:
+        try:
+            specs = (get_spec(prompt_name),)
+        except KeyError as exc:
+            raise click.ClickException(str(exc)) from exc
+    else:
+        specs = PROMPT_SPECS
+
+    if record:
+
+        async def _record_all() -> None:
+            for spec in specs:
+                summary = await record_prompt(spec, directory)
+                click.echo(summary.model_dump_json(indent=2))
+
+        try:
+            asyncio.run(_record_all())
+        except MissingAPIKeyError as exc:
+            raise click.ClickException(str(exc)) from exc
+
+    try:
+        baseline = load_baseline(directory)
+    except GoldenFixtureError:
+        if not update_baseline:
+            raise click.ClickException(
+                f"No readable baseline.json under {directory} — run with"
+                " --update-baseline to create one from current scores."
+            ) from None
+        baseline = {}
+
+    failures: list[str] = []
+    for spec in specs:
+        try:
+            report = evaluate_prompt(spec, directory)
+        except GoldenFixtureError as exc:
+            raise click.ClickException(str(exc)) from exc
+        if update_baseline:
+            baseline[spec.name] = floors_from_report(report)
+        click.echo(render_report(report, baseline.get(spec.name)))
+        click.echo("")
+        failures.extend(check_floors(report, baseline.get(spec.name, {})))
+
+    if update_baseline:
+        save_baseline(directory, baseline)
+        click.echo(f"baseline floors written to {directory / 'baseline.json'}")
+    elif failures:
+        for failure in failures:
+            click.echo(f"FAIL {failure}")
+        raise SystemExit(1)
 
 
 def main() -> None:

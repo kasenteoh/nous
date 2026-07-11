@@ -1,0 +1,5 @@
+{
+  "company_name": "Shipstream",
+  "variant": "default",
+  "notes": "Hard case from the prompt file: testimonial names with exec titles must not be extracted as leadership. Recorded response over-extracts three 'Co-Founder, COO' testimonial authors; the runtime validator drops them."
+}

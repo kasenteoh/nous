@@ -1,0 +1,15 @@
+Emberly — Customer education that drives adoption
+
+Emberly is the platform for customer education teams. Build courses, embed product
+walkthroughs, and certify your users — then tie it all to retention data.
+
+Features
+
+Course builder with templates and SCORM import. In-app guides triggered by user
+behavior. Certifications with shareable badges. Analytics that connect education to
+product usage.
+
+Customers include onboarding, support, and customer-success teams at software
+companies of all sizes.
+
+Start a free trial or book a demo.

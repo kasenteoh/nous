@@ -1,0 +1,5 @@
+{
+  "company_name": "Loopnote",
+  "variant": "default",
+  "notes": "Minimal-metadata consumer app: every nullable slot should stay null."
+}

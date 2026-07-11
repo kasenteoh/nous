@@ -1,0 +1,5 @@
+{
+  "company_name": "Bruket",
+  "variant": "news",
+  "notes": "Amount stated only in euros; the schema field is raw USD and the prompt forbids inventing numbers, so it must stay null. Recorded writes 20000000 \u2014 a plausible unit error."
+}

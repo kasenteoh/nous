@@ -1,0 +1,23 @@
+Farepoint — Faster payouts for marketplaces
+
+Farepoint is the payout infrastructure for online marketplaces. One API to onboard
+sellers, run compliance checks, and send funds to 40+ currencies with same-day
+settlement in major corridors.
+
+Built for platforms
+
+Marketplaces use Farepoint to pay sellers, creators, and gig workers without building
+a payments team. Our dashboard handles KYC, tax forms, and reconciliation; our API
+handles the money movement. Volume-based pricing with no monthly minimums.
+
+Trusted rails
+
+Farepoint is an FCA-authorised payment institution. Client funds are safeguarded in
+segregated accounts, and every payout carries a full audit trail.
+
+Careers
+
+We're a team of 60 across engineering, compliance, and partnerships — and we're
+hiring. See open roles.
+
+Farepoint Ltd, 1 Finsbury Avenue, London EC2M 2PF

@@ -1,0 +1,18 @@
+{
+  "round_type": "Series A",
+  "amount_raised_usd": null,
+  "valuation_post_money_usd": null,
+  "valuation_source": null,
+  "announced_date": null,
+  "lead_investors": [
+    "Nordkap Ventures"
+  ],
+  "other_investors": [
+    "Baltia Industrial Partners"
+  ],
+  "status_event": null,
+  "status_confidence": null,
+  "total_raised_usd": null,
+  "is_funding_announcement": true,
+  "confidence": "medium"
+}

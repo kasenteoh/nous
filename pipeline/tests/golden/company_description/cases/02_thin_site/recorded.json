@@ -1,0 +1,20 @@
+{
+  "provenance": "simulated",
+  "model": null,
+  "recorded_at": null,
+  "response": {
+    "description_short": "The website does not clearly describe the product; Verdant Labs says only that it is building something new for teams.",
+    "description_long": "The website does not clearly describe what Verdant Labs builds. The page carries a tagline, a waitlist signup, and no product, customer, or team information.",
+    "primary_category": "unknown",
+    "tags": [],
+    "people": [],
+    "hq_city": null,
+    "hq_state": null,
+    "industry": null,
+    "website_state": "insufficient_info",
+    "is_startup": null,
+    "not_startup_reason": null,
+    "founded_year": null,
+    "hq_country": null
+  }
+}

@@ -1,0 +1,19 @@
+Northbeam Data — About us
+
+Northbeam Data builds a semantic layer that lets analysts define metrics once and use
+them everywhere: dashboards, notebooks, and AI assistants all read from the same
+definitions.
+
+Company milestones
+
+June 2023 — Founded in Portland, OR; raised a $4 million seed round from Cascade
+Ventures and angels.
+
+February 2024 — Launched general availability; first 100 customers.
+
+September 10, 2025 — Announced our $15 million Series A led by Craft Ventures to scale
+the platform.
+
+January 2026 — Passed 400 customers and 2 billion daily metric queries.
+
+We're hiring — see open roles.

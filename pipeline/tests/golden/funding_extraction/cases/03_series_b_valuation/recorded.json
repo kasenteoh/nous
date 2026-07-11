@@ -1,0 +1,23 @@
+{
+  "provenance": "simulated",
+  "model": null,
+  "recorded_at": null,
+  "response": {
+    "round_type": "Series B",
+    "amount_raised_usd": 40000000,
+    "valuation_post_money_usd": 400000000,
+    "valuation_source": "TechCrunch, June 2026",
+    "announced_date": "2026-06-03",
+    "lead_investors": [
+      "Big Bend Growth"
+    ],
+    "other_investors": [
+      "Ridgepath Capital"
+    ],
+    "status_event": null,
+    "status_confidence": null,
+    "total_raised_usd": null,
+    "is_funding_announcement": true,
+    "confidence": "high"
+  }
+}

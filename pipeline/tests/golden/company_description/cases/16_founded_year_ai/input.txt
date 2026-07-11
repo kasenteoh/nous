@@ -1,0 +1,19 @@
+Tensorforge AI — Fine-tune and serve open models on your own terms
+
+Tensorforge AI is a platform for training, fine-tuning, and serving open-weight
+language models. Bring your data, pick a base model, and get a deployed endpoint with
+autoscaling, observability, and cost controls.
+
+Own your models
+
+Everything runs in your cloud account or ours. Weights, adapters, and training data
+never leave your control, and every run is reproducible from a config file.
+
+Performance without the platform team
+
+Managed clusters schedule training across spot GPUs to cut costs; inference servers
+batch and cache automatically. Teams report serving costs dropping by half versus
+generic GPU rentals.
+
+Founded in 2022, Tensorforge AI is headquartered in Seattle, WA and serves customers
+in healthcare, finance, and developer tooling.

@@ -1,0 +1,26 @@
+{
+  "provenance": "simulated",
+  "model": null,
+  "recorded_at": null,
+  "response": {
+    "description_short": "Meridian Ops is an incident management platform that assembles responders, opens a Slack channel, and drafts status updates automatically when an alert fires.",
+    "description_long": "Meridian Ops automates the mechanics of incident response: when an alert fires it assembles responders, opens a Slack channel, pulls in the relevant runbook, and drafts the status-page update. It integrates with PagerDuty and Opsgenie for paging and captures the incident timeline automatically, citing 99.99% uptime for its own platform.\n\nAfter the incident, it generates a draft postmortem with contributing factors and action items that sync to Jira. The company says more than 12,000 engineering teams use it, including Datadog; it was founded in 2020 and is remote-first with a hub office in Austin, TX.",
+    "primary_category": "developer tools",
+    "tags": [
+      "incident-management",
+      "devops",
+      "sre",
+      "on-call",
+      "saas"
+    ],
+    "people": [],
+    "hq_city": "Austin",
+    "hq_state": "TX",
+    "industry": "developer tools",
+    "website_state": "ok",
+    "is_startup": true,
+    "not_startup_reason": null,
+    "founded_year": 2020,
+    "hq_country": "US"
+  }
+}
