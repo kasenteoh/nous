@@ -1,6 +1,5 @@
 {
   "description_short": "Shipstream is freight visibility software that tracks shipments across ocean, air, and road, producing predictive ETAs and automated exception alerts for logistics teams.",
-  "description_long": "Shipstream pulls live signals from carriers, ports, and telematics providers into one dashboard, normalizes them, and gives operations teams accurate ETAs for every shipment. Its models flag delays days before a carrier updates its own status, and exception workflows route a late shipment to the right owner automatically.\n\nThe product also includes a customer portal so shippers get a live tracking page instead of email back-and-forth. Customer testimonials cite halved check-call volume and the retirement of spreadsheet-based freight tracking.\n\nThe company was founded in 2019, is headquartered in Oakland, CA, and is led by co-founders Omar Haddad (CEO) and Lena Fischer (CTO).",
   "primary_category": "vertical SaaS",
   "tags": [
     "logistics",

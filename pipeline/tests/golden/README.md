@@ -4,13 +4,22 @@ Hand-checked fixtures + a two-mode harness that stops prompt edits from
 shipping blind. Every prompt change should show its precision/recall deltas
 here before it merges.
 
-Currently covered prompts (the two highest-value ones; the harness is generic
+Currently covered prompts (the highest-value ones; the harness is generic
 — see "Adding a prompt"):
 
-| prompt                | cases | response schema      |
-|-----------------------|-------|----------------------|
-| `company_description` | 20    | `CompanyDescription` |
-| `funding_extraction`  | 20    | `FundingExtraction`  |
+| prompt                     | cases | response schema          |
+|----------------------------|-------|--------------------------|
+| `company_description`      | 20    | `CompanyDescription`     |
+| `company_description_long` | 16    | `CompanyLongDescription` |
+| `funding_extraction`       | 20    | `FundingExtraction`      |
+
+Since the W-F split, `company_description` is the *judge* (classification,
+people, HQ, `description_short`) and `company_description_long` is the
+dedicated long-form profile written by a second enrich pass. The long set's
+gated metrics: `insufficiency_accuracy` (null exactly when the input cannot
+support an honest profile), `structure_pass_rate` (>= 4 paragraphs / >= 300
+words on rich inputs, padding caps on thin ones), and the grounding proxy
+over the profile text.
 
 ## Layout
 
@@ -64,7 +73,18 @@ Metric families:
   hallucination oracle; treat drops as a signal to read the diff.
 
 Gated metrics are listed per prompt in `nous/evals/prompts.py`; informational
-metrics (e.g. `confidence_accuracy`) are printed but not gated.
+metrics (e.g. `confidence_accuracy`) are printed but not gated. Tag overlap
+(`tags_*`) is deliberately informational: the first live re-recording showed
+DeepSeek chooses a systematically different — equally reasonable — tag
+vocabulary than a fixture author, so exact-set F1 measures vocabulary
+agreement, not quality.
+
+Floor discipline: `--update-baseline` snaps floors DOWN to current scores,
+but several committed description-prompt floors are hand-set BELOW that
+(e.g. `is_startup_accuracy` 0.85 vs a simulated 0.95) because the recordings
+are still largely simulated and the first live re-record showed real DeepSeek
+scoring a few points under hand-authored stand-ins. They gate catastrophes,
+not noise, until floors are recalibrated on live recordings.
 
 ## Record mode (live, opt-in, paid)
 

@@ -3,8 +3,7 @@
   "model": null,
   "recorded_at": null,
   "response": {
-    "description_short": "The scraped site describes Brightsmile Dental Care, a dental practice in Riverside, CA \u2014 not Quanta Metrics.",
-    "description_long": "The text belongs to Brightsmile Dental Care, a family and cosmetic dentistry practice in Riverside, CA. It does not describe Quanta Metrics or any software product.",
+    "description_short": "The scraped site describes Brightsmile Dental Care, a dental practice in Riverside, CA — not Quanta Metrics.",
     "primary_category": "unknown",
     "tags": [],
     "people": [],

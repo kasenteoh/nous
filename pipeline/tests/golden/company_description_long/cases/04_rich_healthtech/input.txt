@@ -1,0 +1,40 @@
+Clinicore — Prior authorizations, off your plate
+
+Clinicore automates prior authorization for specialty clinics. Our platform
+reads the order from your EHR, assembles the payer-specific documentation,
+submits it electronically, and tracks every request to a decision.
+
+The problem we solve
+
+Prior authorization is the top administrative burden in specialty care.
+Staff spend hours on payer portals and phone calls; patients wait days for
+approvals; denials arrive for missing documentation that was sitting in the
+chart all along.
+
+How it works
+
+Clinicore integrates with Epic, Cerner, and athenahealth. When a clinician
+places an order that needs authorization, Clinicore detects it, pulls the
+clinical notes and labs that the payer's policy requires, and assembles the
+submission. A rules engine encodes payer policies and keeps them current;
+our clinical operations team reviews edge cases before anything goes out.
+Status updates flow back into the EHR, and staff see one queue instead of
+a dozen portals.
+
+Results
+
+Clinics using Clinicore report authorizations submitted in minutes instead
+of hours, first-pass approval rates above 90 percent, and staff time on
+authorizations cut by more than half.
+
+Who we serve
+
+Specialty practices and clinic groups in oncology, cardiology, rheumatology,
+and imaging — from single-site clinics to groups with 40 locations.
+
+Pricing is per provider per month, with volume pricing for groups.
+
+About
+
+Clinicore was founded in 2020 in Nashville, TN by a practice administrator
+and two health-data engineers. We are 60 people and remote-friendly.

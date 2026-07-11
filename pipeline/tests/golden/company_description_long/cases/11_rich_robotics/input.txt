@@ -1,0 +1,40 @@
+Palletmind — One brain for every robot on your floor
+
+Palletmind is vendor-neutral orchestration software for warehouse robotics.
+It assigns work across AMRs, conveyor systems, and pick stations from
+multiple manufacturers, so a mixed fleet behaves like one system.
+
+The problem
+
+Warehouses rarely buy all their automation from one vendor. Each robot
+brand arrives with its own fleet manager, its own map, its own queue —
+and they don't talk. Orders stall while one fleet idles and another
+backs up.
+
+How Palletmind works
+
+Palletmind connects upward to your WMS — integrations include Manhattan
+and Blue Yonder — and downward to each vendor's fleet manager through
+its API. A task-allocation solver decides, every few seconds, which robot
+should do which job, balancing travel time, battery state, congestion, and
+order priority across the whole floor. A shared traffic map prevents
+deadlocks at intersections and dock doors. Before go-live, a digital twin
+simulates the floor: operators replay their busiest day against a proposed
+layout and see throughput before moving a single rack.
+
+Results
+
+Sites running Palletmind report 20 to 35 percent more picks per hour from
+the same fleet, and integration timelines of 8 weeks instead of the
+6 months a custom middleware build typically takes.
+
+Customers
+
+3PLs and retailers operating mixed fleets across North America and Europe.
+
+Pricing: annual license per site, sized by robot count.
+
+About
+
+Palletmind was founded in Atlanta in 2020 by engineers from an AMR
+manufacturer. 61 people across Atlanta and Rotterdam.

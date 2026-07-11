@@ -1,0 +1,35 @@
+Modelgrid — Serverless GPU inference without the cold-start tax
+
+Modelgrid runs machine-learning models as autoscaling API endpoints. Deploy
+any model that runs on PyTorch or vLLM, get an HTTPS endpoint, and pay only
+for the seconds your model is actually computing.
+
+The cold-start problem
+
+Serverless GPU platforms historically made you choose: keep expensive GPUs
+warm around the clock, or accept cold starts of a minute or more while
+weights load. Modelgrid's answer is a snapshot architecture. We checkpoint
+the fully-initialized model — weights, CUDA context, allocator state — into
+a distributed cache that sits next to the GPUs. Restoring a snapshot brings
+a model from zero to serving in under 2 seconds, even for models tens of
+gigabytes in size.
+
+What you can run
+
+Language models, embedding models, diffusion models, speech-to-text —
+anything with a PyTorch or vLLM serving path. Bring a container or a Python
+function; Modelgrid handles batching, queueing, autoscaling from zero, and
+GPU selection across A100 and H100 classes.
+
+Who it's for
+
+Teams shipping AI features that face spiky or unpredictable traffic:
+overnight batch jobs, consumer apps with regional peaks, agents that fan out
+to many models. Per-second billing means a model that serves 10 minutes of
+traffic a day costs minutes, not hours.
+
+Company
+
+Modelgrid was founded in San Francisco in 2023 by infrastructure engineers
+from a large GPU cloud. We run our own capacity in three US regions and
+publish status and latency numbers openly.

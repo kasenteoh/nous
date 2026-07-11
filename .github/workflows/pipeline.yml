@@ -418,15 +418,20 @@ jobs:
       - name: Enrich companies
         id: enrich
         if: ${{ inputs.skip_enrich != true }}
-        # Write-once per company and LLM-bound (sequential ~5-15s/company), so
-        # the small --limit is the spend + wall-clock governor. At 10x/day this
-        # keeps pace with the day's scrape yield; the backlog drains over days.
-        timeout-minutes: 10
+        # Write-once per company and LLM-bound, so the small --limit is the
+        # spend + wall-clock governor. Since the W-F judge/describe split each
+        # new company costs up to two DeepSeek calls (~10-30s), and
+        # --redescribe-outdated appends a second pass (also bounded by
+        # --limit) that regenerates description_long for companies described
+        # by an outdated prompt revision — that ~2.6k-company backlog drains
+        # at enrich_limit per run, then the pass no-ops. Timeout raised
+        # 10 → 25 minutes to cover the up-to-3x call volume.
+        timeout-minutes: 25
         continue-on-error: true
         run: |
           ENRICH_LIMIT="${{ inputs.enrich_limit }}"
           if [ -z "$ENRICH_LIMIT" ]; then ENRICH_LIMIT=30; fi
-          uv run nous enrich-companies --limit "$ENRICH_LIMIT"
+          uv run nous enrich-companies --limit "$ENRICH_LIMIT" --redescribe-outdated
 
       - name: Enrich backfill (missing taxonomy)
         id: enrich_backfill

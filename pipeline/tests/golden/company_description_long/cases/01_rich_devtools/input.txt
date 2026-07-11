@@ -1,0 +1,49 @@
+Pipewright — See inside every build
+
+Pipewright is a CI/CD observability platform for engineering teams that run
+their builds on GitHub Actions, GitLab CI, or Jenkins. It ingests every
+pipeline event and turns them into a searchable timeline: which jobs ran,
+what they cost, which tests flaked, and where the queue backed up.
+
+Why teams pick Pipewright
+
+Modern teams merge dozens of times a day, and a slow or flaky pipeline taxes
+every merge. Most teams debug their CI by scrolling raw logs. Pipewright
+replaces that with structured build telemetry: each step is traced, tagged,
+and stored, so an engineer can ask "which test slowed down this week" and get
+an answer in seconds.
+
+How it works
+
+A lightweight collector runs as a step in your existing pipeline
+configuration — no agent daemons, no proxy. It streams timing, cache hits,
+artifact sizes, and test results to Pipewright's backend, where a columnar
+store keeps 13 months of history. Flake detection replays failing tests in
+isolation on ephemeral runners and marks the nondeterministic ones
+automatically. Dashboards break down duration by repository, branch, and
+team, and alert rules fire on regressions against a rolling baseline.
+
+Who uses it
+
+Platform engineering teams at companies between 20 and 2,000 engineers use
+Pipewright to cut CI spend and keep merge queues moving. Documented use cases
+run from monorepo build sharding to nightly-release verification.
+
+Pricing
+
+Free for open-source projects and up to 3 developers. The Team plan is $30
+per developer per month; Enterprise adds SSO, audit logs, support for
+self-hosted runners, and a dedicated Slack channel.
+
+About
+
+Pipewright was founded in 2022 in Seattle, WA by two ex-infrastructure
+engineers who ran build systems at a large e-commerce company and grew tired
+of debugging CI through log archaeology. The team is 14 people, remote-first.
+
+Compared to rolling your own
+
+Teams sometimes assemble similar visibility from Grafana dashboards and
+homegrown scripts. Pipewright's pitch is that build telemetry is a product,
+not a side project: the schema, the flake detector, and the cost attribution
+come ready, and the collector installs in under ten minutes.

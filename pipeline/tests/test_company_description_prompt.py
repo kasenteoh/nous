@@ -41,7 +41,6 @@ def test_build_prompt_contains_both_fields() -> None:
 
 VALID_PAYLOAD = {
     "description_short": "A platform for developer tooling.",
-    "description_long": "Paragraph one.\n\nParagraph two.",
     "primary_category": "developer tools",
     "tags": ["api", "cloud", "saas"],
     "website_state": "ok",
@@ -60,7 +59,6 @@ def test_company_description_tags_default_empty() -> None:
     """tags has a default of [] so it can be omitted."""
     payload = {
         "description_short": "Short.",
-        "description_long": "Long.",
         "primary_category": "fintech",
         "website_state": "ok",
     }
@@ -99,31 +97,29 @@ def test_company_description_parses_people() -> None:
 def test_company_description_rejects_missing_description_short() -> None:
     """description_short is required; omitting it should raise ValidationError."""
     payload = {
-        "description_long": "Long description here.",
         "primary_category": "fintech",
         "tags": [],
+        "website_state": "ok",
     }
     with pytest.raises(ValidationError):
         CompanyDescription.model_validate_json(json.dumps(payload))
 
 
-def test_company_description_rejects_missing_description_long() -> None:
-    """description_long is required; omitting it should raise ValidationError."""
-    payload = {
-        "description_short": "Short.",
-        "primary_category": "fintech",
-        "tags": [],
-    }
-    with pytest.raises(ValidationError):
-        CompanyDescription.model_validate_json(json.dumps(payload))
+def test_description_long_left_the_judge_schema() -> None:
+    """W-F split: the long-form profile has its own prompt/schema. A stray
+    description_long in a response is ignored (Pydantic extra=ignore), and
+    the judge model carries no such attribute."""
+    payload = {**VALID_PAYLOAD, "description_long": "Should be ignored."}
+    obj = CompanyDescription.model_validate_json(json.dumps(payload))
+    assert not hasattr(obj, "description_long")
 
 
 def test_company_description_rejects_missing_primary_category() -> None:
     """primary_category is required; omitting it should raise ValidationError."""
     payload = {
         "description_short": "Short.",
-        "description_long": "Long.",
         "tags": [],
+        "website_state": "ok",
     }
     with pytest.raises(ValidationError):
         CompanyDescription.model_validate_json(json.dumps(payload))

@@ -1,0 +1,41 @@
+Shipglass — Feature flags that keep up with your releases
+
+Shipglass is a feature management platform: wrap any change in a flag, roll
+it out to 1 percent of users, watch the metrics, and ramp or roll back
+without a deploy.
+
+Why flags
+
+Shipping behind flags separates deploy from release. Teams merge continuously,
+then release deliberately — by cohort, region, or plan. When something breaks,
+the kill switch is instant; no revert, no hotfix train.
+
+How Shipglass works
+
+SDKs for 12 languages evaluate flags locally from a streamed ruleset, so
+evaluation adds well under 1 millisecond and works offline. Targeting rules
+combine user attributes, cohorts, and percentage rollouts. Every flag change
+is audited, and stale flags are surfaced for cleanup automatically. An edge
+network keeps rulesets within 50 milliseconds of users worldwide.
+
+Experiments
+
+Any rollout can become an A/B test: attach a metric, and Shipglass computes
+lift with confidence intervals. No separate experimentation stack.
+
+Who it's for
+
+Product engineering teams that ship daily. Common first uses: risky
+migrations, tiered entitlements, and gradual mobile rollouts where app-store
+review makes rollback expensive.
+
+Pricing
+
+Free for up to 5 seats. Pro is $12 per seat per month. Enterprise adds SAML,
+custom roles, and a dedicated environment.
+
+Company
+
+Shipglass was founded in Denver in 2021. The team of 27 previously built
+release tooling at large consumer-software companies. The homegrown
+alternative — a config table and a prayer — is our favorite competitor.

@@ -1,0 +1,40 @@
+Gridmaple — Your buildings, running lean
+
+Gridmaple cuts energy use in commercial buildings without new hardware. Our
+software connects to the building management system you already have,
+learns how each building heats, cools, and fills with people, and adjusts
+HVAC schedules and setpoints continuously.
+
+The opportunity
+
+HVAC is typically the largest energy load in an office or retail building,
+and most systems run on static schedules programmed years ago. Buildings
+heat empty floors, pre-cool on mild days, and fight themselves between
+zones.
+
+How it works
+
+Gridmaple connects to BMS platforms over BACnet — no sensors to install, no
+retrofit. Machine-learning models forecast occupancy and weather for each
+zone and compute an optimized schedule every 15 minutes. Changes flow back
+to the BMS within guardrails the facilities team sets, and every adjustment
+is logged and reversible. Utility-rate awareness shifts load away from peak
+pricing and demand charges.
+
+Results
+
+Customers measure energy savings of 15 to 30 percent on HVAC, verified
+against utility meters. Portfolios also use Gridmaple reporting for
+emissions disclosures and utility rebate programs.
+
+Who uses Gridmaple
+
+Owners and operators of office, retail, and healthcare portfolios — from a
+single 80,000-square-foot building to portfolios of 200 sites.
+
+Pricing is per building per year, sized by floor area.
+
+Company
+
+Gridmaple is headquartered in New York City, founded in 2021 by controls
+engineers and a former utility analyst. 52 people.

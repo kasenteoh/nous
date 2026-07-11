@@ -12,11 +12,16 @@ never had. The discovery approach below uses what the site actually links to:
 2. Parse <a href> tags via selectolax. Keep only same-host internal links.
 3. Score each by how many "about/team/product/company/story/..." keywords
    appear in the URL path or anchor text. Higher = more interesting.
-4. Take the top ``max_extra_pages`` (default 3) unique URLs.
+4. Take the top ``max_extra_pages`` (default 5; was 3 until W-F) unique URLs.
 5. Fetch and persist each one.
 
-So a typical company contributes 1 (homepage) + ≤3 (discovered) = ≤4
-real-existing pages. No 404 noise.
+So a typical company contributes 1 (homepage) + ≤5 (discovered) = ≤6
+real-existing pages. No 404 noise. The default was raised 3 → 5 for W-F so
+content-rich sites feed the dedicated long-description call more source
+text; the judge call still truncates at the shared 32k ceiling, so only the
+describe call (which runs on catalog-worthy companies only) sees the extra
+input. Cost: at most 2 extra same-host fetches per company per refetch
+cycle (serialized at 1 req/s) and a few KB more stored text per company.
 
 JS-shell fallback: if the httpx-fetched HTML extracts to less than
 ``_BROWSER_FALLBACK_TEXT_THRESHOLD`` chars of visible text (a sign that the
@@ -71,12 +76,13 @@ from nous.util.text import extract_visible_text
 _BROWSER_FALLBACK_TEXT_THRESHOLD: int = 200
 
 # Per-page cap on stored extracted text. Enrichment truncates the multi-page
-# concatenation to 32k chars anyway; 50k per page is generous headroom while
-# bounding pathological pages (infinite-scroll blogs, generated content).
+# concatenation anyway (32k for the judge call, 48k for the describe call);
+# 50k per page is generous headroom while bounding pathological pages
+# (infinite-scroll blogs, generated content).
 _MAX_STORED_CHARS: int = 50_000
 
 # How many companies to scrape over the network at once. Scraping is
-# network-bound (homepage + up to 3 internal pages per company, plus an
+# network-bound (homepage + up to 5 internal pages per company, plus an
 # optional headless-Chromium render for JS-only shells). Distinct companies
 # live on distinct domains, so a batch fetches concurrently while the clients'
 # per-domain locks still serialize same-domain requests at 1 req/sec — within a
@@ -420,7 +426,7 @@ async def run_scrape_homepages(
     refetch_after_days: int = 90,
     failure_backoff_days: int = 30,
     limit: int | None = None,
-    max_extra_pages: int = 3,
+    max_extra_pages: int = 5,
     browser_client: HeadlessBrowserClient | None = None,
     max_runtime_minutes: float | None = None,
     concurrency: int = _DEFAULT_CONCURRENCY,

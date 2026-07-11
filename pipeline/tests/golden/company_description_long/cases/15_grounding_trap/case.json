@@ -1,0 +1,5 @@
+{
+  "company_name": "Relaymark",
+  "variant": "default",
+  "notes": "No-fabrication proxy: recorded profile inflates the stated 'over 900 brands' to '9,000' and invents customer 'Lumeria'. grounding_min < 1 by design; expected.json holds the clean version."
+}
