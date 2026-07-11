@@ -4,6 +4,8 @@ Relaymark automates lifecycle messaging for e-commerce brands: welcome
 series, abandoned-cart recovery, win-back campaigns, and post-purchase
 flows across email and SMS.
 
+Start free under 500 profiles. Book a migration call.
+
 How it works
 
 Relaymark connects to Shopify and BigCommerce, builds a profile of every
@@ -12,29 +14,210 @@ builder. Send-time optimization picks the hour each shopper is most likely
 to engage, and a holdout system measures true incremental revenue per flow
 rather than last-click attribution.
 
+The shopper profile
+
+Every order, browse, cart event, and message interaction lands on one
+profile: what they bought, what they looked at, what they opened, what
+they ignored. Segments build from any of it — high-AOV repeat buyers,
+browsers who never purchased, subscribers gone quiet for 90 days — and
+update in real time as events stream in. The profile is the raw material;
+the flows are what it is for.
+
+The flows
+
+Welcome series greet the new subscriber with the story and the first
+offer, sequenced over days, exiting early when they buy. Abandoned-cart
+recovery picks up the shopper who left at checkout — the highest-intent
+moment in e-commerce — with reminders, social proof, and, where you allow
+it, an incentive that escalates only if needed. Win-back campaigns target
+customers whose purchase cadence has lapsed, and post-purchase flows
+handle the unglamorous revenue: order follow-ups, cross-sells timed to
+consumption cycles, review requests, replenishment reminders. Each flow
+branches on profile data and live behavior in the visual builder — no
+code, full logic.
+
+Measurement you can defend
+
+Attribution theater is the industry disease: every tool claims the
+revenue the store would have earned anyway. Relaymark's holdout system
+keeps a control group per flow and reports true incremental revenue —
+what the flow earned beyond what would have happened without it. CFOs
+notice the difference. Send-time optimization runs on the same discipline:
+the model picks each shopper's likely engagement hour, and its lift is
+measured against a control, not asserted.
+
 Templates and testing
 
 Over 900 brands run on Relaymark. Journey templates encode what works —
 the site cites a 4-message abandoned-cart series as its most-copied
 template — and every flow can A/B test subject lines, timing, and offers.
 
+The template library is organized by vertical and by job: welcome series
+for considered purchases, cart recovery for impulse categories,
+replenishment flows for consumables. Every template ships with its
+branching logic and timing intact; brands customize the voice and keep
+the structure. Tests run natively inside flows — subject lines, send
+timing, offer depth — with results reported as incremental lift, holdout
+included.
+
+SMS, done carefully
+
+SMS is high-attention and high-risk. Relaymark handles consent capture
+and record-keeping, quiet hours by recipient timezone, frequency caps
+across flows, and automatic opt-out processing. Email and SMS coordinate
+inside one journey — the cart reminder texts only if the email went
+unopened — so shoppers hear one brand, not two channels competing.
+
 Deliverability
 
 Dedicated sending infrastructure, list hygiene tooling, and automatic
 suppression of unengaged addresses keep sender reputation healthy.
 
+Deliverability is treated as product, not support ticket: warm-up
+schedules for new sending domains, bounce and complaint monitoring with
+automatic throttling, and suppression rules that retire unengaged
+addresses before they hurt the sender score. A deliverability specialist
+reviews every account's first month of sends.
+
+Integrations
+
+Beyond Shopify and BigCommerce, Relaymark syncs audiences to Meta and
+Google ad platforms for suppression and lookalikes, and webhooks stream
+every message event to your warehouse. Review-request flows integrate
+with Okendo and Judge.me.
+
+The ad-platform sync runs both directions of common sense: suppress
+paid spend against shoppers your flows are already converting, and build
+lookalikes from your best segments. The webhook stream means your data
+team sees every send, open, click, and conversion in the warehouse,
+joined to their own models — no export requests, no API archaeology.
+
+Migration and support
+
+Every plan includes migration help: Relaymark's team rebuilds your
+existing flows during onboarding, typically inside two weeks, and a
+deliverability specialist reviews your first month of sends.
+
+Switching costs in this category are mostly accumulated flows — the
+welcome series tuned over two years, the win-back logic someone built
+and left. The migration team rebuilds them flow by flow, testing against
+historical data before cutover, so the switch is a weekend, not a
+quarter.
+
+Pricing
+
 Pricing scales with contactable profiles; email and SMS are metered
 separately. A free tier covers stores under 500 profiles.
+
+Contactable means reachable: suppressed and unsubscribed profiles are
+stored free. Email volume is included at every tier; SMS meters per
+message at published rates. No annual lock-in; annual billing discounts
+available.
+
+Frequently asked
+
+Do you support stores outside Shopify and BigCommerce? Those two are
+native today; a public API covers custom storefronts, and further
+platform integrations are on the roadmap.
+
+Can we bring our own sending domain? Yes — dedicated domains with
+managed warm-up are standard on paid tiers.
+
+What happens to our data if we leave? Full export of profiles, events,
+and flow definitions. The webhook stream means your warehouse already
+has the history.
 
 About
 
 Relaymark is a 30-person company founded in 2020, fully remote, with
 customers concentrated in fashion, beauty, and food & beverage.
 
-Integrations
+The team came out of e-commerce itself: retention managers, deliverability
+engineers, and lifecycle marketers who ran these programs by hand at
+brands and agencies. The founding conviction is that lifecycle revenue is
+earned by structure, not by volume — the right message at the right hour
+to the right segment, measured honestly against a holdout.
 
-Beyond Shopify and BigCommerce, Relaymark syncs audiences to Meta and Google ad platforms for suppression and lookalikes, and webhooks stream every message event to your warehouse. Review-request flows integrate with Okendo and Judge.me.
+Results, measured honestly
 
-Support
+Because every flow runs against a holdout, Relaymark publishes what the
+category usually hides: aggregate incremental revenue per flow type
+across the customer base, updated quarterly. Abandoned-cart recovery
+leads, welcome series compound, and win-back is the flow most often
+overrated by last-click math — the customers who "came back" mostly
+would have anyway, which is exactly what a holdout exists to reveal.
+Brands see their own flows benchmarked against vertical medians in the
+dashboard, incremental numbers only.
 
-Every plan includes migration help: Relaymark's team rebuilds your existing flows during onboarding, typically inside two weeks, and a deliverability specialist reviews your first month of sends.
+The visual builder, in practice
+
+Journeys are graphs: triggers, waits, branches, and messages. Branch
+on anything the profile knows — cart value, category viewed, prior
+purchase count, engagement recency — and on live behavior mid-journey:
+opened but did not click, clicked but did not buy. Exit rules end the
+journey the moment its goal is met, so nobody gets the discount email
+after paying full price. Every node shows its live stats in place, and
+editing a running flow versions it safely: shoppers mid-journey finish
+on the version they started.
+
+Fashion, beauty, food & beverage
+
+The template library leans into the verticals where Relaymark's
+customers concentrate. Fashion: browse-recovery keyed to size and
+category, back-in-stock flows, seasonal win-back. Beauty:
+replenishment timed to product consumption windows, sample-to-full-size
+journeys, review requests routed through Okendo or Judge.me. Food &
+beverage: subscription-pause saves, reorder reminders tuned to
+consumption cadence, first-order onboarding that introduces the range.
+Templates carry vertical-specific timing defaults learned from
+aggregate results.
+
+Switching from a generic ESP
+
+The generic email platform treats lifecycle as a campaign calendar;
+Relaymark treats it as infrastructure. The difference shows up in
+three places: flows branch on commerce data the ESP never sees,
+measurement runs against holdouts instead of last-click reports, and
+deliverability is managed per account rather than left to a shared IP
+pool's reputation. The migration team maps your existing automations
+during the onboarding call — most translate flow for flow, and the
+ones that do not are usually the ones the holdout would have retired
+anyway.
+
+From the blog: The 4-message abandoned-cart series, dissected
+
+Why four messages and not two or seven, where the incentive belongs (and
+where it wastes margin), and the timing curve from aggregate results
+across our customer base. Our most-copied template, explained. Read it.
+
+Also on the blog: Last-click flattery — how attribution inflates
+lifecycle revenue claims, and what a holdout changes about the number
+your finance team sees.
+
+More from the FAQ
+
+Does Relaymark work for stores just starting out? The free tier under
+500 profiles exists for exactly this — start with the welcome series
+and cart recovery templates, grow into segmentation as the list does.
+
+How long until flows perform? Cart recovery earns from week one;
+send-time optimization and win-back need enough history to model,
+typically a month or two of events.
+
+Can we run one-off campaigns too? Yes — campaigns share the same
+segments, templates, and deliverability infrastructure, and the same
+holdout measurement if you want the honest number.
+
+Recognition
+
+Relaymark's holdout methodology has been covered in retention
+marketing newsletters as a corrective to last-click revenue claims,
+and the quarterly aggregate benchmarks are cited by e-commerce
+operators comparing flow performance across verticals. The company
+publishes its deliverability playbook openly — warm-up schedules,
+suppression rules, sender-score thresholds — on the docs site.
+
+Careers: deliverability engineer, lifecycle strategist (fashion),
+product engineer — flows. Fully remote.
+
+(c) Relaymark — remote-first

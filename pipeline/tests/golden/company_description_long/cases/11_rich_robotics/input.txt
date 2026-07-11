@@ -4,12 +4,20 @@ Palletmind is vendor-neutral orchestration software for warehouse robotics.
 It assigns work across AMRs, conveyor systems, and pick stations from
 multiple manufacturers, so a mixed fleet behaves like one system.
 
+See a mixed floor run as one system. Book a walkthrough.
+
 The problem
 
 Warehouses rarely buy all their automation from one vendor. Each robot
 brand arrives with its own fleet manager, its own map, its own queue —
 and they don't talk. Orders stall while one fleet idles and another
 backs up.
+
+Automation was bought in waves: goods-to-person AMRs in 2019, a
+conveyor retrofit in 2021, pick-assist robots last year — each rational
+alone, each with its own control tower. The result is a floor that is
+locally automated and globally uncoordinated, where the bottleneck moves
+hourly and no dashboard shows the whole picture.
 
 How Palletmind works
 
@@ -22,19 +30,187 @@ deadlocks at intersections and dock doors. Before go-live, a digital twin
 simulates the floor: operators replay their busiest day against a proposed
 layout and see throughput before moving a single rack.
 
+The task-allocation solver
+
+Every few seconds, the solver re-plans the whole floor: which AMR takes
+which pick, which orders route through the conveyor spur, which pick
+station gets the next wave. The optimization balances travel time,
+battery state, congestion, and order priority simultaneously — the
+nearest robot is not always the right robot if it is at 12 percent
+battery or would join a queue at a busy intersection. Wave releases from
+the WMS become a continuous flow of tasks, allocated against the floor
+as it actually is, not as the morning plan assumed.
+
+The shared traffic map
+
+Each vendor's robots navigate from their own map and cannot see the
+others. Palletmind maintains the shared traffic map above them:
+intersections, aisle segments, dock doors, and charging areas become
+managed resources, with reservations and priorities that prevent the
+deadlocks mixed fleets are famous for. When two brands of AMR converge on
+the same dock door, one of them yields — deliberately, by policy, not by
+bumper.
+
+The digital twin
+
+Go-live fear is rational: handing floor control to new software is how
+outages happen. Palletmind's answer is the twin. Before anything goes
+live, operators replay their own busiest day — real orders, real
+timings — against the proposed configuration and see throughput, robot
+utilization, and congestion heat maps before moving a single rack. The
+same twin runs what-if questions afterward: another ten AMRs or a second
+pick station? A layout change before peak season? The answer comes from
+simulation, not from an argument.
+
+The operations console
+
+One screen for the whole floor: live task flow, per-fleet utilization,
+congestion, and order-aging alerts. Shift leads see which orders are at
+risk and why; engineers see solver decisions with their reasoning
+attached. Every allocation is logged and explainable — when a customer
+asks why a wave ran late, the answer is a query, not a shrug.
+
 Results
 
 Sites running Palletmind report 20 to 35 percent more picks per hour from
 the same fleet, and integration timelines of 8 weeks instead of the
 6 months a custom middleware build typically takes.
 
-Customers
+One European 3PL running three robot brands across two buildings
+described the before-state as "three good systems taking turns being the
+bottleneck." Post-deployment, the same fleet cleared their daily volume
+with two hours of shift to spare — throughput they had priced as a fleet
+expansion.
+
+Integration in 8 weeks
+
+Weeks 1-2: WMS connection and data mapping — Manhattan and Blue Yonder
+integrations are productized, not projects. Weeks 3-4: fleet-manager
+connections through each vendor's API, floor survey, and traffic-map
+build. Weeks 5-6: digital-twin validation against your historical peak
+days. Weeks 7-8: phased go-live, zone by zone, with the twin's plan as
+the reference. A custom middleware build covering the same scope
+typically takes 6 months — and then needs maintaining.
+
+Who runs Palletmind
 
 3PLs and retailers operating mixed fleets across North America and Europe.
+3PLs use the twin to model client onboarding — what happens to the floor
+when a new client's volume lands. Retailers standardize one orchestration
+layer across DCs that were automated in different eras with different
+vendors.
 
-Pricing: annual license per site, sized by robot count.
+Pricing
+
+Annual license per site, sized by robot count. The license includes the
+WMS and fleet-manager integrations, the twin, and support; there are no
+per-task fees, so the incentive is to run more through the same floor,
+not less.
+
+Frequently asked
+
+Does Palletmind replace our fleet managers? No. Each vendor's fleet
+manager keeps doing what it does well — navigation, charging, firmware.
+Palletmind decides what work each fleet gets and referees the shared
+spaces between them.
+
+What if a vendor's API is limited? The integration degrades gracefully:
+fleets Palletmind cannot task directly are modeled in the traffic map
+and planned around. In practice, every major AMR vendor exposes tasking
+APIs — their customers demand it.
+
+Do you support AGVs and ASRS? Conveyor systems and pick stations are
+supported today alongside AMRs; ASRS integration is in deployment with
+two design partners.
+
+What does the WMS see? Palletmind is invisible upstream: the WMS
+releases work as it always has and receives confirmations as if from a
+single system.
 
 About
 
 Palletmind was founded in Atlanta in 2020 by engineers from an AMR
-manufacturer. 61 people across Atlanta and Rotterdam.
+manufacturer — Jonas De Vries and Priya Menon — who spent years watching
+their robots idle in warehouses where a competitor's fleet had the work
+queue. The company is 61 people across Atlanta and Rotterdam: robotics
+and optimization engineers, plus deployment teams who have collectively
+commissioned hundreds of automated sites in North America and Europe.
+
+How the twin is built
+
+The twin is not a generic warehouse simulator with your floor plan
+pasted in. It is calibrated from your own telemetry: robot speeds and
+turn times observed from the fleet managers, conveyor rates from the
+PLC data, pick-station cycle times from the WMS confirmations. Order
+replay uses your actual order files — the real mix of singles,
+multis, and oversize — so the simulated peak day is your peak day.
+Calibration is validated by hindcasting: the twin re-runs last week
+and its predicted throughput is compared against what the floor
+actually did, with the error published in the go-live report.
+
+Explainability
+
+Solver decisions are inspectable by design. Every task assignment
+records the alternatives considered and the costs that decided it —
+travel estimate, battery margin, congestion penalty, priority weight.
+When an operations manager asks why the far AMR took the near pick,
+the console shows the answer: the near robot was two tasks from a
+charge threshold and the intersection ahead of it was reserved. Trust
+in orchestration is built one explained decision at a time, and the
+log is the training material for new shift leads.
+
+Working with robot vendors
+
+Palletmind maintains the vendor integrations as products: when a fleet
+manager's API versions, the integration updates centrally, not as a
+change order. Vendors cooperate because their robots perform better
+inside a coordinated floor — idle fleets embarrass everyone at
+renewal time. Integration coverage grows steadily; the current matrix
+of supported fleet-manager versions is published in the docs, and new
+vendor integrations are scheduled with the customer's deployment, not
+after it.
+
+Peak season
+
+The twin earns its keep in September: replay last year's peak against
+this year's fleet and layout, test the what-ifs — extra AMRs, a
+second shift at the pick stations, a temporary staging zone — and go
+into November with a plan that was simulated rather than argued. Sites
+report their first orchestrated peak as the moment the platform stops
+being an experiment.
+
+From the blog: Deadlock at dock door 7
+
+An anonymized incident study: how two well-behaved fleets gridlocked a
+shipping lane for 40 minutes, why neither vendor's software was wrong,
+and what a shared traffic map does differently. Read the post.
+
+More from the FAQ
+
+What happens if Palletmind goes down? Fleets fall back to their own
+fleet managers and keep working from their last assignments — the
+floor degrades to its pre-Palletmind state, not to a standstill, and
+recovery resynchronizes tasking automatically.
+
+How big does a site need to be? The economics start making sense
+around two automation vendors or one vendor plus a conveyor system —
+coordination is the product, and a single-brand floor already has a
+coordinator.
+
+Is the twin available standalone? Yes — some customers run
+twin-first engagements to settle a layout or fleet-sizing decision
+before committing to orchestration.
+
+Recognition
+
+Palletmind's deadlock case studies and solver explainability work are
+cited in warehouse automation trade coverage, and the company
+publishes its integration matrix — which fleet managers, which
+versions, what capability level — openly in the docs. The Rotterdam
+office anchors European deployments, where mixed-vendor floors are,
+if anything, more common than in North America.
+
+Careers: optimization engineer (Atlanta), robotics integration engineer
+(Rotterdam), deployment lead (remote NA).
+
+(c) Palletmind, Inc. — Atlanta, GA

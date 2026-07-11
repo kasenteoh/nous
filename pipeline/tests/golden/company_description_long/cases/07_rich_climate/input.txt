@@ -5,12 +5,20 @@ software connects to the building management system you already have,
 learns how each building heats, cools, and fills with people, and adjusts
 HVAC schedules and setpoints continuously.
 
+See your portfolio's savings estimate. Talk to us.
+
 The opportunity
 
 HVAC is typically the largest energy load in an office or retail building,
 and most systems run on static schedules programmed years ago. Buildings
 heat empty floors, pre-cool on mild days, and fight themselves between
 zones.
+
+Walk any office tower at 6 a.m. and the story is the same: the schedule
+says occupied at 7, so every floor conditions for a workforce that
+arrives — hybrid, now — at 9:30, unevenly, and mostly on floors 4 through
+11. The BMS is doing exactly what it was told in 2016. Nobody has time to
+retell it every season, and the controls contractor charges by the visit.
 
 How it works
 
@@ -21,20 +29,195 @@ to the BMS within guardrails the facilities team sets, and every adjustment
 is logged and reversible. Utility-rate awareness shifts load away from peak
 pricing and demand charges.
 
+Connecting to your BMS
+
+Gridmaple reads and writes over BACnet, the protocol your building
+already speaks, and works with the major BMS platforms — Johnson Controls
+Metasys, Siemens Desigo, Honeywell, and others. Onboarding is a points
+mapping exercise, not a construction project: our team maps zones, air
+handlers, and setpoints in the first two weeks, using the as-built
+documentation where it exists and discovery where it does not. No sensors
+to install, no gateways to rack beyond a single site appliance where the
+BMS has no network route.
+
+The optimization loop
+
+For each zone, models trained on your building's own history forecast
+occupancy — from badge data, network activity, or learned patterns —
+alongside weather and thermal response: how fast this particular floor
+warms, how long the chilled water loop takes to answer. Every 15 minutes
+Gridmaple computes the schedule and setpoints that meet comfort targets
+at minimum cost: later starts on slow days, shallower pre-cooling when
+the afternoon will be mild, staggered equipment starts so the building
+never spikes demand it will pay for all year.
+
+Guardrails and control
+
+The facilities team defines the envelope: temperature bands per zone,
+equipment cycling limits, blackout periods, floors or systems Gridmaple
+must not touch. Every adjustment is written through the BMS, logged with
+its reason, and reversible — one click returns any zone or the whole
+building to its original schedule. Operators see what changed and why in
+a daily digest, and comfort complaints can be traced to the exact
+adjustment, or ruled out by it.
+
+Utility rates and demand charges
+
+Energy bills are two meters: consumption and peak demand. Gridmaple loads
+your tariff — time-of-use windows, demand charge structure, seasonal
+rates — and optimizes against dollars, not just kilowatt-hours. Load
+shifts away from peak windows, equipment staging avoids coincident
+starts, and where utilities run demand-response programs, Gridmaple can
+shape participation without comfort excursions.
+
 Results
 
 Customers measure energy savings of 15 to 30 percent on HVAC, verified
 against utility meters. Portfolios also use Gridmaple reporting for
 emissions disclosures and utility rebate programs.
 
+Measurement and verification
+
+Savings claims in this industry have a credibility problem, so Gridmaple's
+are measured the only way that settles arguments: against the utility
+meter, weather-normalized, using industry-standard M&V practice. The
+baseline is your building's own metered history; the report shows metered
+use against the adjusted baseline, month by month. The same data package
+supports utility rebate applications — several customers fund part of
+their subscription through efficiency programs — and feeds emissions
+disclosures with per-building, per-month figures.
+
 Who uses Gridmaple
 
 Owners and operators of office, retail, and healthcare portfolios — from a
 single 80,000-square-foot building to portfolios of 200 sites.
 
-Pricing is per building per year, sized by floor area.
+Office landlords use Gridmaple to hit energy targets in leases and to
+answer tenant sustainability questionnaires with metered data. Retail
+portfolios standardize one optimization layer across hundreds of nearly
+identical sites with no facilities staff on premise. Healthcare operators
+run it on administrative and outpatient buildings, with clinical spaces
+excluded by guardrail. Municipal and university estates are a growing
+segment — same buildings, same static schedules, same savings.
+
+Deployment timeline
+
+Weeks one and two: BACnet connection and points mapping. Weeks three and
+four: models learn the building in observe mode, recommending but not
+writing. Week five onward: closed-loop optimization inside guardrails,
+with the facilities team reviewing the daily digest. Full savings ramp
+within the first quarter as the models see a season change.
+
+Pricing
+
+Per building per year, sized by floor area. The subscription includes
+onboarding, the M&V reporting, and rate-tariff updates. No percentage-of-
+savings contracts, no shared-savings accounting disputes — a flat price
+your asset manager can budget.
+
+Frequently asked
+
+Does Gridmaple replace my BMS? No. It writes schedules and setpoints to
+the BMS you have, within guardrails. Rip-and-replace is exactly what
+this product exists to avoid.
+
+What if the internet connection drops? The BMS keeps running the last
+written schedule; nothing about your building depends on our uptime.
+
+Can my operators override it? Always — overrides win instantly, are
+logged, and inform the next optimization cycle.
+
+Who owns the data? You do. Your points data, your history, exportable
+at any time.
 
 Company
 
 Gridmaple is headquartered in New York City, founded in 2021 by controls
 engineers and a former utility analyst. 52 people.
+
+Founders Peter Voss and Miguel Santos spent a combined twenty years
+programming building controls and watching optimizations decay the day
+the commissioning engineer left the site; Hannah Cole priced commercial
+tariffs at a utility and knew exactly how much money static schedules
+leave on the table. Gridmaple is the product of that overlap: controls
+depth plus tariff literacy, applied continuously by software instead of
+occasionally by site visit.
+
+The team is 52 people across engineering, building science, and customer
+operations, with field engineers in the metros where our largest
+portfolios operate.
+
+Case pattern: the retail portfolio
+
+A portfolio operator with more than a hundred nearly identical sites has
+a problem no single-building tool solves: no facilities staff on
+premise, and a rollout cost that multiplies by every truck roll. The
+Gridmaple pattern for retail is remote-first — BACnet connection through
+the existing network, points mapping templated from the prototype store
+design, observe mode across the whole estate at once. Optimization
+switches on in cohorts, and the M&V report rolls up per region and per
+banner. The estate's schedules stop depending on which contractor
+commissioned which store in which year.
+
+What Gridmaple needs from you
+
+Three things: BACnet access to the BMS network (read and write, inside
+your firewall via the site appliance where needed), twelve months of
+utility bills or interval data for the baseline, and your tariff
+details — most are in our library already. Occupancy signals improve the
+models but are optional: badge feeds and network-activity counts where
+you have them, learned patterns where you do not. What Gridmaple does
+not need: new sensors, new wiring, or a seat at your capital planning
+table.
+
+Grid programs and demand response
+
+Where utilities pay for flexibility, Gridmaple turns comfort headroom
+into revenue: demand-response events are absorbed by pre-conditioning
+ahead of the window and floating through it inside the comfort band,
+automatically, with the event log to prove performance. Rebate programs
+for operational efficiency — increasingly common in commercial tariffs —
+accept Gridmaple's meter-verified M&V package directly; several
+customers fund part of their subscription this way.
+
+Resources
+
+Guide: Reading your demand charges — the half of the bill nobody
+optimizes. Webinar: M&V without an argument, with a utility program
+manager as guest. Calculator: portfolio savings estimate from floor
+area, building type, and metro.
+
+From the blog: The building that pre-cooled for a heat wave that ended
+
+A case study in weather-responsive scheduling: how one 40-story office
+tower avoided a demand peak when the forecast broke early, and what it
+did to the September bill. Read the post.
+
+More from the FAQ
+
+How fast do savings show up? Load shifting starts the day closed-loop
+optimization turns on; the full 15 to 30 percent range typically
+ramps over the first quarter as models see a season change.
+
+What happens during extreme weather? Guardrails hold — comfort bands
+are constraints, not suggestions — and the optimizer works inside
+them. Extreme days are where demand-charge avoidance earns the most.
+
+Do tenants notice? The design goal is that they do not: changes stay
+inside the comfort band, and complaint rates are tracked per building
+as a first-class metric alongside savings.
+
+Recognition
+
+Gridmaple's meter-verified approach to savings claims has been cited
+in commercial real estate sustainability coverage as a counterpoint to
+modeled-estimate marketing, and the company's engineers present
+regularly at building-performance conferences on BACnet integration
+practice and weather-responsive scheduling. Utility program managers
+in three states accept Gridmaple's M&V package as rebate
+documentation without supplemental metering.
+
+Careers: building performance engineer (NYC), BACnet integration
+engineer (remote US), data scientist — thermal modeling (NYC).
+
+(c) Gridmaple, Inc. — New York, NY

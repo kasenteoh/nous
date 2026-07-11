@@ -4,15 +4,34 @@ Modelgrid runs machine-learning models as autoscaling API endpoints. Deploy
 any model that runs on PyTorch or vLLM, get an HTTPS endpoint, and pay only
 for the seconds your model is actually computing.
 
+Deploy your first model in minutes. Read the docs.
+
 The cold-start problem
 
 Serverless GPU platforms historically made you choose: keep expensive GPUs
 warm around the clock, or accept cold starts of a minute or more while
 weights load. Modelgrid's answer is a snapshot architecture. We checkpoint
-the fully-initialized model — weights, CUDA context, allocator state — into
-a distributed cache that sits next to the GPUs. Restoring a snapshot brings
-a model from zero to serving in under 2 seconds, even for models tens of
-gigabytes in size.
+the fully-initialized model — weights, CUDA context, allocator state —
+into a distributed cache that sits next to the GPUs. Restoring a snapshot
+brings a model from zero to serving in under 2 seconds, even for models
+tens of gigabytes in size.
+
+How the snapshot architecture works
+
+A conventional cold start replays initialization from scratch: pull the
+container, load weights from object storage, initialize CUDA, allocate
+memory, warm the kernels. Each step is serial and none of it is your
+model's fault. Modelgrid runs that sequence once, at deploy time, then
+freezes the result — the process memory, the device state, the allocator's
+arena layout — into a snapshot. The snapshot lives in a distributed cache
+on NVMe within the same rack as the GPUs it will restore to, so a restore
+is a memory map and a device-state replay, not a download.
+
+Restores are deterministic: the same snapshot restores to the same state
+every time, which also makes scale-out uniform — the tenth replica comes
+up as fast as the first. When you push a new model version, Modelgrid
+builds and validates the new snapshot before shifting traffic, so a bad
+deploy never takes down the running version.
 
 What you can run
 
@@ -21,6 +40,36 @@ anything with a PyTorch or vLLM serving path. Bring a container or a Python
 function; Modelgrid handles batching, queueing, autoscaling from zero, and
 GPU selection across A100 and H100 classes.
 
+For vLLM workloads, continuous batching and paged attention come
+configured; you set the model id and the context length. For custom
+PyTorch, the Python SDK wraps your predict function, and the platform
+infers batching behavior from your signature. Streaming responses,
+server-sent events, and long-running jobs up to 30 minutes are supported
+on every endpoint.
+
+Autoscaling and queueing
+
+Endpoints scale from zero to your configured ceiling on demand. The
+scheduler watches queue depth and latency targets per endpoint: set a p95
+target and a maximum queue time, and Modelgrid decides when a burst
+justifies restoring another replica — a decision that only works because a
+restore costs 2 seconds, not 2 minutes. Idle replicas drain and release
+after a configurable window, and scale-to-zero means a deployed model that
+serves no traffic costs nothing to keep deployed.
+
+Batch and scheduled work run on the same endpoints: submit a job array,
+and the scheduler fans it across restored replicas, then scales back down
+when the queue empties.
+
+GPU classes
+
+Modelgrid runs A100 and H100 class GPUs, with 40 GB and 80 GB memory
+configurations on the A100 line. You pick a class per endpoint or let the
+scheduler choose the cheapest class that fits the snapshot. Multi-GPU
+serving for models that shard across devices is supported on H100 nodes
+with NVLink. Per-second metering applies to every class; the pricing page
+lists the current rate card.
+
 Who it's for
 
 Teams shipping AI features that face spiky or unpredictable traffic:
@@ -28,8 +77,149 @@ overnight batch jobs, consumer apps with regional peaks, agents that fan out
 to many models. Per-second billing means a model that serves 10 minutes of
 traffic a day costs minutes, not hours.
 
-Company
+The pattern we see most: a product team ships an AI feature, traffic
+arrives in bursts — a morning spike in one geography, a batch job at
+midnight, an agent that suddenly needs four models at once — and the
+choice between paying for idle GPUs and making users wait through a cold
+start stops being acceptable. Snapshot restores dissolve that choice.
 
-Modelgrid was founded in San Francisco in 2023 by infrastructure engineers
-from a large GPU cloud. We run our own capacity in three US regions and
-publish status and latency numbers openly.
+Pricing
+
+Per-second, metered on compute time only. Queue time is free. Snapshot
+storage is free for active endpoints. A100 40 GB from $2.10 per hour
+equivalent; A100 80 GB from $3.10; H100 from $5.60 — all billed by the
+second, with volume discounts at sustained usage. No minimums, no
+reservations required; reserved capacity is available for teams that want
+guaranteed headroom.
+
+A worked example from the docs: an embedding endpoint on an A100 40 GB
+that serves 10 minutes of traffic a day meters roughly 6 GPU-hours a
+month — the always-warm alternative meters 720.
+
+Reliability and transparency
+
+We run our own capacity in three US regions. Each endpoint is deployed
+across at least two regions, with health-based routing and automatic
+failover. We publish status and latency numbers openly: the status page
+shows live p50/p95 restore times and per-region API latency, and the
+uptime history is public back to launch. When we miss, the incident report
+says why.
+
+Docs: Deploy in three steps
+
+1. Install the CLI and authenticate: pip install modelgrid, then
+   modelgrid login.
+2. Point a deploy at your model: modelgrid deploy --model ./model or a
+   Hugging Face model id for vLLM-served weights.
+3. Call your endpoint: every deploy returns an HTTPS URL with token auth,
+   ready for production traffic.
+
+The first deploy builds and validates your snapshot; expect a few minutes.
+Every deploy after that — new replicas, new regions, scale-out under load
+— restores in under 2 seconds.
+
+Security
+
+Workloads run in isolated VMs with dedicated GPU attachment — no shared
+device contexts between tenants. Weights and snapshots are encrypted at
+rest with per-tenant keys, and endpoints support IP allowlists and private
+networking. SOC 2 Type II certified.
+
+From the engineering blog
+
+Anatomy of a 2-second restore: what actually takes time when a
+70-billion-parameter model comes back from a snapshot, and why the
+allocator arena layout matters as much as the weights.
+
+Benchmarking cold starts honestly: why "time to first token from a warm
+pool" is not a cold start, and how we measure zero-to-serving across model
+sizes. Includes our published numbers for models from 2 GB to 140 GB.
+
+Why we run our own capacity: renting GPUs from a hyperscaler and reselling
+serverless on top means your cold-start fate belongs to someone else's
+placement algorithm. Owning the racks lets us put the snapshot cache on
+NVMe in the same rack as the GPUs — the difference between a restore and
+a download.
+
+Observability
+
+Every endpoint ships with logs, metrics, and traces built in: request
+latency broken into queue, restore, and compute time; token throughput for
+vLLM endpoints; GPU memory and utilization per replica. Metrics export to
+Prometheus and Datadog, logs stream to your sink of choice, and every
+request id is traceable from the API gateway to the replica that served
+it. Cost is a first-class metric too — the dashboard shows metered seconds
+per endpoint per day, so the bill is never a surprise.
+
+Regions and networking
+
+Three US regions, each with its own snapshot cache and GPU capacity.
+Endpoints default to multi-region with health-based routing; you can pin
+an endpoint to a region for data-locality requirements. Private networking
+connects your VPC to your endpoints without traversing the public
+internet, and IP allowlists apply per endpoint. Cross-region failover is
+automatic and exercised weekly by our own chaos tests.
+
+Frequently asked
+
+Do I need to rewrite my model server? No. If it serves with PyTorch or
+vLLM, it deploys as-is — a container or a Python function.
+
+What counts as billable time? Seconds your model spends computing. Queue
+time, restore time, and idle time are not billed.
+
+How big can a model be? Snapshots are validated for models up to 140 GB
+today; multi-GPU serving on H100 nodes covers models that shard across
+devices.
+
+Can I run fine-tuned weights? Yes — private weights upload to per-tenant
+encrypted storage, and each snapshot is tenant-isolated.
+
+What about compliance? SOC 2 Type II certified; report available under
+NDA.
+
+Changelog — recent highlights
+
+Multi-GPU H100 serving with NVLink sharding. Restore-time p95 published
+per model-size bucket on the status page. Job arrays for batch fan-out.
+Private networking GA. vLLM runtime tracking upstream within one week of
+release.
+
+About Modelgrid
+
+Modelgrid was founded in San Francisco in 2023 by Ilya Sorokin and Grace
+Tan, infrastructure engineers from a large GPU cloud, where they watched
+customers pay for idle GPUs to avoid cold starts they could not fix. The
+company runs its own capacity in three US regions and publishes status and
+latency numbers openly.
+
+The founding bet is architectural: cold starts are not a fact of physics
+but a consequence of replaying initialization that could have been saved.
+Owning the serving stack from the rack to the scheduler is what makes the
+snapshot restore path fast enough to change the economics.
+
+Guides
+
+Serving vLLM models on Modelgrid: choosing context length, tuning
+continuous batching, and reading the token-throughput dashboard.
+Migrating from always-warm instances: a checklist for moving a
+production endpoint without a traffic gap, using shadow deployment and
+a staged DNS cutover. Batch inference patterns: job arrays for
+overnight embedding backfills, with cost math worked from the
+per-second meter. Multi-model agents: fan-out patterns where one
+request touches four models, and why scale-from-zero changes what an
+agent architecture can afford.
+
+Status, in numbers
+
+The status page publishes live and historical figures: per-region API
+latency, restore-time p50 and p95 by model-size bucket, and uptime
+history back to launch. During incidents, the page carries the
+timeline as it happens and the report after — unedited. We think
+infrastructure vendors earn trust with numbers they cannot quietly
+delete.
+
+We are hiring systems engineers who care about the microseconds: CUDA
+runtime, storage, and scheduler roles are open.
+
+(c) Modelgrid — San Francisco, CA

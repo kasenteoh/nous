@@ -4,11 +4,19 @@ Briefhound reviews commercial contracts for in-house legal teams. Upload an
 NDA, MSA, or DPA and Briefhound redlines it against your playbook in
 minutes, in tracked changes, inside Microsoft Word.
 
+Book a demo. See your own paper reviewed live.
+
 The problem
 
 In-house teams are buried in routine paper. Sales waits days for an NDA;
 legal burns evenings on low-risk redlines or ships them to outside counsel
 at hundreds of dollars an hour.
+
+The queue is the quiet villain. Every NDA that sits for three days is a
+deal that cools, a sales rep who escalates, a GC who gets asked "why is
+legal the bottleneck?" — and the paper itself is 80 percent the same
+negotiation the team ran last week. Routine review is a volume problem
+wearing a judgment costume.
 
 How it works
 
@@ -20,19 +28,186 @@ Lawyers review in Microsoft Word with tracked changes, accept or adjust,
 and the playbook learns from what they change. An approvals dashboard shows
 cycle times and where negotiations stall.
 
+The playbook
+
+A Briefhound playbook is your team's negotiation posture made executable:
+for each clause type — limitation of liability, indemnification, data
+protection, payment terms, termination — the preferred position, the
+fallbacks you will accept, and the walk-away terms that trigger
+escalation. Teams start from Briefhound's library of standard positions
+for common paper and edit toward their own posture; most encode their
+first playbook in a working session of an afternoon. Playbooks are
+versioned, so the position that changed last quarter is documented, not
+folklore.
+
+Review in Word, not instead of it
+
+Briefhound works where the redline actually happens. The Word add-in
+shows each proposed edit as a tracked change with its explanation in the
+margin: which playbook position applies, why this language, what the
+fallback would be. The lawyer accepts, adjusts, or rejects — normal Word
+review, at speed. Counterparty paper in any format goes in; a clean
+tracked-changes document comes out. There is no proprietary editor to
+learn and no copy-paste across systems.
+
+The learning loop
+
+When a lawyer edits a proposed redline, Briefhound notices. Consistent
+adjustments surface as suggested playbook updates — "you have accepted
+this carve-out nine times; make it a fallback?" — so the playbook
+converges on the team's real positions rather than its stated ones. The
+suggestions are reviewed, never silent: the playbook changes when a
+lawyer approves the change.
+
+Intake and the dashboard
+
+Contracts arrive by upload, by email-in, or from the intake form your
+sales team submits with the deal context attached. The approvals
+dashboard shows every contract in flight: where it is, how long each
+stage has taken, which clauses are contested. Cycle-time analytics show
+where negotiations stall — the clause that eats a week, the counterparty
+type that always escalates — the metric a general counsel actually
+reports upward.
+
 What customers see
 
 Legal teams report first-pass review in under 10 minutes and NDA turnaround
 cut from days to same-day. Briefhound handles NDAs, MSAs, DPAs, order
 forms, and vendor paper.
 
-Security: SOC 2 Type II, customer data never used to train shared models.
+Routine NDAs increasingly close without a lawyer touching them beyond a
+scan of the summary: the playbook holds, the counterparty accepts, done.
+The lawyer's time concentrates where the playbook says it should — the
+non-standard ask, the walk-away term, the deal that genuinely needs
+judgment.
 
-Pricing: per-seat annual subscription with unlimited documents.
+Security
+
+SOC 2 Type II, customer data never used to train shared models.
+
+Each customer's contracts and playbook are isolated; models fine-tuned on
+your edits serve only you. Data is encrypted in transit and at rest, with
+SSO and role-based access standard. Retention follows your policy,
+including zero-retention configurations for evaluation periods.
+
+Pricing
+
+Per-seat annual subscription with unlimited documents.
+
+Seats are for the legal team; sales submitters are free. Unlimited
+documents is the point — a per-document price would tax exactly the
+volume problem the product exists to solve. Implementation, the playbook
+working session, and support are included.
+
+Frequently asked
+
+Which documents does it handle? NDAs, MSAs, DPAs, order forms, and vendor
+paper — the routine commercial stack. Briefhound is not built for M&A,
+employment, or litigation documents.
+
+Does it work on our templates or counterparty paper? Both. Your paper
+reviews against your playbook; third-party paper gets classified clause
+by clause and redlined toward your positions.
+
+Can it negotiate without a lawyer? It drafts; your team decides. Some
+customers auto-send playbook-clean NDAs; most keep a lawyer's scan in
+the loop. The escalation rules are yours.
+
+What languages? English-language contracts today, governed by US, UK,
+and Canadian law templates.
 
 About
 
 Briefhound was founded in Boston in 2021 by a former in-house counsel and
-two NLP engineers. 44 people. Compared to outside counsel, Briefhound
-positions routine review as software: the lawyer stays the decision-maker,
-the drafting grunt work moves to the machine.
+two NLP engineers: Claire Donnelly, who ran commercial legal at a
+mid-size software company and kept a spreadsheet of how many evenings the
+NDA queue cost her team, and engineers Raj Iyer and Tom Okonkwo, who had
+spent years on document-understanding systems. 44 people. Compared to
+outside counsel, Briefhound positions routine review as software: the
+lawyer stays the decision-maker, the drafting grunt work moves to the
+machine.
+
+The company is 44 people across Boston and remote, roughly half of them
+former practicing lawyers or legal-ops professionals — the playbook
+library is written by people who have negotiated these clauses for a
+living.
+
+What the first month looks like
+
+Week one: the playbook working session — your team, our legal
+knowledge engineers, an afternoon, and your last fifty negotiated NDAs
+as the evidence base. Week two: shadow mode, where Briefhound reviews
+incoming paper alongside your normal process and the team compares
+output without relying on it. Weeks three and four: live on NDAs, with
+MSAs and DPAs following as playbook coverage is approved clause family
+by clause family. The dashboard baseline starts on day one, so the
+before-and-after cycle times are your own numbers, not our marketing.
+
+The clause library
+
+The library covers the commercial stack's recurring battlegrounds:
+limitation of liability with cap structures and carve-outs,
+indemnification triggers and procedures, data protection terms mapped
+to GDPR and state privacy laws, IP ownership and license grants,
+payment terms and late-fee positions, termination rights, assignment,
+governing law, and the boilerplate that occasionally bites. Each entry
+ships with market-standard positions annotated by deal side — what a
+buyer accepts versus what a vendor asks — drawn from the negotiation
+patterns of thousands of contracts.
+
+The ROI conversation
+
+The arithmetic the site walks through: an in-house lawyer's fully
+loaded hour against a $600 outside-counsel hour against software that
+returns a first-pass redline in minutes. A team routing forty routine
+contracts a month to outside counsel is spending a mid-six-figure
+annual sum on paper the playbook already knows how to negotiate. The
+subscription typically prices under one lawyer's salary — the framing
+is not headcount replacement but queue elimination: the same team,
+current on its paper, home for dinner.
+
+For legal ops
+
+Briefhound plugs into the stack legal ops already runs: contracts in
+from email or the intake form, executed copies out to your CLM or
+document store, cycle-time metrics out to the dashboard your GC
+presents. It deliberately does not try to be the CLM, the e-signature
+tool, or the matter tracker — it is the review engine in the middle.
+
+From the blog: The nine-time carve-out
+
+What playbook drift looks like in the data: positions teams state versus
+positions they actually accept, drawn from anonymized aggregate playbook
+statistics. And why the walk-away term you never enforce is not a
+walk-away term. Read the post.
+
+More from the FAQ
+
+How accurate is clause classification? Measured continuously against
+lawyer decisions in production; misclassified clauses route to human
+review by design, and every explanation cites the playbook position
+it applied so errors are visible, not silent.
+
+Do we need to change our templates? No — Briefhound reviews the paper
+you have, on your positions. Teams often do tighten templates after
+seeing the dashboard's stall-point data, but that is a choice the
+data provokes, not a migration.
+
+What does rollout ask of the lawyers? The working session, then
+reviewing tracked changes as they already do. There is no new system
+to live in — Word is the interface, which is most of why adoption
+sticks.
+
+Recognition
+
+Briefhound's aggregate playbook statistics — what in-house teams say
+versus what they accept — have been cited in legal operations
+publications, and the company presents at CLOC and regional legal ops
+gatherings on measuring contract cycle time. The Word-native design
+decision is regularly credited in customer interviews as the reason
+adoption survived contact with skeptical senior counsel.
+
+Careers: legal knowledge engineer (JD required), NLP engineer, customer
+success — legal ops. Boston or remote US.
+
+(c) Briefhound, Inc. — Boston, MA

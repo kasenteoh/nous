@@ -4,6 +4,8 @@ Rowfern is testing and contract enforcement for data pipelines. It catches
 broken schemas, silent nulls, and volume anomalies before they reach your
 dashboards — in the pull request, not the postmortem.
 
+Star the engine on GitHub. Start a cloud workspace.
+
 What Rowfern does
 
 Rowfern reads your dbt project or SQL pipelines and generates a suite of
@@ -14,11 +16,65 @@ production data, so a column rename or a join that fans out gets caught
 before merge. In production, the same checks run on schedule and page the
 owning team through PagerDuty or Slack when a contract breaks.
 
+Contracts, not just checks
+
+A test asserts a fact about one table; a contract binds a producer to its
+consumers. Rowfern parses your dbt lineage to know which models feed
+which, then generates schema contracts at the boundaries: column names,
+types, nullability, accepted values. When a pull request changes a
+producing model, the contract check runs for every downstream consumer —
+the column rename that would have silently nulled a marketing dashboard
+becomes a red check on the PR, with the affected consumers listed. The
+author sees the blast radius before merge, and consumers get a heads-up
+instead of a surprise.
+
+Learned expectations
+
+Freshness and volume checks calibrate themselves from history: how many
+rows this table gains on a normal Tuesday, how late its source usually
+lands. Anomalies page at the severity you configure, and the baselines
+recalibrate as seasonality shifts — a holiday dip is not an incident.
+Hand-written YAML assertions cover the business logic history cannot
+learn: revenue is non-negative, every order has a customer, the join
+keys are unique.
+
+CI integration
+
+Rowfern runs as a check on GitHub and GitLab pull requests. Each run
+executes against a sampled snapshot of production data — enough rows to
+catch the fan-out and the type error, small enough to finish while the
+review is still open. Typical check runs complete in under five minutes.
+The PR comment shows exactly which contracts passed, which broke, and who
+consumes the broken ones; merge gating is your choice per severity.
+
+Production monitoring
+
+The same checks that gate the PR run on schedule in production — one
+definition of correctness, enforced in both places. When a contract
+breaks, Rowfern routes the page to the owning team through PagerDuty or
+Slack, using the ownership map from the catalog. The alert carries the
+failing check, the diff against baseline, and the downstream consumers,
+so the on-call engineer starts with the blast radius instead of
+discovering it in replies.
+
+Warehouse support
+
+Snowflake, BigQuery, Redshift, and Databricks. Rowfern runs checks inside
+your warehouse or over a read-only connection; sampled data never leaves
+your environment unless you opt into cloud snapshots.
+
 Open core
 
 The check engine is open source under an Apache 2.0 license. The commercial
 platform adds the catalog of contracts, ownership routing, historical
 baselines, and SSO.
+
+The engine repository includes the contract generator, the check runner,
+and the CI integrations — everything a single team needs to enforce
+contracts on one project, forever free. The platform is what makes it an
+organizational practice: a catalog every team can browse, ownership
+routing that knows who to page, baselines with real history, and the
+SSO/audit layer your security team requires.
 
 Who uses it
 
@@ -26,16 +82,141 @@ Data platform teams at Chartbeam, Densify Analytics, and Copperline Health
 run Rowfern on more than 4,000 models. Teams adopt it after a visible data
 outage — a broken dashboard in a board meeting is a common origin story.
 
+Chartbeam's data platform team gates every one of their dbt PRs on
+Rowfern contracts. Densify Analytics runs the engine open-source on two
+projects and the platform across the rest. Copperline Health, operating
+under healthcare compliance constraints, runs all checks in-warehouse
+with the read-only deployment. Case studies on the blog walk through
+each rollout.
+
+Docs: Getting started
+
+1. Install the CLI: pip install rowfern.
+2. Point it at your dbt project: rowfern init reads your lineage and
+   generates a first contract suite in minutes.
+3. Add the CI step from the setup page and open a pull request — your
+   first contract check runs on the PR.
+4. Connect Slack or PagerDuty when you are ready to enforce in
+   production.
+
+Most teams start by generating contracts for their most-consumed marts,
+tighten from warnings to merge gates over a week or two, then expand
+coverage model by model. Nothing requires a big-bang migration.
+
 Pricing
 
 The open-source engine is free. Cloud plans start at $500 per month per
 workspace, scaling with models under contract.
 
-About
-
-Rowfern was founded in Denver in 2022 by two former data engineers. The
-team is 19 people, remote across US time zones.
+The workspace price includes unlimited users and unlimited check runs —
+pricing scales with the surface you protect, not with how often you
+protect it. Annual plans add SSO and audit logs; the read-only in-VPC
+deployment is available on annual plans.
 
 Security
 
-Rowfern runs checks inside your warehouse or over a read-only connection; sampled data never leaves your environment unless you opt into cloud snapshots. SOC 2 Type II certified.
+Rowfern runs checks inside your warehouse or over a read-only connection;
+sampled data never leaves your environment unless you opt into cloud
+snapshots. SOC 2 Type II certified.
+
+Frequently asked
+
+How is this different from dbt tests? dbt tests assert facts about
+tables; Rowfern binds producers to consumers and enforces the boundary
+in CI with production-shaped data, plus learned freshness and volume
+baselines in production. The two coexist — Rowfern imports your existing
+dbt tests into the catalog.
+
+Will the sampled snapshot leak PII? Sampling runs inside your warehouse;
+data leaves only if you opt into cloud snapshots. Column-level masking
+rules apply either way.
+
+What does "models under contract" mean for pricing? Models with at least
+one enforced contract. Generate contracts everywhere, enforce where it
+counts, pay for what is enforced.
+
+About
+
+Rowfern was founded in Denver in 2022 by two former data engineers, Owen
+Park and Talia Brooks, who between them carry a decade of pipeline
+pages — including, yes, a broken dashboard in a board meeting. The
+team is 19 people, remote across US time zones, and includes maintainers
+of the open-source engine and former data platform leads.
+
+Case study: Chartbeam
+
+Chartbeam's data platform team adopted Rowfern after a metrics
+regression reached a customer-facing dashboard: a producing model
+changed a column's semantics, every downstream check passed, and the
+error surfaced in a QBR. They started with contracts on the 40
+most-consumed marts, gated merges at high severity within two weeks,
+and now run contract checks on every dbt PR across the project. The
+number they cite internally: incidents traced to upstream schema
+changes went to zero for three consecutive quarters. The rollout
+writeup, including the false-positive tuning they did in week one, is
+on the blog.
+
+Engine versus platform
+
+The open-source engine: contract generation, the full check library,
+CI integration, single-project configuration in YAML. The platform
+adds what makes it stick across an organization: the browsable contract
+catalog, ownership routing for pages, historical baselines computed
+from months of runs rather than days, SSO, audit logs, and the in-VPC
+read-only deployment. Teams routinely run the engine alone for months
+first — that is the funnel working as intended, and the migration to a
+workspace imports the existing configuration unchanged.
+
+Docs: Writing assertions
+
+Assertions live in YAML next to the model they protect: not_null with
+a tolerance, accepted_values, unique keys, referential integrity
+across models, monotonic metrics, and custom SQL predicates for the
+business logic only your team knows. Severity levels decide the
+consequence — warn annotates the PR, error blocks merge, page routes
+through PagerDuty in production. Assertions inherit through lineage,
+so a contract on a mart protects the staging models that feed it.
+
+Community
+
+The engine's repository hosts the roadmap and the RFC process; check
+types and warehouse adapters land as community contributions regularly
+— the Databricks adapter started as a customer PR. A public Slack runs
+office hours weekly, and the maintainers publish a monthly changelog
+digest.
+
+From the blog: The taxonomy of silent data failures
+
+Silent nulls, fan-out joins, late-arriving sources, schema drift,
+timezone shears: five failure classes from four years of postmortems,
+and which check catches each one. Our most-shared post. Read it.
+
+More from the FAQ
+
+Does Rowfern slow down our CI? Check runs execute against sampled
+snapshots and typically finish in under five minutes; sampling size is
+tunable per project when the trade-off matters.
+
+Who defines ownership? The catalog imports ownership from your dbt
+meta tags or a CODEOWNERS-style file; unowned models are flagged,
+because an alert without an owner is a notification, not a page.
+
+Can analysts use it, or only engineers? Contracts and assertions are
+YAML in the repo, but the catalog is browsable by anyone — consumers
+subscribe to the models they depend on and get notified when a
+contract on them changes.
+
+Recognition
+
+The open-source engine has accumulated a meaningful contributor
+community since its release, and Rowfern's taxonomy of silent data
+failures is assigned reading on more than one data platform team's
+onboarding list. The company's position — that contracts between
+producers and consumers, not more dashboards, are what make pipelines
+trustworthy — has aged well as the category has consolidated around
+the same conclusion.
+
+Careers: senior data engineer (remote US), developer advocate — open
+source (remote US).
+
+(c) Rowfern, Inc. — Denver, CO

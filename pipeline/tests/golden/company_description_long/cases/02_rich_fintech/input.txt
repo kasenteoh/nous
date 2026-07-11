@@ -5,12 +5,20 @@ transactions from Stripe, Adyen, PayPal, and your bank feeds, matches them
 against invoices and ledger entries, and flags every discrepancy with a
 suggested resolution.
 
+Book a demo. Connect your first processor in an afternoon.
+
 The problem
 
 For companies that sell across several payment providers, reconciliation is
 a monthly spreadsheet marathon: exports from each processor, VLOOKUPs,
 manual matching of fees, refunds, and chargebacks. Teams routinely spend the
 first week of every month closing the previous one.
+
+The worst part is not the volume — it is the exceptions. A payout that nets
+out three refunds and a currency conversion. A chargeback that lands two
+months after the sale. A processor fee schedule that changed mid-month.
+Every one of them is an hour in a spreadsheet, and every close resurfaces
+the same ones.
 
 How Ledgerline works
 
@@ -22,18 +30,185 @@ you accept once are applied automatically the next month. Anything the
 engine cannot match with confidence lands in a review queue with the
 evidence attached.
 
+The matching engine
+
+Matching starts at the payout: for every deposit that hits your bank,
+Ledgerline reconstructs the set of charges, refunds, chargebacks, and fees
+inside it, using processor reports and your invoice data. Multi-currency
+payouts are decomposed with the processor's own conversion rate, so FX
+differences post to the right account instead of vanishing into a rounding
+line. Partial payments, over-payments, and invoices settled across two
+payouts are first-class cases, not edge cases.
+
+Every match carries a confidence score. High-confidence matches post
+automatically under rules your team has approved; everything else queues
+for review. Nothing is ever posted silently — the audit trail records
+which rule matched, who approved it, and when.
+
+The review queue
+
+The review queue is where your team's judgment gets captured. Each
+exception shows the payout line, the candidate transactions, and the
+mismatch — amount, date, currency, or missing counterpart — with a
+suggested resolution. Accept the suggestion, and Ledgerline offers to turn
+it into a rule; next month the same pattern resolves itself. Customers
+typically see their exception queue shrink by more than half within three
+closes as rules accumulate.
+
+Journal entries and the close
+
+Ledgerline posts summarized or transaction-level journal entries to
+NetSuite, QuickBooks, or Xero — your choice per account. Fee expense,
+FX gain/loss, refunds, and chargeback reserves each map to the GL accounts
+you configure once. A close dashboard tracks each processor's status:
+transactions ingested, matched percentage, exceptions open, entries
+posted. When every lane is green, the reconciliation is done — and your
+auditor gets an export with every match's evidence attached.
+
+Integrations
+
+Payment processors: Stripe, Adyen, PayPal, with more in private beta.
+Banks: read-only feeds from over 10,000 institutions. Ledgers: NetSuite,
+QuickBooks, and Xero, posting through each system's official API. All
+connections are read-only on the money side — Ledgerline reads statements
+and reports; it never initiates a payment, holds a balance, or touches
+funds in flight.
+
 Results our customers report
 
 Finance teams at over 400 companies use Ledgerline. Customers report closing
 the books in hours instead of days, and month-end close times cut by 70
 percent. Ledgerline is SOC 2 Type II certified and never holds funds.
 
+Controllers tell us the same story in different words: the close stopped
+being a week of dread and became a checklist. Exception queues that started
+in the hundreds settle into the dozens. New hires reconcile from the queue
+on their first day instead of inheriting a workbook only one person
+understood.
+
+Security and trust
+
+SOC 2 Type II certified, with the report available under NDA. All
+integrations are read-only; Ledgerline cannot move money. Data is
+encrypted in transit and at rest, hosted in US data centers, with SSO and
+role-based access on every plan. We are audited annually and publish a
+security overview at ledgerline.com/security.
+
 Pricing
 
 Usage-based: a flat platform fee plus a per-transaction rate that declines
 with volume. No implementation fee for standard integrations.
 
+The platform fee covers unlimited users, all ledger integrations, and
+support. The per-transaction rate is metered on transactions reconciled,
+not transactions ingested — you pay for work done, and reprocessing after
+a configuration change is free. Volume discounts apply automatically as
+your transaction count grows; there is no annual lock-in, though annual
+billing earns a discount.
+
+Standard integrations — Stripe, Adyen, PayPal, bank feeds, and the three
+supported ledgers — carry no implementation fee. Finance teams typically
+connect their first processor in an afternoon and complete their first
+assisted close within one cycle.
+
+Frequently asked
+
+Do you support multi-entity? Yes: subsidiaries with separate ledgers
+reconcile independently, with consolidated reporting across entities.
+
+What about historical data? Ledgerline backfills up to 24 months of
+processor history so rules can learn from past closes.
+
+Can we keep our chart of accounts? Yes — account mapping is configured
+per processor and per entity; nothing about your GL structure changes.
+
+Product tour: from payout to journal entry
+
+Day one, Ledgerline ingests your processor reports and bank feed. Each
+payout appears as a card: gross charges, fees, refunds, chargebacks, FX,
+net deposit. Green cards matched automatically under an approved rule;
+amber cards need review. Open an amber card and the evidence is laid out —
+the invoice, the processor line, the delta — with the suggested resolution
+at the top. One click accepts it; a second click makes it a rule. At the
+end of the lane, the journal entry preview shows exactly what will post to
+your ledger, line by line, before you approve it. Month two, the amber
+cards are fewer. Month three, your close checklist starts at "review
+exceptions" instead of "download exports."
+
+Reporting and audit
+
+Every number Ledgerline posts is traceable to its sources: click any
+journal line to see the payout, the underlying transactions, the rule that
+matched them, and the approver. Auditors get a read-only seat and an
+evidence export; controllers get close-cycle analytics — time to close,
+exception rates by processor, and rule coverage — to show the CFO the
+close is actually getting faster.
+
+From the blog: Why your Stripe payout never matches your Stripe report
+
+The payout that landed Tuesday nets out charges from three different days,
+two refunds from last month, a dispute reserve, and a fee schedule that
+prorated mid-cycle. Your report was cut at midnight UTC; your bank posted
+at local close of business. None of this is anyone's bug — it is how
+payment systems work — but it is why the "quick check" against the bank
+statement eats an afternoon. The fix is not a better export. It is
+matching at the payout level, with the processor's own decomposition.
+Read the full post.
+
+Compared to the alternatives
+
+Spreadsheets scale until the second processor. Generic RPA breaks when the
+report format changes. ERP reconciliation modules match at the invoice
+level and shrug at payouts. Ledgerline's bet is narrow and deep: model the
+payout properly, capture the team's judgment as rules, and make the
+evidence inspectable — reconciliation as a product, not a macro.
+
+Who uses Ledgerline
+
+E-commerce and subscription companies selling through two or more
+processors are the core: the pain scales with processor count, not
+revenue. Marketplaces use the multi-entity support to reconcile per
+subsidiary. Accounting firms run Ledgerline across client books, with
+each client as a separate workspace. The common thread is a finance team
+of two to twenty that would rather review exceptions than build VLOOKUPs.
+
+Guide: FX rounding policy for multi-currency payouts
+
+When a euro charge settles into a dollar payout, three numbers disagree:
+the rate the processor applied, the rate your ledger expected, and the
+rate the bank statement implies. The guide covers choosing a single source
+of truth per processor, posting the residual to a dedicated FX gain/loss
+account, and setting a materiality threshold so the queue is not cluttered
+with one-cent deltas. Ledgerline applies the policy automatically once
+configured — the point is that the policy is a decision, not a hope.
+
+More from the FAQ
+
+How long does onboarding take? Most teams complete their first assisted
+close within one cycle; the backfill and account mapping happen in the
+first week.
+
+What happens when a processor changes its report format? Ledgerline
+maintains the integrations; format changes are our problem, not yours.
+That is most of what "no implementation fee for standard integrations"
+means in practice.
+
 About us
 
 Ledgerline was founded in 2021 in New York by a former controller and a
-payments engineer. We are 32 people across New York and Toronto.
+payments engineer: Elena Marsh, who ran month-end close at a multi-processor
+e-commerce company, and Daniel Okoye, who built payout systems inside a
+payment processor. They started Ledgerline after realizing both sides of
+the reconciliation problem — the spreadsheet and the payout file — were
+generated by software, and only the matching in between was still manual.
+
+We are 32 people across New York and Toronto: engineers who have worked
+inside processors and banks, and accountants who have survived a hundred
+closes. We write about reconciliation practice on the Ledgerline blog —
+recent posts cover chargeback accounting, FX rounding policy, and why
+your Stripe payout never matches your Stripe report.
+
+Careers: we are hiring accounting-minded engineers in New York and
+Toronto. See open roles.
+
+(c) Ledgerline, Inc. New York, NY
