@@ -285,6 +285,56 @@ def enrich_companies(
     asyncio.run(_run())
 
 
+@cli.command("embed-companies")
+@click.option(
+    "--limit",
+    type=int,
+    default=200,
+    show_default=True,
+    help=(
+        "Max companies to (re-)embed per run. CPU-only and cheap (~a few "
+        "hundred ms/company), so this bounds wall clock, not spend."
+    ),
+)
+def embed_companies(limit: int) -> None:
+    """Embed shown companies' descriptions with fastembed (CPU, $0 LLM).
+
+    Requires the optional ``embeddings`` dependency group
+    (``uv sync --group embeddings``) — the fastembed import below fails
+    cleanly without it. Selection is idempotent via embedding_text_hash:
+    unchanged rows are never re-embedded, so steady-state runs no-op.
+    """
+    import asyncio
+    from datetime import UTC, datetime
+
+    from nous.config import Settings
+    from nous.db.session import AsyncSessionLocal
+    from nous.observability import record_pipeline_run
+    from nous.pipeline.embed_companies import FastembedEmbedder, run_embed_companies
+
+    settings = Settings()
+    # Constructed eagerly (outside _run) so a missing model/dependency fails
+    # loudly before any DB session is opened.
+    embedder = FastembedEmbedder(cache_dir=settings.EMBEDDING_CACHE_DIR or None)
+
+    async def _run() -> None:
+        started = datetime.now(UTC)
+        async with AsyncSessionLocal() as session:
+            summary = await run_embed_companies(session, embedder, limit=limit)
+            click.echo(summary.model_dump_json(indent=2))
+        # flag_empty off: an empty selection is the steady state once every
+        # shown company's current description text is embedded.
+        await record_pipeline_run(
+            "embed-companies",
+            started_at=started,
+            inputs_seen=summary.companies_seen,
+            rows_written=summary.embedded,
+            summary=summary,
+        )
+
+    asyncio.run(_run())
+
+
 @cli.command("refresh-vc-portfolios")
 @click.option(
     "--firm",

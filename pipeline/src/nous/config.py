@@ -50,6 +50,16 @@ class Settings(BaseSettings):
     EMPLOYEE_REFETCH_DAYS: int = 90
 
     # ---------------------------------------------------------------------------
+    # Wave 3: description embeddings
+    # ---------------------------------------------------------------------------
+
+    # Where fastembed stores its downloaded ONNX model (~130MB one-time). A
+    # deterministic path (rather than fastembed's tempdir default) so GitHub
+    # Actions can cache it across runs; "~" is expanded at use time. Empty
+    # string = let fastembed pick.
+    EMBEDDING_CACHE_DIR: str = "~/.cache/fastembed"
+
+    # ---------------------------------------------------------------------------
     # DB size watchdog
     # ---------------------------------------------------------------------------
 
