@@ -10,6 +10,12 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
+# Version stamped onto rows whose content this prompt produced (companies
+# eligibility fields via judge-eligibility). Scheme: "<date>.<same-day-counter>".
+# Bump on ANY semantic change to the template, schema, or validators — even a
+# wording tweak — so data from a bad revision can be found and re-run.
+PROMPT_VERSION: str = "2026-07-10.1"
+
 
 class EligibilityJudgment(BaseModel):
     is_startup: bool | None = Field(

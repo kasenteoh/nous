@@ -247,6 +247,39 @@ class Company(Base):
         String, nullable=True, index=True
     )
 
+    # Prompt-provenance stamps (migration 0031): which PROMPT_VERSION produced
+    # the LLM-derived fields currently on this row, one column per prompt/field
+    # family, so data written by a bad prompt revision can be found ("WHERE
+    # <family>_prompt_version = 'X'") and selectively re-run. NULL = written
+    # before versioning existed (or never LLM-touched) — itself a useful
+    # cohort. Re-runs overwrite the stamp along with the data. Not indexed:
+    # only rare ad-hoc re-run queries filter on them, never a pipeline stage
+    # or web query.
+    #
+    # enrichment: description/tags/category/people/hq fields written by
+    # enrich-companies from the company_description prompt.
+    enrichment_prompt_version: Mapped[str | None] = mapped_column(
+        Text, nullable=True
+    )
+    # eligibility: the is-startup judgment fields (exclusion_reason et al.),
+    # stamped with the version of whichever prompt made the CURRENT judgment —
+    # company_description on the enrich path, company_eligibility on the
+    # judge-eligibility backfill path.
+    eligibility_prompt_version: Mapped[str | None] = mapped_column(
+        Text, nullable=True
+    )
+    # hq_country set by the infer-hq-country repair stage (hq_country prompt).
+    # The enrich/judge paths also write hq_country but are tracked by their own
+    # columns above.
+    hq_country_prompt_version: Mapped[str | None] = mapped_column(
+        Text, nullable=True
+    )
+    # status / total_raised_* written by extract-funding from the
+    # funding_extraction prompt (article or website template).
+    funding_prompt_version: Mapped[str | None] = mapped_column(
+        Text, nullable=True
+    )
+
 
 class RawPage(Base):
     """Scraped-page cache for homepage / about / product pages.
@@ -333,6 +366,10 @@ class FundingRound(Base):
     primary_news_url: Mapped[str | None]
     # LLM-reported confidence: 'low' | 'medium' | 'high'.
     extraction_confidence: Mapped[str | None]
+    # funding_extraction.PROMPT_VERSION that produced this row's content
+    # (migration 0031). NULL = extracted before prompt versioning existed.
+    # Overwritten on re-extraction along with the data.
+    prompt_version: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class Investor(Base):
@@ -428,6 +465,10 @@ class Competitor(Base):
         String, nullable=False, server_default="llm_inferred"
     )
     source_url: Mapped[str | None] = mapped_column(String, nullable=True)
+    # competitor_analysis.PROMPT_VERSION that produced this row (migration
+    # 0031). NULL = analyzed before prompt versioning existed. The replace-
+    # style monthly rewrite stamps the fresh version with each new set.
+    prompt_version: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     __table_args__ = (
         UniqueConstraint("company_id", "rank", name="uq_competitors_company_rank"),

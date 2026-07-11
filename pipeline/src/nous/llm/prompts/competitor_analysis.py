@@ -20,6 +20,12 @@ import re
 
 from pydantic import BaseModel, Field, model_validator
 
+# Version stamped onto rows whose content this prompt produced (competitors
+# rows via analyze-competitors). Scheme: "<date>.<same-day-counter>". Bump on
+# ANY semantic change to the template, schema, or validators — even a wording
+# tweak — so data from a bad revision can be found and re-run.
+PROMPT_VERSION: str = "2026-07-10.1"
+
 # Meta-commentary the model sometimes leaks into a competitor's reasoning /
 # description instead of just excluding the entry (e.g. "Included temporarily
 # for evaluation but should be dropped."). Such text must never reach a page, so

@@ -31,6 +31,9 @@ from nous.llm.client import (
     LLMRateLimitError,
     complete_json,
 )
+from nous.llm.prompts.company_description import (
+    PROMPT_VERSION as DESCRIPTION_PROMPT_VERSION,
+)
 from nous.llm.prompts.company_description import CompanyDescription, build_prompt
 from nous.util.industry import normalize_industry
 from nous.util.text import extract_visible_text, truncate_to_chars
@@ -367,6 +370,9 @@ async def run_enrich_companies(
         company.tags = normalized_tags
         company.last_enriched_at = now
         company.last_enriched_payload = description.model_dump(mode="json")
+        # Provenance stamp: which prompt revision wrote the enrichment fields
+        # above. Overwritten on re-enrichment along with the data.
+        company.enrichment_prompt_version = DESCRIPTION_PROMPT_VERSION
 
         # Location + industry from the website. Only fill these when the LLM
         # returned a value AND the column is currently empty — don't clobber
@@ -392,6 +398,9 @@ async def run_enrich_companies(
         # (None) keeps the company. The judgment stamp prevents the
         # judge-eligibility backfill from re-visiting this row.
         company.eligibility_checked_at = now
+        # On this path the judgment came from the description prompt (not the
+        # judge-eligibility backfill prompt), so stamp ITS version.
+        company.eligibility_prompt_version = DESCRIPTION_PROMPT_VERSION
         if description.founded_year and not company.year_incorporated:
             company.year_incorporated = description.founded_year
 

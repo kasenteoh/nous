@@ -41,6 +41,9 @@ from nous.llm.prompts.competitor_analysis import (
     Target,
     build_prompt,
 )
+from nous.llm.prompts.competitor_analysis import (
+    PROMPT_VERSION as COMPETITOR_PROMPT_VERSION,
+)
 from nous.llm.prompts.competitor_candidates import (
     MAX_ARTICLES,
     CompetitorCandidates,
@@ -427,6 +430,11 @@ async def _persist_analysis(
                     rank=rank,
                     source=source,
                     source_url=source_url,
+                    # Provenance stamp: the pass-2 (competitor_analysis)
+                    # prompt authored every persisted row — techcrunch-sourced
+                    # candidates are revalidated and rewritten by it, so its
+                    # version is the one that matters for re-run queries.
+                    prompt_version=COMPETITOR_PROMPT_VERSION,
                     updated_at=now,
                 )
             )
