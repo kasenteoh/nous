@@ -68,8 +68,9 @@ def test_golden_fixtures_are_well_formed(spec: PromptSpec) -> None:
     - expected.json validates against the runtime schema (enforced inside
       load_cases, which raises GoldenFixtureError otherwise);
     - every case carries a recorded.json with a provenance stamp;
-    - inputs stay small (a few KB) so prompt-building stays realistic and
-      the repo stays light.
+    - inputs stay bounded (judge/funding cases a few KB; long-description
+      rich cases are deliberately multi-page, ~10 KB — see the golden
+      README) so prompt-building stays realistic and the repo stays light.
     """
     cases = load_cases(spec, GOLDEN_DIR)
     assert len(cases) >= MIN_CASES_PER_PROMPT
