@@ -1,25 +1,26 @@
 """Async HTTP client for fetching company homepages.
 
-- Per-domain throttle (1 req/sec, spec §3.2 + §11).
+- Per-domain throttle (1 req/sec, spec §3.2 + §11), shared process-wide via
+  nous.sources._http so independent clients and other transports (Playwright,
+  curl_cffi) take turns on a host.
 - User-Agent enforced on every request (constructor rejects empty).
 - robots.txt checked before every fetch via RobotsCache.
-- tenacity retries on 429 / 5xx / network errors (3 attempts, exp backoff).
+- tenacity retries on 429 / 5xx / timeouts (3 attempts, exp backoff) — see
+  nous.sources._http for the shared policy.
 - Reasonable timeouts (30s overall; 5s for robots.txt).
 """
 
 from __future__ import annotations
 
-import asyncio
 import logging
-import time
 from collections.abc import Iterable
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urljoin
 
 import httpx
 from pydantic import BaseModel
 from selectolax.parser import HTMLParser
-from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
 
+from nous.sources._http import DomainThrottle, ThrottledHTTPClient
 from nous.sources.duckduckgo import DuckDuckGoSearch, is_aggregator
 from nous.sources.parked import looks_parked
 from nous.sources.reject_hosts import is_aggregator_url
@@ -106,29 +107,19 @@ def _name_in_strong_position(html: str, slug_base: str, company_name: str) -> bo
     return any(_dominant(h1.text(strip=True)) for h1 in tree.css("h1"))
 
 
-def _is_retryable(exc: BaseException) -> bool:
-    """Return True for errors that warrant a retry.
-
-    Permanent errors (DNS failure, connection refused, TLS handshake) are
-    represented by httpx.ConnectError and must NOT be retried — they add
-    ~7s of dead time per non-existent domain across exp-backoff attempts.
-    Only transient failures (rate limits, server errors, timeouts) retry.
-    """
-    if isinstance(exc, httpx.HTTPStatusError):
-        # 429 (rate limit) and 5xx (server error) — usually transient
-        return exc.response.status_code == 429 or exc.response.status_code >= 500
-    # ConnectError, ProtocolError, etc. — usually permanent (DNS, refused, TLS handshake)
-    # TimeoutException is a transient network blip — retry makes sense.
-    return isinstance(exc, httpx.TimeoutException)
-
-
 class HomepageClient:
-    """Async context-manager that fetches company homepages with per-domain rate limiting."""
+    """Async context-manager that fetches company homepages with per-domain rate limiting.
+
+    Throttle state lives in the process-wide registry (nous.sources._http) by
+    default, so a second HomepageClient — or the headless-browser fallback —
+    hitting the same host waits its turn. Pass ``throttle`` to isolate (tests).
+    """
 
     def __init__(
         self,
         user_agent: str,
         requests_per_second_per_domain: float = 1.0,
+        throttle: DomainThrottle | None = None,
     ) -> None:
         if not user_agent or not user_agent.strip():
             raise ValueError(
@@ -136,16 +127,10 @@ class HomepageClient:
                 "Websites block anonymous crawlers — this is non-negotiable."
             )
         self._user_agent = user_agent
-        self._rps = requests_per_second_per_domain
-        self._min_interval: float = 1.0 / requests_per_second_per_domain
-
-        # Per-domain throttle state: domain → last request monotonic timestamp
-        self._domain_last_request: dict[str, float] = {}
-        # Per-domain lock: ensures only one request fires at a time per domain,
-        # preventing thundering-herd when multiple coroutines target the same host.
-        self._domain_locks: dict[str, asyncio.Lock] = {}
-        # A single lock that protects creation of new entries in the dicts above.
-        self._registry_lock = asyncio.Lock()
+        self._http = ThrottledHTTPClient(
+            requests_per_second_per_domain=requests_per_second_per_domain,
+            throttle=throttle,
+        )
 
         self._client: httpx.AsyncClient | None = None
         self._robots: RobotsCache | None = None
@@ -187,45 +172,11 @@ class HomepageClient:
             raise RuntimeError("HomepageClient must be used as an async context manager.")
         return self._client, self._robots
 
-    async def _get_domain_lock(self, domain: str) -> asyncio.Lock:
-        """Return (creating if needed) the per-domain Lock."""
-        async with self._registry_lock:
-            if domain not in self._domain_locks:
-                self._domain_locks[domain] = asyncio.Lock()
-            return self._domain_locks[domain]
-
     async def _throttled_get(self, url: str) -> httpx.Response:
-        """Rate-limited GET, serialised per domain.
-
-        Acquires the domain lock, waits until the per-domain interval has
-        elapsed since the last request, fires, then releases the lock.
-        """
-        parsed = urlparse(url)
-        domain = parsed.netloc
-
-        domain_lock = await self._get_domain_lock(domain)
-        async with domain_lock:
-            now = time.monotonic()
-            last = self._domain_last_request.get(domain, 0.0)
-            wait = self._min_interval - (now - last)
-            if wait > 0:
-                await asyncio.sleep(wait)
-
-            client, _ = self._assert_open()
-            resp = await client.get(url)
-            self._domain_last_request[domain] = time.monotonic()
-            resp.raise_for_status()
-            return resp
-
-    @retry(
-        retry=retry_if_exception(_is_retryable),
-        wait=wait_exponential(multiplier=1, min=1, max=10),
-        stop=stop_after_attempt(3),
-        reraise=True,
-    )
-    async def _get_with_retry(self, url: str) -> httpx.Response:
-        """GET with tenacity retries on 429 / 5xx / network errors."""
-        return await self._throttled_get(url)
+        """Rate-limited GET, serialised per domain, with the shared retry policy
+        (429 / 5xx / timeouts — see nous.sources._http)."""
+        client, _ = self._assert_open()
+        return await self._http.get(client, url)
 
     async def fetch(self, url: str) -> FetchResult:
         """Fetch a single URL.
@@ -248,7 +199,7 @@ class HomepageClient:
             raise RobotsBlockedError(f"robots.txt disallows: {url}")
 
         try:
-            resp = await self._get_with_retry(url)
+            resp = await self._throttled_get(url)
         except httpx.HTTPStatusError as exc:
             if exc.response.status_code == 403:
                 logger.info(
@@ -295,43 +246,38 @@ class HomepageClient:
         # branches in CI, local dev without `uv sync`, etc.).
         from curl_cffi.requests import AsyncSession
 
-        parsed = urlparse(url)
-        domain = parsed.netloc
+        # SSRF-check before taking the slot: a blocked URL never fires a
+        # request, so it must not consume (or stamp) a throttle interval.
+        # Redirect targets are re-validated inside; those failures DO stamp,
+        # correctly — a request already hit the host by then.
+        await assert_public_url(url)
 
-        domain_lock = await self._get_domain_lock(domain)
-        async with domain_lock:
-            now = time.monotonic()
-            last = self._domain_last_request.get(domain, 0.0)
-            wait = self._min_interval - (now - last)
-            if wait > 0:
-                await asyncio.sleep(wait)
-
-            await assert_public_url(url)
-            async with AsyncSession() as session:
+        # Same throttle slot as the httpx path (and every other transport):
+        # switching to curl_cffi must not double-hit the host.
+        async with self._http.slot(url), AsyncSession() as session:
+            resp = await session.get(
+                url,
+                impersonate="chrome120",
+                timeout=30,
+                allow_redirects=False,
+            )
+            hops = 0
+            while (
+                resp.status_code in (301, 302, 303, 307, 308)
+                and hops < _MAX_FALLBACK_REDIRECTS
+            ):
+                location = resp.headers.get("location")
+                if not location:
+                    break
+                url = urljoin(url, location)
+                await assert_public_url(url)  # re-validate the redirect target
                 resp = await session.get(
                     url,
                     impersonate="chrome120",
                     timeout=30,
                     allow_redirects=False,
                 )
-                hops = 0
-                while (
-                    resp.status_code in (301, 302, 303, 307, 308)
-                    and hops < _MAX_FALLBACK_REDIRECTS
-                ):
-                    location = resp.headers.get("location")
-                    if not location:
-                        break
-                    url = urljoin(url, location)
-                    await assert_public_url(url)  # re-validate the redirect target
-                    resp = await session.get(
-                        url,
-                        impersonate="chrome120",
-                        timeout=30,
-                        allow_redirects=False,
-                    )
-                    hops += 1
-            self._domain_last_request[domain] = time.monotonic()
+                hops += 1
 
         if resp.status_code in (301, 302, 303, 307, 308):
             # The manual redirect loop above exhausted _MAX_FALLBACK_REDIRECTS

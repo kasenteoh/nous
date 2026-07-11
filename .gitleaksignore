@@ -1,0 +1,9 @@
+# False positives, allowlisted by exact fingerprint (commit:file:rule:line) so
+# the allowlist can never mask a *new* secret. Both are public client-side keys
+# embedded in scraped-page HTML checked in as test fixtures:
+#   - Sequoia portfolio page: Segment analytics writeKey (public by design)
+#   - TechCrunch article page: reCAPTCHA siteKey (public by design)
+# If a new scraped fixture trips the scanner, verify the match is a public
+# client-side token, then append its fingerprint here — never widen to a path.
+2c201182895370202b3bd136a8422dcf5ae4bf43:pipeline/tests/fixtures/vc_portfolios/sequoia.html:generic-api-key:58
+2780b72e879a52f6763195c947b965356ce56262:pipeline/tests/fixtures/techcrunch_article.html:generic-api-key:1473
