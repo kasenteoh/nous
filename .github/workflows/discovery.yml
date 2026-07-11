@@ -220,6 +220,20 @@ jobs:
         continue-on-error: true
         run: uv run nous db-stats
 
+      - name: Adapter health
+        # No step id (deliberately): the deploy-hook gate keys on id'd steps
+        # only, and this is an observability canary, not a discovery stage.
+        # Probes every VC portfolio adapter AND the six broad funding-news
+        # feeds (reported as news:<slug>) against their floors; emits
+        # ::warning:: annotations + a step-summary table and records one
+        # pipeline_runs row. Annotate-only (exits 0 without --strict);
+        # continue-on-error so even a crash never blocks discovery. Runs
+        # before pipeline-health so that step surfaces this run's canary row.
+        if: ${{ !cancelled() }}
+        timeout-minutes: 20
+        continue-on-error: true
+        run: uv run nous adapter-health
+
       - name: Pipeline health
         # Always runs (even if earlier stages failed) so every discovery run gets
         # a health annotation in the Actions UI.  Exits 0 — never blocks the

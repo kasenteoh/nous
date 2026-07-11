@@ -21,7 +21,12 @@ from urllib.parse import urlparse
 from selectolax.parser import HTMLParser
 
 from nous.sources.homepage import HomepageClient
-from nous.sources.vc_portfolios.base import PortfolioEntry
+from nous.sources.vc_portfolios._json_island import find_balanced
+from nous.sources.vc_portfolios.base import (
+    AdapterStructuralError,
+    PortfolioEntry,
+    ensure_entries,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -37,15 +42,17 @@ class FoundersFundAdapter:
 
     async def fetch(self, client: HomepageClient) -> list[PortfolioEntry]:
         html = (await client.fetch(self.PORTFOLIO_URL)).content
-        blob = _extract_balanced_object(html, self._ISLAND_RE)
+        blob = find_balanced(html, self._ISLAND_RE)
         if blob is None:
-            raise RuntimeError(
+            raise AdapterStructuralError(
                 "founders_fund: window.__data object not found; DOM likely changed."
             )
         data = json.loads(blob)
         companies = data.get("companies") if isinstance(data, dict) else None
         if not isinstance(companies, list):
-            raise RuntimeError("founders_fund: window.__data.companies missing or wrong type")
+            raise AdapterStructuralError(
+                "founders_fund: window.__data.companies missing or wrong type"
+            )
 
         entries: list[PortfolioEntry] = []
         for company in companies:
@@ -68,7 +75,11 @@ class FoundersFundAdapter:
                     source_url=self.PORTFOLIO_URL,
                 )
             )
-        return entries
+        return ensure_entries(
+            entries,
+            self.firm,
+            context="window.__data.companies parsed but held no usable companies",
+        )
 
 
 def _strip_html(value: object) -> str | None:
@@ -90,34 +101,3 @@ def _extract_website(profiles: object, website_re: re.Pattern[str]) -> str | Non
     if not parsed.scheme or not parsed.netloc:
         return None
     return candidate
-
-
-def _extract_balanced_object(html: str, start_re: re.Pattern[str]) -> str | None:
-    match = start_re.search(html)
-    if not match:
-        return None
-    start = match.end() - 1
-    depth = 0
-    in_string = False
-    escape = False
-    for i in range(start, len(html)):
-        ch = html[i]
-        if escape:
-            escape = False
-            continue
-        if ch == "\\":
-            escape = True
-            continue
-        if in_string:
-            if ch == '"':
-                in_string = False
-            continue
-        if ch == '"':
-            in_string = True
-        elif ch == "{":
-            depth += 1
-        elif ch == "}":
-            depth -= 1
-            if depth == 0:
-                return html[start : i + 1]
-    return None

@@ -8,13 +8,39 @@ Benchmark is intentionally absent: its entire public site (benchmark.com) is a
 single splash page (logo + office addresses) with no portfolio listing anywhere,
 so there is nothing to scrape. See the M5 plan — documented and skipped rather
 than guessed.
+
+Accelerator portfolios are also intentionally absent (investigated 2026-07 for
+the discovery-expansion workstream; YC is already covered above). Every
+candidate renders its company list client-side, with no server-side fallback
+an httpx adapter could parse deterministically:
+
+- **Techstars** (techstars.com/portfolio): Next.js pages-router whose
+  ``__NEXT_DATA__`` carries only CMS page chrome; the company grid loads at
+  runtime from an endpoint not discoverable in the served HTML/JS bundles,
+  and the site publishes no sitemap.
+- **500 Global** (500.co/companies): Next.js RSC app shell; the flight
+  payload contains zero company documents and the Strapi sitemap lists only
+  regional *listing* pages, no per-company URLs.
+- **Antler** (antler.co/portfolio): Webflow + Finsweet CMS-filter — items are
+  fetched client-side; the sitemap has no company URLs and robots.txt
+  disallows ``/portfolio/company/``.
+- **Alchemist** (alchemistaccelerator.com/portfolio): the company grid is a
+  client-side ``${name}`` JS template over a runtime payload.
+
+A headless-browser adapter is possible but belongs in a deliberate follow-up
+(it would be this package's only JS-rendering scraper); a scrape of the empty
+shells would ship a permanently-flaky adapter instead.
 """
 
 from __future__ import annotations
 
 from nous.sources.vc_portfolios.a16z import A16zAdapter
 from nous.sources.vc_portfolios.accel import AccelAdapter
-from nous.sources.vc_portfolios.base import PortfolioAdapter, PortfolioEntry
+from nous.sources.vc_portfolios.base import (
+    AdapterStructuralError,
+    PortfolioAdapter,
+    PortfolioEntry,
+)
 from nous.sources.vc_portfolios.bessemer import BessemerAdapter
 from nous.sources.vc_portfolios.felicis import FelicisAdapter
 from nous.sources.vc_portfolios.founders_fund import FoundersFundAdapter
@@ -62,4 +88,10 @@ FIRM_DISPLAY_NAMES: dict[str, str] = {
     "general_catalyst": "General Catalyst",
 }
 
-__all__ = ["ADAPTERS", "FIRM_DISPLAY_NAMES", "PortfolioAdapter", "PortfolioEntry"]
+__all__ = [
+    "ADAPTERS",
+    "FIRM_DISPLAY_NAMES",
+    "AdapterStructuralError",
+    "PortfolioAdapter",
+    "PortfolioEntry",
+]

@@ -1410,15 +1410,19 @@ def pipeline_health(strict: bool) -> None:
     ),
 )
 def adapter_health(floor: int | None, strict: bool) -> None:
-    """Canary the VC portfolio adapters: warn when an adapter's yield collapses.
+    """Canary the discovery adapters: warn when any source's yield collapses.
 
-    Runs every registered adapter in nous.sources.vc_portfolios.ADAPTERS against
-    a live HomepageClient, counts the entries each yields, and compares the count
-    to a floor (a configurable global floor with per-firm overrides). Any adapter
-    at or below its floor — including one that raises — gets a GitHub Actions
-    ``::warning::`` annotation, appears in the step-summary table, and is recorded
-    in a single pipeline_runs audit row. Read-only otherwise; one broken adapter
-    never aborts the others. Exits 0 by default; pass --strict to exit non-zero.
+    Runs every registered VC adapter in nous.sources.vc_portfolios.ADAPTERS
+    against a live HomepageClient AND every broad funding-news feed in
+    nous.pipeline.adapter_health.NEWS_FEEDS against a live NewsClient, counts
+    the entries each yields, and compares the count to a floor (configurable
+    global floor with per-firm overrides for VC adapters; feeds are reported
+    as ``news:<slug>`` and are healthy on any entry at all). Any source at or
+    below its floor — including one that raises — gets a GitHub Actions
+    ``::warning::`` annotation, appears in the step-summary table, and is
+    recorded in a single pipeline_runs audit row. Read-only otherwise; one
+    broken source never aborts the others. Exits 0 by default; pass --strict
+    to exit non-zero.
     """
     import sys
 
