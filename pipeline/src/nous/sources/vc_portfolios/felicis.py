@@ -23,6 +23,7 @@ from collections.abc import Iterator
 from typing import Any
 
 from nous.sources.homepage import HomepageClient
+from nous.sources.vc_portfolios._json_island import extract_balanced
 from nous.sources.vc_portfolios.base import PortfolioEntry
 
 logger = logging.getLogger(__name__)
@@ -77,7 +78,7 @@ def _decode_rsc_payload(html: str) -> str:
 
 def _iter_company_objects(payload: str) -> Iterator[dict[str, Any]]:
     for match in _COMPANY_START_RE.finditer(payload):
-        obj_text = _extract_balanced_object(payload, match.start())
+        obj_text = extract_balanced(payload, match.start())
         if obj_text is None:
             continue
         try:
@@ -86,38 +87,6 @@ def _iter_company_objects(payload: str) -> Iterator[dict[str, Any]]:
             continue
         if isinstance(obj, dict):
             yield obj
-
-
-def _extract_balanced_object(text: str, start: int) -> str | None:
-    """Return the balanced ``{...}`` literal beginning at ``text[start]``.
-
-    Walks braces while respecting quoted strings and escapes so braces inside
-    string values don't fool the counter.
-    """
-    depth = 0
-    in_string = False
-    escape = False
-    for i in range(start, len(text)):
-        ch = text[i]
-        if escape:
-            escape = False
-            continue
-        if ch == "\\":
-            escape = True
-            continue
-        if in_string:
-            if ch == '"':
-                in_string = False
-            continue
-        if ch == '"':
-            in_string = True
-        elif ch == "{":
-            depth += 1
-        elif ch == "}":
-            depth -= 1
-            if depth == 0:
-                return text[start : i + 1]
-    return None
 
 
 def _clean_excerpt(value: object) -> str | None:
