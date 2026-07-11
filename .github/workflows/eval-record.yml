@@ -83,6 +83,14 @@ jobs:
             -m "test(golden): re-record fixtures against live DeepSeek" \
             -m "Recorded by the eval-record workflow (run ${{ github.run_id }}). prompt filter: '${{ inputs.prompt }}'; update_baseline: ${{ inputs.update_baseline }}"
           git push -u origin "$BRANCH"
+          # This repo's Actions settings forbid workflow-created PRs (default
+          # posture; left that way deliberately). Try anyway in case it is ever
+          # enabled, but degrade to printing the branch so the operator opens
+          # the PR — never fail the run over it.
           gh pr create \
             --title "test(golden): live DeepSeek re-recording ($(date -u +%Y-%m-%d))" \
-            --body "Automated golden-set re-recording from the [eval-record workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}). Review the metric delta table in the run's step summary, then merge if the deltas are acceptable. The lint.yml golden gate runs on this PR as usual."
+            --body "Automated golden-set re-recording from the [eval-record workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}). Review the metric delta table in the run's step summary, then merge if the deltas are acceptable. The lint.yml golden gate runs on this PR as usual." \
+            || {
+              echo "::notice::PR creation blocked by repo settings — recordings pushed to branch $BRANCH."
+              echo "Open manually: ${{ github.server_url }}/${{ github.repository }}/compare/$BRANCH?expand=1"
+            }
