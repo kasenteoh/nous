@@ -86,6 +86,14 @@ are still largely simulated and the first live re-record showed real DeepSeek
 scoring a few points under hand-authored stand-ins. They gate catastrophes,
 not noise, until floors are recalibrated on live recordings.
 
+The long-description set's `structure_pass_rate` floor is the exception:
+it is set at 0.933 (14/15 — everything except the deliberate padded-thin
+failure case) because after the 2026-07-11 rich-input recalibration the
+fixtures genuinely support the depth floor, and structure is exactly the
+dial the W-F split exists to hold. Its remaining hand-set-below floors
+(`insufficiency_accuracy` 0.85, `grounding_mean` 0.95, `grounding_min`
+0.75) stay conservative until the post-merge live re-record anchors them.
+
 ## Record mode (live, opt-in, paid)
 
 ```
@@ -117,10 +125,20 @@ so it stays opt-in and out of CI until a key is provisioned there.
 Adding/curating cases: write `input.txt` + `case.json`, hand-author
 `expected.json` by reading the input carefully (it must validate against the
 schema — the loader enforces this), then run record mode to produce
-`recorded.json`. Keep inputs small (a few KB) and biased toward the hard
-cases the prompt files warn about (testimonial leakage, stated-total vs
-per-round amounts, month-only dates, non-USD amounts, parked domains,
-directories/agencies, non-US companies, ...).
+`recorded.json`. Bias toward the hard cases the prompt files warn about
+(testimonial leakage, stated-total vs per-round amounts, month-only dates,
+non-USD amounts, parked domains, directories/agencies, non-US companies,
+...).
+
+Size inputs to the contract the case exercises. Judge and funding cases
+stay small (a few KB). The long-description "rich" cases must be genuinely
+rich — realistic multi-page site dumps of ~1,500+ words (~10 KB), because
+the prompt's own never-pad rule means an honest model cannot write a
+350-600-word profile from ~250 words of source. The first live re-recording
+(2026-07-11) proved this the hard way: 12 of 13 structure-scored cases
+failed the rich depth floor purely because the fixtures were thin, with
+output length tracking input length. Thin/null cases stay deliberately
+tiny — that is the side of the contract they test.
 
 ## Provenance: simulated recordings
 

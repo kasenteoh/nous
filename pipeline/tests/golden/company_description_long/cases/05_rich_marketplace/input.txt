@@ -4,12 +4,20 @@ Forkfleet is where restaurants buy and sell commercial kitchen equipment:
 ovens, ranges, refrigeration, prep tables, espresso machines. Every listing
 is inspected, priced against market data, and shipped door to door.
 
+Browse 5,000+ inspected listings. Sell equipment in minutes.
+
 Why Forkfleet exists
 
 When a restaurant closes or renovates, its equipment traditionally moves
 through auctioneers and local dealers at steep discounts — or sits in
 storage. Buyers, meanwhile, face a used market with no condition standards
 and no delivery. Forkfleet puts both sides on one platform.
+
+The used-equipment market has always been big and broken. A six-burner
+range that listed for $4,000 new is worth real money — but only if a buyer
+can trust the burners fire, the buyer can get it to their kitchen, and the
+seller does not have to spend three weekends fielding lowball calls.
+Auctions solve none of that; classifieds solve less.
 
 How it works
 
@@ -20,6 +28,38 @@ live with a graded condition report. Buyers see the report, financing
 options, and a delivery quote. Forkfleet coordinates freight through
 partner carriers, including liftgate delivery and old-equipment haul-away.
 
+Selling on Forkfleet
+
+Photograph the piece in the app, confirm the model number, and Forkfleet's
+pricing engine returns an estimate from comparable completed sales in your
+market — the same data dealers use, shown to you. Accept, and an inspector
+visits within days to run the condition checks and shoot the standardized
+photo set. Your listing goes live with its graded report; you approve
+offers from the app; Forkfleet handles payment, freight booking, and the
+paperwork. Payout lands after the buyer's acceptance window. Restaurants
+mid-closure can list an entire kitchen in one inspector visit.
+
+Buying on Forkfleet
+
+Every listing carries a graded condition report — not seller photos and a
+prayer. Grade A means inspected with no functional issues; Grade B means
+cosmetic wear, fully functional; Grade C means a disclosed functional
+issue, priced accordingly, with the defect documented. The listing shows
+the inspector's checks: burner ignition, compressor amperage, door-seal
+integrity, temperature calibration against a reference probe. Alongside
+the report: a firm delivery quote to your address, financing terms from
+our lending partner, and the 30-day working guarantee.
+
+The inspection standard
+
+Inspectors work a written protocol per category: ranges get every burner
+fired and the oven cycled to temperature; refrigeration gets compressor
+draw measured and pull-down time logged; espresso machines get pump
+pressure and boiler checks. The protocol is public — buyers can read
+exactly what "inspected" means — and inspectors photograph each checkpoint.
+Equipment that fails inspection is either re-priced as Grade C with the
+issue disclosed or declined.
+
 Trust and economics
 
 Every purchase carries a 30-day working guarantee. Forkfleet charges
@@ -27,8 +67,149 @@ sellers a commission of 8 percent per sale and buyers a flat service fee;
 financing is offered through a lending partner. Nothing is consigned to a
 warehouse — equipment ships directly from seller to buyer.
 
-Traction
+If a piece fails within 30 days of delivery, Forkfleet arranges repair,
+replacement, or refund — the guarantee is Forkfleet's, not the seller's,
+which is what the inspection layer pays for. The flat buyer fee is shown
+before checkout; there are no listing fees, no monthly fees, and no
+success theater. Sellers net the sale price minus the 8 percent commission,
+period.
+
+Delivery and logistics
+
+Commercial kitchen equipment is heavy, awkward, and expensive to move
+badly. Forkfleet books freight through vetted partner carriers with
+restaurant-equipment experience: blanket wrap, liftgate delivery for
+kitchens without a dock, inside placement to the kitchen line where
+building access allows, and haul-away of the old equipment on the same
+trip. Delivery quotes are firm at listing time — the price you see is the
+price you pay — and damage in transit falls under the guarantee, not
+under an argument with a carrier.
+
+Markets
 
 Since launching in Chicago in 2019, Forkfleet has expanded to 12 metro
-markets and lists over 5,000 items at any time. The company is 45 people,
-headquartered in Chicago, IL.
+markets and lists over 5,000 items at any time. Current markets: Chicago,
+Milwaukee, Minneapolis, Detroit, Indianapolis, Columbus, Cleveland,
+St. Louis, Kansas City, Nashville, Atlanta, and Dallas. Buyers can
+purchase across markets; freight quotes price the distance automatically.
+New markets open when inspector coverage is ready — the inspection
+standard does not travel by wishful thinking.
+
+What sells
+
+Cooking: ranges, convection ovens, combi ovens, charbroilers, fryers,
+griddles. Refrigeration: reach-ins, walk-in components, prep rails,
+undercounters. Prep and storage: worktables, mixers, slicers, shelving.
+Beverage: espresso machines, grinders, ice machines. The pricing engine
+tracks comparable sales per category and market, so estimates reflect
+what equipment actually clears at, not what a dealer hopes.
+
+Frequently asked
+
+Who owns the equipment while it is listed? The seller. Nothing is
+consigned to a warehouse — equipment stays in place and ships directly
+from seller to buyer once sold.
+
+What if my equipment fails inspection? You can list at Grade C with the
+issue disclosed and priced in, or decline to list. No fee either way.
+
+Is financing available? Yes, through our lending partner, with terms
+shown on every listing. Approval decisions typically come the same day.
+
+Do you serve food trucks and ghost kitchens? Yes — anyone outfitting a
+commercial kitchen buys the same inspected equipment.
+
+About
+
+Forkfleet was founded in Chicago in 2019 by Nate Kowalski and Maria Reyes.
+Nate spent a decade as a restaurant-equipment dealer and auctioneer and
+knew exactly where the margins hid; Maria built logistics software for a
+freight brokerage. The founding insight: the used-equipment market did not
+need another listing site — it needed condition standards and freight,
+the two things neither side could supply alone.
+
+The company is 45 people, headquartered in Chicago, IL: inspectors and
+market managers in each metro, logistics coordinators, and the engineering
+team behind the pricing engine and the app.
+
+How the price estimate works
+
+The pricing engine is built on completed Forkfleet sales: model, age,
+grade, market, and season. A Grade B convection oven in Chicago prices
+against what Grade B convection ovens actually sold for in Chicago in
+the last two quarters — not against a dealer's asking price or a
+depreciation curve from an accounting textbook. Sellers see the estimate
+range and the count of comparable sales behind it; the listing price is
+the seller's choice, but the estimate is where offers converge. When a
+category runs hot — espresso equipment every spring — the estimates move
+with it.
+
+Selling a whole kitchen
+
+Closures and renovations are Forkfleet's origin story and still the
+busiest use case. One inspector visit can catalog an entire kitchen —
+the range line, the walk-in, the prep tables, the smallwares lots — and
+the seller approves the batch from the app. Landlords recovering
+abandoned equipment and restaurant groups consolidating locations use
+the same flow with volume support from a market manager. Equipment sells
+from the space before the lease ends, which beats paying movers and
+storage to defer the same decision.
+
+Buying with confidence: the acceptance window
+
+Delivery includes a 48-hour acceptance window: plug it in, run it, check
+it against the condition report. A mismatch between the report and the
+machine is Forkfleet's problem — refund or repair, buyer's choice. After
+acceptance, the 30-day working guarantee covers functional failure. The
+guarantee claims rate is published on the trust page, by category and
+grade — Grade B refrigeration, our highest-volume category, runs under
+3 percent.
+
+For equipment dealers
+
+Licensed dealers list on Forkfleet under the same inspection standard —
+the graded report applies to everyone. Dealers get bulk listing tools
+and a storefront page; buyers get the same guarantee whether the seller
+is a closing bistro or a dealer with a warehouse. About a fifth of
+listings come from dealers, and the standard is the point: buyers should
+not have to care who the seller is.
+
+From the blog: What a walk-in compressor is actually worth
+
+Comparable-sales data from four years of transactions, and why compressor
+hours matter more than age. Plus: the Grade B sweet spot — why lightly
+worn equipment clears fastest, and what that means for pricing your
+listing. Read more on the Forkfleet blog.
+
+More from the FAQ
+
+Can I sell equipment that is still in use? Yes — many renovations list
+weeks ahead with a pickup date; buyers see the availability window on
+the listing.
+
+Do you buy equipment outright? No. Forkfleet is a marketplace, not a
+dealer: we never own inventory, which is why the condition report can
+be honest.
+
+What areas do you deliver to? Anywhere in the continental US — the 12
+inspection markets are where sellers can list, but buyers purchase
+from anywhere, with freight quoted to the door.
+
+Is there a mobile app for buyers? Browsing and offers run on web and
+mobile; the app's inspection tooling is what sellers and inspectors
+use.
+
+In the press
+
+Forkfleet's condition-report standard has been covered in restaurant
+trade publications as the first serious attempt to grade used kitchen
+equipment the way vehicle marketplaces grade cars. Industry coverage
+has focused on the direct seller-to-buyer freight model — the
+asset-light choice that let a 45-person company operate in 12 markets
+— and on what published guarantee claims rates do to buyer trust in a
+category that never had them.
+
+Careers: equipment inspectors (Dallas, Atlanta), freight coordinator
+(Chicago), senior mobile engineer (remote US).
+
+(c) Forkfleet, Inc. — Chicago, IL

@@ -4,12 +4,21 @@ Clinicore automates prior authorization for specialty clinics. Our platform
 reads the order from your EHR, assembles the payer-specific documentation,
 submits it electronically, and tracks every request to a decision.
 
+Request a demo. See your specialty's workflow.
+
 The problem we solve
 
 Prior authorization is the top administrative burden in specialty care.
 Staff spend hours on payer portals and phone calls; patients wait days for
 approvals; denials arrive for missing documentation that was sitting in the
 chart all along.
+
+The math is grim on both sides. A busy infusion clinic can generate dozens
+of authorization requests a day, each with its own payer rules, its own
+portal, and its own fax-number fallback. Meanwhile the clinical evidence a
+payer wants — the staging, the labs, the prior therapies — already exists
+in the chart. The gap between the chart and the portal is where staff
+hours, patient days, and revenue disappear.
 
 How it works
 
@@ -21,20 +30,192 @@ our clinical operations team reviews edge cases before anything goes out.
 Status updates flow back into the EHR, and staff see one queue instead of
 a dozen portals.
 
+Order detection
+
+Clinicore watches the order feed from your EHR and screens each order
+against payer and plan: does this CPT code, this payer, this plan require
+authorization? Orders that do not require auth are marked cleared —
+knowing you do NOT need an authorization is worth as much as filing one.
+Orders that do enter the assembly pipeline, with urgency flags carried
+through from the order.
+
+Documentation assembly
+
+For each authorization, the rules engine maps the payer's policy to a
+checklist of required evidence: diagnosis codes, staging, labs, imaging
+reports, prior therapies, clinical notes. Clinicore pulls each item from
+the chart and assembles the payer-specific packet. Missing items are
+flagged to staff before submission — the denial for "insufficient
+documentation" mostly means "the packet went out incomplete," and the
+whole point is that it never does.
+
+Submission and tracking
+
+Packets submit electronically wherever the payer supports it, and our
+operations team handles portal and fax submission where it does not —
+your staff never touches a payer portal either way. Every request is
+tracked to a decision: submitted, pended, additional information
+requested, approved, denied. Status flows back into the EHR field your
+schedulers already check, and the work queue shows exactly which requests
+need human attention today.
+
+Denials and appeals
+
+When a denial does happen, Clinicore assembles the appeal from the same
+evidence pipeline, attaches the payer's own policy citation, and tracks
+the appeal to resolution. Denial analytics show which payers, codes, and
+policies generate denials — patterns your revenue cycle team can act on.
+
+The rules engine and the humans
+
+Payer policies change constantly and are published inconsistently. Our
+rules engine encodes them as executable checklists, and a dedicated policy
+team updates rules as payers publish changes. Anything ambiguous — a new
+policy, a conflicting requirement, an unusual clinical situation — routes
+to our clinical operations team for human review before submission. The
+automation handles the volume; the humans handle the judgment. We publish
+our policy coverage by payer and specialty, updated monthly.
+
 Results
 
 Clinics using Clinicore report authorizations submitted in minutes instead
 of hours, first-pass approval rates above 90 percent, and staff time on
 authorizations cut by more than half.
 
+A 12-site oncology group told us their authorization backlog went from
+three days to same-day within two months of go-live, and their
+authorization team moved from portal work to exception handling. An
+imaging network cut authorization-related reschedules — the appointments
+that slip because the auth was not ready — by two thirds.
+
 Who we serve
 
 Specialty practices and clinic groups in oncology, cardiology, rheumatology,
 and imaging — from single-site clinics to groups with 40 locations.
 
-Pricing is per provider per month, with volume pricing for groups.
+Oncology: infusion and radiation authorizations with staging and prior-
+therapy evidence, including urgent-start workflows. Cardiology: imaging
+and device authorizations, with appropriate-use criteria built into the
+checklists. Rheumatology: specialty-pharmacy coordination for biologics,
+step-therapy documentation, and renewal tracking so continuing patients
+never lapse. Imaging: high-volume screening against payer rules, with
+cleared orders marked in minutes.
+
+Implementation
+
+Go-live runs four to six weeks: EHR integration, payer mapping for your
+top payers, and side-by-side workflow with your staff in the final week.
+Clinicore connects through your EHR's standard integration frameworks —
+no custom interfaces, no new logins for clinicians, nothing to install in
+the exam room. Groups typically start with one specialty or one site and
+expand once the queue proves itself.
+
+Compliance and security
+
+Clinicore is HIPAA compliant and signs a BAA with every customer. The
+platform is SOC 2 Type II certified; PHI is encrypted in transit and at
+rest, access is role-based and audited, and data never leaves US
+infrastructure. Our clinical operations team works under the same access
+controls and audit logging as the software.
+
+Frequently asked
+
+Does Clinicore replace my authorization staff? It replaces their portal
+work. Most groups redeploy staff to exception handling, appeals, and
+patient communication — the parts that need a human.
+
+Which payers are covered? National payers and the regional payers relevant
+to your footprint; coverage by payer and specialty is published and
+updated monthly. Where electronic submission is not supported, our
+operations team submits on your behalf.
+
+What does my staff actually do day to day? Work one queue: review flagged
+items, approve assembled packets where review is configured, and handle
+the exceptions Clinicore routes to them.
+
+How is Clinicore priced? Per provider per month, with volume pricing for
+groups. No per-transaction fees, no charge for appeals.
 
 About
 
 Clinicore was founded in 2020 in Nashville, TN by a practice administrator
-and two health-data engineers. We are 60 people and remote-friendly.
+and two health-data engineers: Carmen Villalobos, who ran operations for a
+multi-site cardiology group, and engineers David Lin and Marcus Webb, who
+built clinical data integrations at a health-systems vendor. The company
+began with a simple observation from Carmen's clinic: the evidence payers
+wanted was already in the chart, and her staff were paid to move it
+through a fax machine.
+
+We are 60 people and remote-friendly, with clinical operations
+concentrated in Nashville. The team mixes health-data engineers, former
+practice staff, and nurses who now encode payer policy instead of fighting
+it.
+
+A day in the authorization queue
+
+8:05 a.m.: the queue shows 34 new orders detected overnight. 26 required
+no authorization and are already marked cleared; schedulers see the green
+check in the EHR and book them. Six assembled cleanly against payer
+policy and await the configured review click. Two are flagged: one
+missing a lab the policy requires — the order's clinician gets a task in
+the EHR — and one hit a payer policy updated last week, routed to
+Clinicore's clinical operations team. By 8:40 the six are submitted with
+tracking numbers. By Thursday, four are approved, one is pended with an
+information request Clinicore answers from the chart, and the appeal on
+last month's denial has a decision date. Nobody logged into a payer
+portal.
+
+Urgent authorizations
+
+Urgent-start oncology and cardiac cases follow an expedited path: the
+urgency flag carries from the order, packets assemble first in queue,
+submission uses the payer's expedited channel where one exists, and our
+operations team follows up by phone at the intervals the payer's own
+policy promises. Status is visible to the clinic in real time — the
+question "where is the auth" has an answer without a phone tree.
+
+Integration notes by EHR
+
+Epic: order detection via standard interfaces, status writeback to the
+referral/authorization fields your schedulers already use, no custom
+build. Cerner: order and results feeds through standard frameworks, with
+document attachment to the encounter. athenahealth: marketplace-listed
+integration, live in days. In every case clinicians keep their existing
+workflow — the only change they notice is that authorization status
+appears without anyone asking.
+
+Resources
+
+Webinar: Prior auth metrics that matter — first-pass approval, time to
+submission, reschedule rate — and how to baseline them before you
+automate. Whitepaper: The payer policy maintenance problem, or why your
+smartest biller cannot memorize 40 payers. Template: an ROI worksheet
+for authorization staffing.
+
+From the blog: The cleared order is the product
+
+Half the value of authorization automation is negative space — the orders
+that never needed an auth at all. Screening every order against payer and
+plan means schedulers stop holding appointments "just in case," and the
+patients who could have been seen Tuesday are seen Tuesday. Read the post.
+
+More from the FAQ
+
+Does Clinicore handle retro-authorizations? Yes — retro requests
+follow the same assembly pipeline with the payer's retro window
+tracked, and the queue flags orders approaching their deadline.
+
+What about peer-to-peer reviews? When a payer requires a clinician
+conversation, Clinicore schedules it, packages the case summary the
+clinician needs in two minutes of reading, and records the outcome
+against the request.
+
+Can we see performance by payer? The analytics dashboard breaks first-
+pass approval, turnaround, and denial reasons down by payer, specialty,
+and site — the evidence a group needs when a payer's behavior warrants
+a contracting conversation.
+
+Careers: policy analysts (RN or pharmacy background), integration
+engineers, implementation managers. Nashville or remote.
+
+(c) Clinicore, Inc. — Nashville, TN

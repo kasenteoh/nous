@@ -4,12 +4,20 @@ Vaultra discovers, rotates, and governs the non-human credentials that
 modern infrastructure runs on: API keys, service-account tokens, database
 passwords, signing certificates.
 
+Get a demo. See your credential inventory in one afternoon.
+
 The problem
 
 Machine identities now outnumber human ones by orders of magnitude, and
 they leak: keys hard-coded in repositories, tokens shared across services,
 credentials that outlive the engineer who created them. Breach reports
 keep tracing incidents back to a forgotten credential.
+
+Human identity got its tooling — SSO, MFA, lifecycle management. The
+service account that can read your production database got none of it.
+Nobody owns it, nothing expires it, and the only inventory is tribal
+memory. Security teams know this; what they lack is a way to see the
+problem at its real size and fix it without breaking production.
 
 How Vaultra works
 
@@ -21,19 +29,194 @@ credential and updates every consumer through native integrations, with a
 rollback window. Policies enforce expiry and least privilege continuously,
 not as a quarterly audit.
 
+Discovery
+
+Vaultra connects with read-only credentials to your cloud providers,
+clusters, code hosts, and CI — no agents on hosts, no sidecar in every
+pod. It enumerates IAM users and roles, service accounts, access keys,
+Kubernetes secrets and service-account tokens, GitHub deploy keys and
+Actions secrets, database users, and TLS and code-signing certificates.
+Usage telemetry — CloudTrail and its equivalents — ties each credential
+to the workloads that actually use it, so the inventory answers the three
+questions that matter: what exists, what uses it, and what can it touch.
+First inventory typically completes the same afternoon you connect.
+
+The risk engine
+
+Every finding is ranked by blast radius and exposure: an unrotated key
+with admin scope that a public repository once contained is not the same
+as a scoped token rotated last week. The engine flags unrotated keys past
+your policy age, over-privileged tokens whose granted permissions exceed
+their observed usage, secrets committed to code (with history scanning),
+orphaned credentials whose creator has left the organization, and
+certificates approaching expiry. Findings come with the evidence attached
+— the usage trace, the permission diff — so an engineer can act without
+reconstructing the investigation.
+
+Rotation without fear
+
+Inventory tools generate reports; rotation retires risk. Vaultra's
+one-click rotation creates the replacement credential, updates every
+consumer through native integrations — AWS Secrets Manager, GCP Secret
+Manager, Azure Key Vault, Kubernetes secrets, GitHub Actions, your CI's
+secret store — validates the consumers are healthy, then revokes the old
+credential. A rollback window keeps the old credential revocable-but-
+restorable until you close it, so the rotation that breaks an overlooked
+consumer is an incident of minutes, not an outage. Rotations can run
+one-off, on schedule, or automatically when a finding crosses a severity
+threshold.
+
+Continuous policy
+
+Policies turn the cleanup into a steady state: maximum credential age,
+mandatory expiry on new tokens, least-privilege enforcement that trims
+grants to observed usage after a review period, and no-secrets-in-code
+checks wired into pull requests. Drift is surfaced the day it happens.
+The quarterly audit becomes a report you export, not a project you staff.
+
 Compliance
 
 Vaultra maps findings to SOC 2 and ISO 27001 controls and exports
 audit-ready evidence. The platform itself is SOC 2 Type II certified.
+
+Auditors get the artifact they actually want: for each control, the
+policy, the current state, and the exception list with owners and dates.
+Customers tell us the credential-management section of their audit went
+from a week of screenshot archaeology to an export.
 
 Customers
 
 Security teams at cloud-native companies from 50 to 5,000 employees.
 The site cites deployments inventorying over 100,000 machine credentials.
 
-Pricing is annual, tiered by number of identities under management.
+The pattern is consistent: the security team suspects they have a few
+thousand credentials, discovery finds several times that, and the first
+month is triage — kill the orphans, rotate the ancient, scope the
+over-privileged. After that, policies hold the line and the team reviews
+exceptions weekly instead of hunting keys quarterly.
+
+Deployment and security posture
+
+Vaultra deploys as SaaS or in your own cloud account for teams with
+data-residency requirements. Discovery credentials are read-only;
+rotation uses scoped, audited write permissions you grant per
+integration. Every action Vaultra takes is logged to an immutable audit
+trail and can be streamed to your SIEM. SSO and role-based access come
+standard; secrets material is encrypted with per-tenant keys and never
+leaves your chosen region.
+
+Pricing
+
+Annual subscription, tiered by number of identities under management.
+Discovery-only tier for teams that want the inventory before the
+automation; rotation and policy tiers add the enforcement. No
+per-rotation charges — the incentive should be more rotation, not less.
+
+Frequently asked
+
+Will rotation break production? The consumer-update-then-revoke sequence
+plus the rollback window exists precisely for this. Most teams start with
+scheduled rotation on low-risk credentials and graduate to automatic
+rotation as confidence builds.
+
+Do you replace our secrets manager? No — Vaultra orchestrates the
+managers you already run: Secrets Manager, Key Vault, Kubernetes secrets.
+It is the inventory and control plane above them.
+
+What about credentials Vaultra cannot rotate automatically? They stay in
+the inventory with owners and expiry tracked, and rotation runbooks are
+generated for manual execution.
 
 About
 
 Vaultra was founded in Austin, TX in 2022 by two security engineers who ran
-identity infrastructure at a large fintech. The team is 38 people.
+identity infrastructure at a large fintech: Alex Fontaine and Ritika Nair.
+They spent years watching the same postmortem repeat — an old key, an
+unknown consumer, a scramble to rotate without breaking payment flows —
+and left to build the tool they kept wishing existed. The team is 38
+people: security engineers, cloud-platform engineers, and former
+compliance leads who know what an auditor actually accepts.
+
+The first 30 days
+
+Week one is discovery and shock: connect the read-only integrations,
+watch the inventory build, and learn the real number — teams that
+guessed two thousand credentials routinely find five times that. Week
+two is triage from the risk engine's ranking: revoke the orphans nobody
+claims, rotate the handful of ancient admin-scoped keys that keep the
+CISO up at night, each with the rollback window as the safety net. Weeks
+three and four are policy: set maximum ages, turn on expiry for new
+tokens, wire the no-secrets-in-code check into pull requests. By day 30
+the dashboard trend line — total credentials, median age, findings open
+— is the artifact the security lead takes to the risk committee.
+
+Integration catalog
+
+Clouds: AWS, GCP, Azure — organizations and multi-account structures
+included. Orchestration: Kubernetes, including managed distributions.
+Code and CI: GitHub with Actions secrets, plus the common CI systems.
+Secret stores: AWS Secrets Manager, GCP Secret Manager, Azure Key Vault,
+Kubernetes secrets. Databases: managed PostgreSQL and MySQL user
+rotation. Alerting and workflow: Slack, PagerDuty, Jira, and a webhook
+for everything else. SIEM: audit-trail streaming to Splunk and the
+S3-compatible sink of your choice.
+
+For engineers, from the docs
+
+Rotation runs as a plan you can read before it executes: the replacement
+credential to be created, the consumers to be updated in order, the
+health checks between steps, the revocation at the end, the rollback
+path at every stage. Plans are dry-runnable in staging, exportable as
+JSON, and every execution is diffable against its plan. The API and
+Terraform provider expose the same operations as the console — inventory
+queries, policy definitions, rotation triggers — so credential hygiene
+can live in the same pipelines as the infrastructure it protects.
+
+Report: The state of machine identity
+
+Vaultra's annual report aggregates anonymized statistics across
+deployments: credential-to-engineer ratios, median key age by
+environment, the percentage of tokens whose permissions exceed observed
+usage. The headline finding repeats every year — the numbers are worse
+than every team's estimate, including the teams who read last year's
+report.
+
+From the blog: The credential that outlived three teams
+
+A composite war story: a database password created in 2019, shared through
+two reorgs, referenced by a cron job nobody could name. How discovery
+found it, what the usage trace showed, and the four-step rotation that
+retired it without a page. Read the post.
+
+Also on the blog: Least privilege for machines is a data problem —
+granted-versus-used permission analysis across 100,000 credentials, and
+why the scariest tokens are the ones used once a year.
+
+More from the FAQ
+
+How long does discovery take to run? The first full inventory
+typically completes the same afternoon you connect; incremental
+discovery runs continuously after that.
+
+Does Vaultra store our secrets? No. Vaultra inventories metadata and
+usage; secret material stays in your secret stores, and rotation
+happens through their APIs.
+
+Can developers see their own findings? Yes — findings route to owning
+teams with scoped views, so remediation is distributed instead of
+bottlenecked on the security team.
+
+Recognition
+
+Vaultra's research on granted-versus-used permissions has been
+presented at practitioner security conferences, and the annual state
+of machine identity report is regularly cited in industry coverage of
+non-human identity. The founding team's writing on rotation safety —
+the consumer-update-then-revoke pattern and the rollback window — has
+become a reference point in how the category talks about automating
+credential changes without breaking production.
+
+Careers: senior security engineer (Austin or remote US), integrations
+engineer, compliance product manager.
+
+(c) Vaultra, Inc. — Austin, TX

@@ -5,6 +5,8 @@ their builds on GitHub Actions, GitLab CI, or Jenkins. It ingests every
 pipeline event and turns them into a searchable timeline: which jobs ran,
 what they cost, which tests flaked, and where the queue backed up.
 
+Start free. Install the collector in under ten minutes.
+
 Why teams pick Pipewright
 
 Modern teams merge dozens of times a day, and a slow or flaky pipeline taxes
@@ -13,7 +15,11 @@ replaces that with structured build telemetry: each step is traced, tagged,
 and stored, so an engineer can ask "which test slowed down this week" and get
 an answer in seconds.
 
-How it works
+Your pipeline is production infrastructure. Treat it that way.
+
+Trusted by platform teams at Brightloop, Kestrelworks, and Fernrock Labs.
+
+How Pipewright works
 
 A lightweight collector runs as a step in your existing pipeline
 configuration — no agent daemons, no proxy. It streams timing, cache hits,
@@ -23,27 +29,203 @@ isolation on ephemeral runners and marks the nondeterministic ones
 automatically. Dashboards break down duration by repository, branch, and
 team, and alert rules fire on regressions against a rolling baseline.
 
-Who uses it
+The collector
+
+The collector is a single static binary, distributed for Linux and macOS
+runners, x86 and ARM. It reads the metadata your CI system already emits —
+job names, step boundaries, exit codes, runner labels — and pairs it with
+what the CI system does not tell you: cache hit ratios per restore key,
+artifact upload sizes and durations, and per-test timing parsed from JUnit,
+Jest, pytest, and Go test output. Everything is batched and compressed
+before upload; a typical build adds 2 to 4 seconds of overhead, most of it
+in parallel with teardown. If Pipewright's backend is unreachable, the
+collector fails open: your build never blocks on us.
+
+The timeline
+
+Every pipeline run becomes a trace. Jobs are spans, steps are child spans,
+and tests are events, so the waterfall view you are used to from
+application tracing works on your build: see the critical path, spot the
+job that gates everything else, and click from a red build straight to the
+failing test's history. The timeline is searchable by any tag — repository,
+branch, runner label, author, or a tag you attach yourself in one line of
+configuration.
+
+Flake detection
+
+A test that fails and then passes on retry is not fixed — it is a coin you
+keep flipping. When a test fails, Pipewright replays it in isolation on an
+ephemeral runner, up to three times, with the same commit and environment.
+Consistent failure means a real break; inconsistent results mean a flake,
+and Pipewright marks it, tracks its failure rate over time, and opens a
+quarantine ticket in your tracker if you want one. Teams use the flake
+leaderboard in their weekly platform review: the ten tests that wasted the
+most engineer-hours, ranked, with links to every occurrence.
+
+Cost attribution
+
+CI spend is a line item nobody can explain. Pipewright meters every job
+minute against the runner class that executed it and rolls costs up by
+repository, team, and pipeline, so the platform team can answer "what did
+the monorepo's integration suite cost last quarter" without a spreadsheet
+safari. Budgets and alerts catch runaway matrix builds before the invoice
+does. Customers routinely find that a handful of pipelines account for the
+majority of spend — and that half of that is cache misses.
+
+Merge queue health
+
+For teams running merge queues, Pipewright tracks queue depth, wait time,
+and eviction causes. When the queue backs up, the dashboard shows whether
+the culprit is a slow required check, a flaky test evicting batches, or
+runner starvation — three problems with three different fixes.
+
+Who uses Pipewright
 
 Platform engineering teams at companies between 20 and 2,000 engineers use
 Pipewright to cut CI spend and keep merge queues moving. Documented use cases
 run from monorepo build sharding to nightly-release verification.
 
+Customers
+
+Brightloop, a payments infrastructure company, brought its median
+merge-to-green time from 41 minutes to 14 after resharding its monorepo
+build on Pipewright's critical-path data. "We argued about CI by anecdote
+for two years. Now we argue about a dashboard, which is progress," says
+Priya Shah, platform engineering lead at Brightloop.
+
+Kestrelworks, a game studio running 400-job nightly builds on self-hosted
+runners, uses cost attribution to bill CI back to each game team. "The
+first week of data found a matrix build nobody owned burning a third of our
+runner fleet," says Marcus Delgado, VP of Engineering at Kestrelworks.
+
+Fernrock Labs quarantined 61 flaky tests in their first month and cut
+their merge queue's eviction rate by half.
+
+Read the case studies.
+
+Integrations
+
+GitHub Actions, GitLab CI, and Jenkins are first-class: install is a step
+in your workflow file, a keyword in .gitlab-ci.yml, or a plugin from the
+Jenkins update center. Test output parsers cover JUnit XML, Jest, pytest,
+Go test, and RSpec. Alerts route to Slack, PagerDuty, or a webhook.
+Quarantine tickets file to Jira or Linear. Everything Pipewright shows in
+the UI is available from a GraphQL API, and a Terraform provider manages
+alert rules and budgets as code.
+
+Docs: Get started
+
+1. Create a workspace and grab your ingest token.
+2. Add the collector step to one pipeline — copy the two-line snippet for
+   GitHub Actions, GitLab CI, or Jenkins from the setup page.
+3. Merge. Your first traces appear within a minute; dashboards populate
+   with history as builds run.
+4. Invite your team. Flake detection and alert baselines switch on after
+   Pipewright has seen a week of builds.
+
+Most teams instrument one busy repository first, then roll the collector
+out organization-wide with a shared pipeline template. The collector needs
+no credentials beyond the ingest token; it never sees your source code,
+only build metadata and test output.
+
 Pricing
 
-Free for open-source projects and up to 3 developers. The Team plan is $30
-per developer per month; Enterprise adds SSO, audit logs, support for
-self-hosted runners, and a dedicated Slack channel.
+Free — for open-source projects and teams up to 3 developers. Full
+timeline, 90 days of history.
 
-About
+Team — $30 per developer per month. 13 months of history, flake
+detection, cost attribution, merge queue analytics, Slack and PagerDuty
+alerts.
 
-Pipewright was founded in 2022 in Seattle, WA by two ex-infrastructure
-engineers who ran build systems at a large e-commerce company and grew tired
-of debugging CI through log archaeology. The team is 14 people, remote-first.
+Enterprise — everything in Team, plus SSO, audit logs, support for
+self-hosted runners, and a dedicated Slack channel. Annual billing;
+talk to us.
+
+Every paid plan starts with a 30-day trial. No credit card required.
+
+Frequently asked
+
+Does Pipewright slow down my builds? The collector adds 2 to 4 seconds to
+a typical build, mostly overlapped with teardown, and fails open if our
+backend is unreachable.
+
+Where does my data live? Build metadata and test results are stored in
+Pipewright's cloud, encrypted at rest, in a US region. Log payloads stay
+in your CI system — we store references, not your logs.
+
+Can I export my data? Yes: the GraphQL API and a nightly Parquet export
+on Team and Enterprise plans.
+
+Security
+
+Pipewright is SOC 2 Type II certified. The collector is open source and
+auditable, sees build metadata but never your source code, and each
+workspace's data is isolated with per-tenant encryption keys. Report
+security issues to security@pipewright.dev.
+
+About Pipewright
+
+Pipewright was founded in 2022 in Seattle, WA by Dana Whitfield and Arjun
+Mehta, two ex-infrastructure engineers who ran build systems at a large
+e-commerce company and grew tired of debugging CI through log archaeology.
+The team is 14 people, remote-first, concentrated in North American time
+zones.
+
+We believe the build is the least-observed system engineers touch every
+day. Application tracing got good; CI stayed a folder of log files. We are
+building the missing telemetry layer.
 
 Compared to rolling your own
 
 Teams sometimes assemble similar visibility from Grafana dashboards and
 homegrown scripts. Pipewright's pitch is that build telemetry is a product,
 not a side project: the schema, the flake detector, and the cost attribution
-come ready, and the collector installs in under ten minutes.
+come ready, and the collector installs in under ten minutes. The scripts
+you would write are the ones we already maintain.
+
+Guide: Sharding a monorepo build with critical-path data
+
+Most monorepo builds are sharded by folklore: someone split the test suite
+into eight buckets in 2021 and nobody has rebalanced since. Pipewright's
+timeline view shows the actual critical path of your pipeline — the chain
+of jobs that determines wall-clock time — and per-test timing shows which
+buckets finish early and idle. The guide walks through exporting a week of
+test timings, resharding buckets to equalize duration, and setting an alert
+on critical-path drift so the balance holds. Teams that reshard on real
+timing data typically recover 20 to 40 percent of wall-clock build time
+without buying a single extra runner; Brightloop's writeup of their 41-to-14
+minute merge-to-green improvement is the canonical example.
+
+Guide: Nightly-release verification
+
+For teams that cut a release every night, the question each morning is
+"did last night's build actually verify what we ship?" The guide covers
+tagging release pipelines separately from PR builds, alerting on skipped
+verification steps, and using artifact size tracking to catch the release
+that quietly doubled its bundle. Kestrelworks runs this pattern across
+400 nightly jobs.
+
+Changelog — recent highlights
+
+RSpec parser: per-example timing for Ruby suites. Queue analytics:
+eviction-cause breakdown added to the merge queue dashboard. Terraform
+provider 1.4: budgets as code. Collector 2.9: ARM runners, 30 percent
+lower memory ceiling. Parquet export: nightly full-workspace export for
+Team and Enterprise.
+
+From the blog: The case for build telemetry
+
+Your application emits traces, metrics, and structured logs; your build —
+the system every engineer waits on many times a day — emits a text file.
+When the build is slow, you scroll. When it flakes, you retry. The tooling
+gap is not because builds are simple; it is because builds were nobody's
+production. Platform teams are changing that, and the teams that instrument
+their pipelines stop arguing from anecdote. Read the full post.
+
+Careers
+
+We hire senior engineers who have felt a merge queue back up on a Friday.
+Open roles: distributed systems engineer, product engineer, developer
+advocate.
+
+(c) Pipewright, Inc. — Seattle, WA

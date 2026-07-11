@@ -4,11 +4,18 @@ Shipglass is a feature management platform: wrap any change in a flag, roll
 it out to 1 percent of users, watch the metrics, and ramp or roll back
 without a deploy.
 
+Start free with 5 seats. Read the docs.
+
 Why flags
 
 Shipping behind flags separates deploy from release. Teams merge continuously,
 then release deliberately — by cohort, region, or plan. When something breaks,
 the kill switch is instant; no revert, no hotfix train.
+
+The alternative is the one every engineer knows: the change is merged, the
+deploy is out, and the only way back is another deploy — reviewed,
+rebuilt, rolled out — while the bug burns. Flags make release a runtime
+decision. The deploy stops being the moment of risk.
 
 How Shipglass works
 
@@ -18,10 +25,49 @@ combine user attributes, cohorts, and percentage rollouts. Every flag change
 is audited, and stale flags are surfaced for cleanup automatically. An edge
 network keeps rulesets within 50 milliseconds of users worldwide.
 
+The SDKs
+
+Twelve languages, first-party: JavaScript, TypeScript, Python, Go, Java,
+Kotlin, Swift, Ruby, PHP, C#, Rust, and Elixir. Every SDK evaluates flags
+locally against the streamed ruleset — no network call in the request
+path, no flag service to fall over in your critical path. If the stream
+drops, the SDK serves the last ruleset it saw and reconciles on
+reconnect; a brand-new process falls back to bundled defaults you define.
+Server SDKs stream over SSE; mobile SDKs fetch on foreground and cache,
+tuned for battery and app-store constraints.
+
+Targeting
+
+Rules combine user attributes, cohorts, and percentage rollouts: 1
+percent of free-plan users in Germany, everyone in the beta cohort, 50
+percent of new signups. Percentage bucketing is deterministic per user,
+so ramps are stable across sessions and services — the user who saw the
+feature yesterday sees it today at the same rollout stage. Cohorts sync
+from your data warehouse or build from attributes; entitlement flags can
+mirror your billing plans so plan gating lives in one place.
+
+Audit and hygiene
+
+Every flag change — who, what, when, from which environment — lands in an
+immutable audit log, streamable to your SIEM. Approvals can be required
+per environment, so production ramps need a second pair of eyes while
+staging stays fast. And because flag debt is the tax every adopter pays,
+Shipglass surfaces stale flags automatically: fully ramped for 30 days,
+evaluated but never varying, or referenced in code but never evaluated —
+each with a cleanup pull request generated for supported languages.
+
 Experiments
 
 Any rollout can become an A/B test: attach a metric, and Shipglass computes
 lift with confidence intervals. No separate experimentation stack.
+
+Metrics come from your event stream or warehouse; define a conversion or
+numeric metric once and attach it to any flag. The results view shows
+lift, confidence intervals, and sample-size progress — enough statistics
+to make the call, without a data-science detour. Guardrail metrics watch
+error rates and latency during every ramp, whether or not you call it an
+experiment: a ramp that degrades a guardrail pauses itself and pages the
+flag owner.
 
 Who it's for
 
@@ -29,13 +75,139 @@ Product engineering teams that ship daily. Common first uses: risky
 migrations, tiered entitlements, and gradual mobile rollouts where app-store
 review makes rollback expensive.
 
+The migration pattern: wrap the new database path in a flag, ramp reads
+to 1 percent, compare results in the shadow, ramp to 100, then delete the
+old path — with an instant kill switch the whole way. The entitlement
+pattern: plan tiers as flags, so packaging changes ship without a deploy.
+The mobile pattern: the feature ships dark in the binary, app review
+happens once, and the release ramps server-side over days — when a crash
+spikes, rollback is a toggle, not a resubmission.
+
 Pricing
 
-Free for up to 5 seats. Pro is $12 per seat per month. Enterprise adds SAML,
-custom roles, and a dedicated environment.
+Free — up to 5 seats, unlimited flags, all SDKs, one production
+environment.
+
+Pro — $12 per seat per month: unlimited environments, approvals,
+experiments, stale-flag cleanup, audit log.
+
+Enterprise — adds SAML, custom roles, and a dedicated environment.
+Annual billing; talk to us.
+
+Docs: Get started
+
+1. Create a project and grab an SDK key.
+2. Install the SDK for your stack and wrap your first change in a flag —
+   the five-line snippet is on the setup page.
+3. Ship, then ramp from the dashboard: 1 percent, 10, 50, 100.
+4. Wire your event stream to attach metrics when you are ready for
+   experiments.
+
+Frequently asked
+
+What happens if Shipglass is down? Your app keeps working. Evaluation is
+local; SDKs serve the last streamed ruleset and reconcile when the stream
+returns. The edge network exists so rulesets are never far away — within
+50 milliseconds of users worldwide.
+
+Does local evaluation leak my targeting rules? Server-side rulesets stay
+server-side. Client SDKs receive only evaluated results for the current
+user, not the rule set.
+
+Can we self-host? The dedicated environment on Enterprise is
+single-tenant; fully self-hosted is on the roadmap and honestly not
+close — the edge network is most of the product.
+
+How do you count seats? Humans who log in. Service accounts and CI are
+free.
 
 Company
 
 Shipglass was founded in Denver in 2021. The team of 27 previously built
 release tooling at large consumer-software companies. The homegrown
 alternative — a config table and a prayer — is our favorite competitor.
+
+Founders Casey Morrow and Ben Alvarez ran release engineering where a bad
+Friday deploy meant a weekend, and built the first version of Shipglass
+as the tool they had hacked together twice before at previous employers —
+this time with the evaluation engine, the audit trail, and the cleanup
+story done properly.
+
+The edge network
+
+Rulesets propagate through Shipglass's edge network — points of
+presence on every populated continent, keeping rulesets within 50
+milliseconds of users worldwide. A flag change published in the
+dashboard reaches every connected SDK in under a second globally,
+which is what makes the kill switch a kill switch rather than a
+please-stop request. The edge serves rulesets only; evaluation stays
+in your process, so the request path never waits on us.
+
+Docs: Entitlements without a deploy
+
+The guide walks through modeling plan tiers as flags: a flags-as-
+entitlements namespace, billing-system attributes synced to profiles,
+and plan gates evaluated in the same SDK call as everything else. When
+packaging changes — a feature moves from Enterprise to Pro — the
+change is a targeting edit, audited and approved, live in seconds
+across every service that checks the flag. Includes the pattern for
+grandfathering existing customers with a cohort pin.
+
+Migration playbook
+
+Coming from a homegrown system: point the SDK at both sources, mirror
+your config table into Shipglass flags with the import CLI, and let
+the comparison report show divergence before you cut over. Most teams
+run dual-read for a week, cut over service by service, and delete the
+config table in a month — the audit log and approvals usually retire a
+wiki page and a Slack ritual at the same time. Coming from another
+flag vendor: the import CLI reads common export formats, and
+deterministic bucketing can be seeded to preserve your existing
+rollout assignments so no user flips variants mid-migration.
+
+Changelog — recent highlights
+
+Elixir SDK GA. Guardrail auto-pause for ramps. Stale-flag cleanup PRs
+for Kotlin and Swift. SCIM provisioning for Enterprise. Ruleset
+delivery p99 improvements published on the status page.
+
+From the blog: The config table and the prayer
+
+Every engineering org above fifty people has built a feature-flag system
+by accident: a config table, a cache, a Slack channel where someone asks
+"is it safe to delete this row?" This post is an affectionate autopsy of
+three such systems and the incidents that finally retired them. Our
+most-read piece. Read it.
+
+Also on the blog: Deterministic bucketing across services — how the same
+user lands in the same variant in your web app, your API, and your
+mobile client without coordination.
+
+More from the FAQ
+
+Do flags add latency to our requests? No network call happens in the
+request path — evaluation is local against the streamed ruleset and
+adds well under 1 millisecond.
+
+How do we keep flags from accumulating forever? The stale-flag
+detector plus generated cleanup PRs exist for exactly this; teams
+that review the stale list in their weekly ritual keep flag counts
+flat while shipping more.
+
+Can product managers ramp releases? Yes, within approvals: a PM can
+move a ramp through stages the engineering owner defined, with every
+change audited and reversible.
+
+Recognition
+
+Shipglass's engineering blog — particularly the config-table autopsy
+and the deterministic bucketing writeup — circulates widely among
+platform teams, and the company publishes its edge network's ruleset
+delivery latency openly on the status page. The free tier's unlimited
+flags was a deliberate stance against per-flag pricing, which the
+founders regard as a tax on exactly the discipline flags require.
+
+Careers: SDK engineer (Rust/Elixir), distributed systems engineer (edge),
+product engineer. Denver or remote US.
+
+(c) Shipglass, Inc. — Denver, CO
