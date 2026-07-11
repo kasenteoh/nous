@@ -6,11 +6,12 @@ import {
   it,
   vi,
 } from "vitest";
-import { createSupabaseServerClient } from "@/lib/db";
+import { createSupabaseServerClient, SupabaseConfigError } from "@/lib/db";
 import {
   applyCompanyFilters,
   CATALOG_BAR_OR,
   countCompanies,
+  getAliasTargetSlug,
   getAlsoBackedBy,
   getAlternatives,
   getCompaniesForCompare,
@@ -30,9 +31,12 @@ import {
   type Responder,
 } from "./helpers/mock-supabase";
 
-vi.mock("@/lib/db", () => ({
-  createSupabaseServerClient: vi.fn(),
-}));
+vi.mock("@/lib/db", async (importOriginal) => {
+  // Keep the real SupabaseConfigError so queries.ts's instanceof rethrow
+  // check works against the class the tests (and prod code) throw.
+  const actual = await importOriginal<typeof import("@/lib/db")>();
+  return { ...actual, createSupabaseServerClient: vi.fn() };
+});
 
 const mockedCreate = vi.mocked(createSupabaseServerClient);
 
@@ -779,5 +783,80 @@ describe("getAlsoBackedBy", () => {
     });
     await expect(getAlsoBackedBy(COMPANY)).resolves.toEqual([]);
     expect(mock.buildersFor("investors")).toHaveLength(0);
+  });
+});
+
+// ─── W-C.2: env-missing behavior ──────────────────────────────────────────────
+
+describe("Supabase config failures", () => {
+  it("degrades to empty on a benign not-configured error (secret-free CI/dev)", async () => {
+    mockedCreate.mockImplementation(() => {
+      throw new Error("SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must be set");
+    });
+    await expect(listCompanies({})).resolves.toEqual({ rows: [], total: 0 });
+    await expect(getCompanyBySlug("acme")).resolves.toBeNull();
+  });
+
+  it("rethrows SupabaseConfigError so a Vercel misconfig 500s instead of 404ing", async () => {
+    mockedCreate.mockImplementation(() => {
+      throw new SupabaseConfigError("SUPABASE_URL not set in the Vercel environment");
+    });
+    await expect(listCompanies({})).rejects.toBeInstanceOf(SupabaseConfigError);
+    await expect(getCompanyBySlug("acme")).rejects.toBeInstanceOf(
+      SupabaseConfigError,
+    );
+  });
+});
+
+// ─── W-E.4: slug-alias lookup (permanent redirects for merged-away slugs) ─────
+
+describe("getAliasTargetSlug", () => {
+  it("returns the survivor's current slug for an aliased slug (object embed)", async () => {
+    const mock = useClient(() => ({
+      data: { companies: { slug: "acme" } },
+    }));
+    await expect(getAliasTargetSlug("acme-inc")).resolves.toBe("acme");
+
+    // One single-row query keyed by old_slug, slug embedded via the FK.
+    const [b] = mock.buildersFor("slug_aliases");
+    expect(b.has("select", "companies!company_id(slug)")).toBe(true);
+    expect(b.has("eq", "old_slug", "acme-inc")).toBe(true);
+    expect(b.has("single")).toBe(true);
+    expect(mock.builders).toHaveLength(1);
+  });
+
+  it("normalizes a single-element-array embed (PostgREST cardinality quirk)", async () => {
+    useClient(() => ({ data: { companies: [{ slug: "acme" }] } }));
+    await expect(getAliasTargetSlug("acme-inc")).resolves.toBe("acme");
+  });
+
+  it("returns null on a miss (PGRST116) without logging — the expected 404 path", async () => {
+    useClient(() => ({
+      data: null,
+      error: { message: "JSON object requested, multiple (or no) rows returned", code: "PGRST116" },
+    }));
+    await expect(getAliasTargetSlug("never-existed")).resolves.toBeNull();
+    expect(console.error).not.toHaveBeenCalled();
+  });
+
+  it("returns null and logs on an unexpected error (e.g. table missing pre-0032)", async () => {
+    useClient(() => ({
+      data: null,
+      error: { message: 'relation "slug_aliases" does not exist', code: "42P01" },
+    }));
+    await expect(getAliasTargetSlug("acme-inc")).resolves.toBeNull();
+    expect(console.error).toHaveBeenCalled();
+  });
+
+  it("returns null when the embed dangles (alias row without a resolvable company)", async () => {
+    useClient(() => ({ data: { companies: null } }));
+    await expect(getAliasTargetSlug("acme-inc")).resolves.toBeNull();
+  });
+
+  it("returns null when Supabase is unconfigured (secret-free CI/dev)", async () => {
+    mockedCreate.mockImplementation(() => {
+      throw new Error("SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must be set");
+    });
+    await expect(getAliasTargetSlug("acme-inc")).resolves.toBeNull();
   });
 });

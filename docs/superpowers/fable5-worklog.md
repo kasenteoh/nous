@@ -70,3 +70,63 @@ inherited from the prompt, not a claim about which model wrote the code.
   (workflow now at GitHub's 25-input cap — the next input added must
   displace one); the bounded sweep procedure for the non-US + non-startup
   drains is documented in `docs/runbooks/non-us-and-nonstartup-backfill.md`.
+
+## PR #134 — W-C.3 (pipeline): one aggregator blocklist (merged 2026-07-10)
+
+- `reject_hosts.AGGREGATOR_HOSTS` is now the single blocklist; the DDG copy
+  (`AGGREGATOR_DOMAINS`) and `extract_funding._IMAGE_HOSTS` are gone. New
+  `is_aggregator_host()` carries the one matching implementation; DDG's
+  `is_aggregator()` and `is_aggregator_url()` both delegate. Strictly wider
+  rejection (image/CDN hosts + duckduckgo.com everywhere); drift-guard tests
+  pin every former single-list entry.
+
+## PR #135 — W-A: web test suite (merged 2026-07-10)
+
+- Vitest 4 + RTL 16 (jsdom) scaffolding; 130 tests across format/spotlight/
+  compare-store/local-stores/queries/components/husk; chainable Supabase mock
+  at the `createSupabaseServerClient` seam; `server-only` stubbed via alias.
+- Playwright smoke grew structural cases (full filter querystring, /compare
+  empty states, /api/export 200-CSV-or-deliberate-503 contract) + a
+  data-backed browse→filter→company→compare→CSV journey behind
+  SMOKE_HAS_DATA=1. CI web job now runs `npm run test` between Lint and Build.
+- Zero production-source changes. Breakage drill: disabling the META_LEAK
+  filter fails exactly the 3 leak-guard tests.
+
+## PR #136 — W-E.1: LLM eval golden set + harness (merged 2026-07-10)
+
+- `nous.evals` package + `nous eval-prompts` CLI: offline CI gate replays
+  committed recordings through the runtime parse/validate/normalize path and
+  scores vs hand-checked expected.json against `baseline.json` floors, with a
+  per-metric delta table; live record mode (DEEPSEEK_API_KEY) refreshes
+  recordings. 40 hand-written fixtures (20 per prompt) for
+  company_description + funding_extraction; recordings are
+  provenance:"simulated" until re-recorded live (no local key exists —
+  re-record before/with W-F). Degraded-prompt drill: 4 mangled recordings
+  fail the gate with a readable six-metric delta report.
+
+## PR #137 — W-E.2: prompt_version provenance (merged 2026-07-10)
+
+- `PROMPT_VERSION` constants (scheme `YYYY-MM-DD.N`) in the 5 persisting
+  prompts; hand-written migration 0031 adds 6 nullable TEXT stamps
+  (`companies` × 4 family-scoped, `funding_rounds`, `competitors`); every
+  persisting write path stamps, incl. reconcile-round restamp-on-merge and
+  merge-time gap-fill semantics. NULL = pre-versioning cohort. Unblocks W-F's
+  targeted re-enrichment.
+
+## PR #138 — W-C.2/C.3-web/C.4: web bug sweep (merged 2026-07-10)
+
+- W-C.2: missing/partial Supabase env on Vercel now throws
+  `SupabaseConfigError` (pages 500 loudly) instead of rendering an
+  empty-catalog 404-everywhere site; off-Vercel (secret-free CI, local dev)
+  keeps degrading to empty. All 23 swallow sites collapsed onto one
+  `supabaseOrNull()` rethrowing helper. Deviation from plan: keyed on the
+  `VERCEL` env rather than NODE_ENV/build-phase — simpler, covers build and
+  runtime, zero CI changes.
+- W-C.3 (web): META_LEAK regex now lives once in `lib/competitor-guards.ts`,
+  used by Competitors.tsx and getAlternatives.
+- W-C.4: total-raised = max(stated, sum deduped on (round_type, amount))
+  lives once in `lib/funding.ts`; the OG card and compare table summed
+  naively before (their selects now fetch round_type so the dedup key
+  matches the company-page tile). Helion-style regression tests. 149 web
+  tests total. **W-C is complete** (C.1 #132, C.5/C.6 #133, C.3-pipeline
+  #134, C.2/C.3-web/C.4 #138).

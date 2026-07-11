@@ -5,7 +5,11 @@
 
 import "server-only";
 
-import { createSupabaseServerClient } from "@/lib/db";
+import type { SupabaseClient } from "@supabase/supabase-js";
+
+import { competitorLeaksMeta } from "@/lib/competitor-guards";
+import { createSupabaseServerClient, SupabaseConfigError } from "@/lib/db";
+import { computeTotalRaised } from "@/lib/funding";
 import { buildSpotlightPool, type Spotlight } from "@/lib/spotlight";
 import type {
   AlsoBackedByCompany,
@@ -31,6 +35,23 @@ import type {
   PersonRow,
   RelatedCompany,
 } from "@/lib/types";
+
+/**
+ * The server Supabase client, or null when Supabase is intentionally absent
+ * (secret-free CI, local dev without .env.local) so the caller degrades to
+ * empty results. A SupabaseConfigError — missing/partial env on Vercel, i.e. a
+ * deployment mistake — is rethrown so the page errors loudly instead of
+ * rendering an empty catalog that 404s every company (W-C.2).
+ */
+function supabaseOrNull(label: string): SupabaseClient | null {
+  try {
+    return createSupabaseServerClient();
+  } catch (err) {
+    if (err instanceof SupabaseConfigError) throw err;
+    console.warn(`[${label}] Supabase not configured:`, (err as Error).message);
+    return null;
+  }
+}
 
 // Shape returned by the nested Supabase select on `funding_rounds`. We narrow
 // rather than reach for `any` so the join structure is checked at the boundary.
@@ -248,14 +269,8 @@ export async function listCompanies(
   const limit = opts.limit ?? 30;
   const offset = opts.offset ?? 0;
 
-  let supabase: ReturnType<typeof createSupabaseServerClient>;
-  try {
-    supabase = createSupabaseServerClient();
-  } catch (err) {
-    // Missing env vars — expected during build-time prerender or local dev without .env.local.
-    console.warn("[listCompanies] Supabase not configured:", (err as Error).message);
-    return { rows: [], total: 0 };
-  }
+  const supabase = supabaseOrNull("listCompanies");
+  if (!supabase) return { rows: [], total: 0 };
 
   // `count: "exact"` makes PostgREST return the total matching the filters
   // (ignoring `.range()`), so we get rows + total in a single round trip.
@@ -458,16 +473,8 @@ export async function listDiscoveredViaValues(): Promise<string[]> {
 export async function searchHuskFallback(
   term: string,
 ): Promise<HuskFallbackRow[]> {
-  let supabase: ReturnType<typeof createSupabaseServerClient>;
-  try {
-    supabase = createSupabaseServerClient();
-  } catch (err) {
-    console.warn(
-      "[searchHuskFallback] Supabase not configured:",
-      (err as Error).message,
-    );
-    return [];
-  }
+  const supabase = supabaseOrNull("searchHuskFallback");
+  if (!supabase) return [];
 
   const safe = sanitizeIlikeTerm(term);
   if (!safe) return [];
@@ -514,16 +521,8 @@ interface NestedFundingCompany {
 export async function listRecentFundings(
   limit = 5,
 ): Promise<RecentFundingRow[]> {
-  let supabase: ReturnType<typeof createSupabaseServerClient>;
-  try {
-    supabase = createSupabaseServerClient();
-  } catch (err) {
-    console.warn(
-      "[listRecentFundings] Supabase not configured:",
-      (err as Error).message,
-    );
-    return [];
-  }
+  const supabase = supabaseOrNull("listRecentFundings");
+  if (!supabase) return [];
 
   const { data, error } = await supabase
     .from("funding_rounds")
@@ -574,16 +573,8 @@ export interface NewCompanyRow {
  * falling back to name-only rows to fill the requested count (spec §2).
  */
 export async function listNewestCompanies(limit = 4): Promise<NewCompanyRow[]> {
-  let supabase: ReturnType<typeof createSupabaseServerClient>;
-  try {
-    supabase = createSupabaseServerClient();
-  } catch (err) {
-    console.warn(
-      "[listNewestCompanies] Supabase not configured:",
-      (err as Error).message,
-    );
-    return [];
-  }
+  const supabase = supabaseOrNull("listNewestCompanies");
+  if (!supabase) return [];
 
   // Over-fetch so described companies can be preferred without a second query.
   const { data, error } = await supabase
@@ -643,16 +634,8 @@ export async function getIndustrySummary(topN = 6): Promise<IndustrySummary> {
 
 /** Exact number of companies in the index (head-only count). */
 export async function countCompanies(): Promise<number> {
-  let supabase: ReturnType<typeof createSupabaseServerClient>;
-  try {
-    supabase = createSupabaseServerClient();
-  } catch (err) {
-    console.warn(
-      "[countCompanies] Supabase not configured:",
-      (err as Error).message,
-    );
-    return 0;
-  }
+  const supabase = supabaseOrNull("countCompanies");
+  if (!supabase) return 0;
 
   const { count, error } = await supabase
     .from("companies")
@@ -673,16 +656,8 @@ export async function countCompanies(): Promise<number> {
  * request). Returns null when the index is empty.
  */
 export async function getRandomCompanySlug(): Promise<string | null> {
-  let supabase: ReturnType<typeof createSupabaseServerClient>;
-  try {
-    supabase = createSupabaseServerClient();
-  } catch (err) {
-    console.warn(
-      "[getRandomCompanySlug] Supabase not configured:",
-      (err as Error).message,
-    );
-    return null;
-  }
+  const supabase = supabaseOrNull("getRandomCompanySlug");
+  if (!supabase) return null;
 
   const { count, error: countError } = await supabase
     .from("companies")
@@ -762,13 +737,8 @@ async function scanTable(
   notNullColumn?: string,
   catalogOnly = false,
 ): Promise<TableScanResult> {
-  let supabase: ReturnType<typeof createSupabaseServerClient>;
-  try {
-    supabase = createSupabaseServerClient();
-  } catch (err) {
-    console.warn(`[${label}] Supabase not configured:`, (err as Error).message);
-    return { rows: [], ok: false };
-  }
+  const supabase = supabaseOrNull(label);
+  if (!supabase) return { rows: [], ok: false };
 
   const pageSize = 1000;
   const maxPages = 50; // 50k rows — Google's per-sitemap URL cap.
@@ -875,7 +845,7 @@ export interface CompanyOgData {
  * Lean fetch for app/c/[slug]/opengraph-image.tsx — deliberately not
  * getCompanyBySlug, which fans out into five queries the card doesn't need.
  * One query: the company row (including the stated total_raised_* columns)
- * with its rounds' amounts embedded (`funding_rounds(amount_raised)`);
+ * with its rounds' types+amounts embedded (`funding_rounds(round_type, amount_raised)`);
  * max(stated, sum) computed in-process.
  * Returns null when the slug is unknown (caller falls back to the site card).
  * Missing/empty rounds degrade to totalRaised = 0 — the card still renders,
@@ -886,21 +856,13 @@ export interface CompanyOgData {
 export async function getCompanyOgData(
   slug: string,
 ): Promise<CompanyOgData | null> {
-  let supabase: ReturnType<typeof createSupabaseServerClient>;
-  try {
-    supabase = createSupabaseServerClient();
-  } catch (err) {
-    console.warn(
-      "[getCompanyOgData] Supabase not configured:",
-      (err as Error).message,
-    );
-    return null;
-  }
+  const supabase = supabaseOrNull("getCompanyOgData");
+  if (!supabase) return null;
 
   const { data: company, error: companyError } = await supabase
     .from("companies")
     .select(
-      "name, industry_group, exclusion_reason, total_raised_usd, funding_rounds(amount_raised)",
+      "name, industry_group, exclusion_reason, total_raised_usd, funding_rounds(round_type, amount_raised)",
     )
     .eq("slug", slug)
     .single();
@@ -926,8 +888,8 @@ export async function getCompanyOgData(
     industry_group: string | null;
     total_raised_usd: number | null;
     funding_rounds:
-      | { amount_raised: number | null }[]
-      | { amount_raised: number | null }
+      | { round_type: string | null; amount_raised: number | null }[]
+      | { round_type: string | null; amount_raised: number | null }
       | null;
   };
 
@@ -940,17 +902,56 @@ export async function getCompanyOgData(
       ? [roundsRaw]
       : [];
 
-  const computedTotal = rounds.reduce<number>((acc, r) => {
-    return r.amount_raised != null ? acc + Number(r.amount_raised) : acc;
-  }, 0);
-  const statedTotal =
-    row.total_raised_usd != null ? Number(row.total_raised_usd) : 0;
-
   return {
     name: row.name,
     industry_group: row.industry_group ?? null,
-    totalRaised: Math.max(statedTotal, computedTotal),
+    totalRaised: computeTotalRaised(row.total_raised_usd, rounds).total,
   };
+}
+
+/**
+ * Survivor slug for a dead (merged-away) company slug, or null when no alias
+ * exists. Dedup merges DELETE the loser row but record its slug in
+ * slug_aliases (migration 0032) so inbound links keep working: the /c/[slug]
+ * and /alternatives/[slug] pages consult this ONLY on their miss path — a live
+ * slug resolves via its own query first, so valid pages pay zero extra
+ * queries and a live slug always shadows a stale alias.
+ *
+ * One query: the alias row keyed by old_slug with the survivor's CURRENT slug
+ * embedded through the company_id FK (aliases store the id, not a slug copy,
+ * so later merges/renames can't leave a redirect pointing at a second dead
+ * slug). Returns null on missing env, unknown slug (PGRST116), or a dangling
+ * embed — callers then fall through to notFound() exactly as before. Until
+ * migration 0032 reaches prod, the select 400s (unknown table) and lands on
+ * the same null path, so the pages degrade to today's plain 404.
+ */
+export async function getAliasTargetSlug(slug: string): Promise<string | null> {
+  const supabase = supabaseOrNull("getAliasTargetSlug");
+  if (!supabase) return null;
+
+  const { data, error } = await supabase
+    .from("slug_aliases")
+    .select("companies!company_id(slug)")
+    .eq("old_slug", slug)
+    .single();
+
+  if (error || !data) {
+    if (error?.code !== "PGRST116") {
+      // PGRST116 = "no rows" — the expected miss; anything else is unexpected.
+      console.error("[getAliasTargetSlug] query failed:", error?.message);
+    }
+    return null;
+  }
+
+  // PostgREST may hand the embed back as an object or a single-element array;
+  // normalize (same idiom as every other embed in this file).
+  const row = data as unknown as {
+    companies: { slug: string | null } | { slug: string | null }[] | null;
+  };
+  const company = Array.isArray(row.companies)
+    ? row.companies[0]
+    : row.companies;
+  return company?.slug ?? null;
 }
 
 /**
@@ -965,14 +966,8 @@ export async function getCompanyOgData(
 export async function getCompanyBySlug(
   slug: string,
 ): Promise<CompanyDetail | null> {
-  let supabase: ReturnType<typeof createSupabaseServerClient>;
-  try {
-    supabase = createSupabaseServerClient();
-  } catch (err) {
-    // Missing env vars — expected during build-time prerender or local dev without .env.local.
-    console.warn("[getCompanyBySlug] Supabase not configured:", (err as Error).message);
-    return null;
-  }
+  const supabase = supabaseOrNull("getCompanyBySlug");
+  if (!supabase) return null;
 
   // 1. Fetch company row.
   const { data: company, error: companyError } = await supabase
@@ -1158,8 +1153,6 @@ export async function getCompanyBySlug(
  * threshold or the JSON-LD list. Keep this pattern in sync with the copy in
  * components/Competitors.tsx (the canonical display-side guard).
  */
-const COMPETITOR_META_LEAK =
-  /should be dropped|for evaluation|temporar|placeholder|do not (include|display|show)|not a (real )?competitor/i;
 
 /**
  * Shape returned by the nested competitor → resolved-company select used by
@@ -1196,7 +1189,7 @@ type AlternativesCompetitorJoin = CompetitorRow & {
  * Mirrors the competitor fetch in {@link getCompanyBySlug} but selects the full
  * card projection on the resolved company. Both lists are ordered by competitor
  * `rank` ascending (1 = most relevant). Meta-leak rows are filtered out (see
- * {@link COMPETITOR_META_LEAK}). Returns null when the slug is unknown or the
+ * {@link competitorLeaksMeta}). Returns null when the slug is unknown or the
  * company is excluded (the page then 404s) — note an *empty* competitor set is
  * still a non-null result, so the page can render a graceful "no alternatives
  * yet" state rather than a 404.
@@ -1204,16 +1197,8 @@ type AlternativesCompetitorJoin = CompetitorRow & {
 export async function getAlternatives(
   slug: string,
 ): Promise<AlternativesData | null> {
-  let supabase: ReturnType<typeof createSupabaseServerClient>;
-  try {
-    supabase = createSupabaseServerClient();
-  } catch (err) {
-    console.warn(
-      "[getAlternatives] Supabase not configured:",
-      (err as Error).message,
-    );
-    return null;
-  }
+  const supabase = supabaseOrNull("getAlternatives");
+  if (!supabase) return null;
 
   // 1. Subject company — only the fields the page header + metadata need.
   const { data: company, error: companyError } = await supabase
@@ -1273,8 +1258,7 @@ export async function getAlternatives(
     // Same display-side guard as the Competitors component: never surface a row
     // whose stored reasoning/description is leaked model scratch-text.
     if (
-      COMPETITOR_META_LEAK.test(row.reasoning ?? "") ||
-      COMPETITOR_META_LEAK.test(row.description ?? "")
+      competitorLeaksMeta(row)
     ) {
       continue;
     }
@@ -1344,16 +1328,8 @@ export async function getAlternatives(
 export async function getRelatedCompanies(
   companyId: string,
 ): Promise<RelatedCompany[]> {
-  let supabase: ReturnType<typeof createSupabaseServerClient>;
-  try {
-    supabase = createSupabaseServerClient();
-  } catch (err) {
-    console.warn(
-      "[getRelatedCompanies] Supabase not configured:",
-      (err as Error).message,
-    );
-    return [];
-  }
+  const supabase = supabaseOrNull("getRelatedCompanies");
+  if (!supabase) return [];
 
   const { data, error } = await supabase
     .from("company_relationships")
@@ -1429,16 +1405,8 @@ const ALSO_BACKED_BY_LIMIT = 8;
 export async function getAlsoBackedBy(
   companyId: string,
 ): Promise<AlsoBackedByCompany[]> {
-  let supabase: ReturnType<typeof createSupabaseServerClient>;
-  try {
-    supabase = createSupabaseServerClient();
-  } catch (err) {
-    console.warn(
-      "[getAlsoBackedBy] Supabase not configured:",
-      (err as Error).message,
-    );
-    return [];
-  }
+  const supabase = supabaseOrNull("getAlsoBackedBy");
+  if (!supabase) return [];
 
   // Step 1: UNION company_investors + funding_round_investors for this company.
   // PostgREST has no UNION primitive — run both queries in parallel and merge.
@@ -1772,16 +1740,8 @@ const MIN_ALTERNATIVES_COMPETITOR_COUNT = 3;
  * mid-scan failure so the sitemap caller falls back to omitting these entries.
  */
 async function countCompetitorsByCompany(): Promise<Map<string, number> | null> {
-  let supabase: ReturnType<typeof createSupabaseServerClient>;
-  try {
-    supabase = createSupabaseServerClient();
-  } catch (err) {
-    console.warn(
-      "[countCompetitorsByCompany] Supabase not configured:",
-      (err as Error).message,
-    );
-    return null;
-  }
+  const supabase = supabaseOrNull("countCompetitorsByCompany");
+  if (!supabase) return null;
 
   const pageSize = 1000;
   const maxPages = 200; // up to 200k competitor rows — far above current scale.
@@ -1838,16 +1798,8 @@ export async function listAlternativesCompanySlugs(): Promise<CompanySlugRow[]> 
     .map(([id]) => id);
   if (qualifyingIds.length === 0) return [];
 
-  let supabase: ReturnType<typeof createSupabaseServerClient>;
-  try {
-    supabase = createSupabaseServerClient();
-  } catch (err) {
-    console.warn(
-      "[listAlternativesCompanySlugs] Supabase not configured:",
-      (err as Error).message,
-    );
-    return [];
-  }
+  const supabase = supabaseOrNull("listAlternativesCompanySlugs");
+  if (!supabase) return [];
 
   // Resolve ids → slugs in chunks so a large `.in(...)` list stays well under
   // any URL/length limits, applying the same exclusion + catalog bar as the
@@ -1916,16 +1868,8 @@ export async function listNewThisWeekCompanies(
   days = 7,
   cap = 200,
 ): Promise<NewThisWeekCompanyRow[]> {
-  let supabase: ReturnType<typeof createSupabaseServerClient>;
-  try {
-    supabase = createSupabaseServerClient();
-  } catch (err) {
-    console.warn(
-      "[listNewThisWeekCompanies] Supabase not configured:",
-      (err as Error).message,
-    );
-    return [];
-  }
+  const supabase = supabaseOrNull("listNewThisWeekCompanies");
+  if (!supabase) return [];
 
   const cutoff = new Date(Date.now() - days * 86400e3).toISOString();
 
@@ -1962,16 +1906,8 @@ export async function listNewThisWeekFundingRounds(
   days = 7,
   cap = 200,
 ): Promise<NewThisWeekFundingRow[]> {
-  let supabase: ReturnType<typeof createSupabaseServerClient>;
-  try {
-    supabase = createSupabaseServerClient();
-  } catch (err) {
-    console.warn(
-      "[listNewThisWeekFundingRounds] Supabase not configured:",
-      (err as Error).message,
-    );
-    return [];
-  }
+  const supabase = supabaseOrNull("listNewThisWeekFundingRounds");
+  if (!supabase) return [];
 
   const cutoff = new Date(Date.now() - days * 86400e3).toISOString();
 
@@ -2023,16 +1959,8 @@ export async function listNewThisWeekFundingRounds(
  * gracefully.
  */
 export async function countNewThisWeek(days = 7): Promise<NewThisWeekCounts> {
-  let supabase: ReturnType<typeof createSupabaseServerClient>;
-  try {
-    supabase = createSupabaseServerClient();
-  } catch (err) {
-    console.warn(
-      "[countNewThisWeek] Supabase not configured:",
-      (err as Error).message,
-    );
-    return { companies: 0, rounds: 0 };
-  }
+  const supabase = supabaseOrNull("countNewThisWeek");
+  if (!supabase) return { companies: 0, rounds: 0 };
 
   const cutoff = new Date(Date.now() - days * 86400e3).toISOString();
 
@@ -2100,13 +2028,8 @@ export async function listInvestors(
   const limit = opts.limit ?? 30;
   const offset = opts.offset ?? 0;
 
-  let supabase: ReturnType<typeof createSupabaseServerClient>;
-  try {
-    supabase = createSupabaseServerClient();
-  } catch (err) {
-    console.warn("[listInvestors] Supabase not configured:", (err as Error).message);
-    return { rows: [], total: 0 };
-  }
+  const supabase = supabaseOrNull("listInvestors");
+  if (!supabase) return { rows: [], total: 0 };
 
   const { data, error, count } = await supabase
     .from("investors")
@@ -2170,16 +2093,8 @@ export async function getInvestorBySlug(
   slug: string,
   opts: InvestorPortfolioPage = {},
 ): Promise<InvestorDetail | null> {
-  let supabase: ReturnType<typeof createSupabaseServerClient>;
-  try {
-    supabase = createSupabaseServerClient();
-  } catch (err) {
-    console.warn(
-      "[getInvestorBySlug] Supabase not configured:",
-      (err as Error).message,
-    );
-    return null;
-  }
+  const supabase = supabaseOrNull("getInvestorBySlug");
+  if (!supabase) return null;
 
   // 1. The investor row. `portfolio_count` is the denormalized count from
   // migration 0025 — used in the header to match the /investors index.
@@ -2459,13 +2374,8 @@ export async function listAllInvestorSlugs(): Promise<InvestorSlugRow[]> {
 
 /** Exact number of investors in the index (head-only count). */
 export async function countInvestors(): Promise<number> {
-  let supabase: ReturnType<typeof createSupabaseServerClient>;
-  try {
-    supabase = createSupabaseServerClient();
-  } catch (err) {
-    console.warn("[countInvestors] Supabase not configured:", (err as Error).message);
-    return 0;
-  }
+  const supabase = supabaseOrNull("countInvestors");
+  if (!supabase) return 0;
 
   const { count, error } = await supabase
     .from("investors")
@@ -2505,16 +2415,8 @@ export interface CoverageStats {
 }
 
 export async function getCoverageStats(): Promise<CoverageStats> {
-  let supabase: ReturnType<typeof createSupabaseServerClient>;
-  try {
-    supabase = createSupabaseServerClient();
-  } catch (err) {
-    console.warn(
-      "[getCoverageStats] Supabase not configured:",
-      (err as Error).message,
-    );
-    return { shown: 0, withFunding: 0, asOf: null };
-  }
+  const supabase = supabaseOrNull("getCoverageStats");
+  if (!supabase) return { shown: 0, withFunding: 0, asOf: null };
 
   const [shownResult, fundedResult, asOfResult] = await Promise.all([
     supabase
@@ -2624,16 +2526,8 @@ export async function getCompaniesForCompare(
   const wanted = slugs.filter((s) => typeof s === "string" && s.length > 0);
   if (wanted.length === 0) return [];
 
-  let supabase: ReturnType<typeof createSupabaseServerClient>;
-  try {
-    supabase = createSupabaseServerClient();
-  } catch (err) {
-    console.warn(
-      "[getCompaniesForCompare] Supabase not configured:",
-      (err as Error).message,
-    );
-    return [];
-  }
+  const supabase = supabaseOrNull("getCompaniesForCompare");
+  if (!supabase) return [];
 
   const { data, error } = await supabase
     .from("companies")
@@ -2642,7 +2536,7 @@ export async function getCompaniesForCompare(
         "year_incorporated, employee_count_min, employee_count_max, " +
         "total_raised_usd, funding_round_count, latest_round_type, " +
         "latest_round_amount, latest_round_date, exclusion_reason, " +
-        "funding_rounds(amount_raised, funding_round_investors(investors(name))), " +
+        "funding_rounds(round_type, amount_raised, funding_round_investors(investors(name))), " +
         "company_investors(investors(name)), " +
         "competitors(competitor_name, rank)",
     )
@@ -2675,6 +2569,7 @@ export async function getCompaniesForCompare(
     exclusion_reason?: string | null;
     funding_rounds:
       | {
+          round_type: string | null;
           amount_raised: number | null;
           funding_round_investors: NameJoin[] | null;
         }[]
@@ -2688,13 +2583,7 @@ export async function getCompaniesForCompare(
     if (!row.slug || !row.name || row.exclusion_reason) continue;
 
     const rounds = row.funding_rounds ?? [];
-    const computedTotal = rounds.reduce<number>(
-      (acc, r) => (r.amount_raised != null ? acc + Number(r.amount_raised) : acc),
-      0,
-    );
-    const statedTotal =
-      row.total_raised_usd != null ? Number(row.total_raised_usd) : 0;
-    const totalRaised = Math.max(statedTotal, computedTotal);
+    const totalRaised = computeTotalRaised(row.total_raised_usd, rounds).total;
 
     // Distinct investor names from BOTH the company-level link and round-level
     // links (a NameJoin's investors may be object or single-element array).
@@ -2766,16 +2655,8 @@ const CO_INVESTOR_LIMIT = 8;
  * Returns [] on missing env, any error, or when this investor shares no round.
  */
 export async function getCoInvestors(slug: string): Promise<CoInvestor[]> {
-  let supabase: ReturnType<typeof createSupabaseServerClient>;
-  try {
-    supabase = createSupabaseServerClient();
-  } catch (err) {
-    console.warn(
-      "[getCoInvestors] Supabase not configured:",
-      (err as Error).message,
-    );
-    return [];
-  }
+  const supabase = supabaseOrNull("getCoInvestors");
+  if (!supabase) return [];
 
   // Resolve the investor slug → id.
   const { data: investor, error: investorError } = await supabase

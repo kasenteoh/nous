@@ -25,8 +25,12 @@ from nous.db.models import (
     NewsArticle,
     Person,
     RawPage,
+    SlugAlias,
 )
 from nous.llm.prompts.company_description import PersonExtraction
+from nous.llm.prompts.funding_extraction import (
+    PROMPT_VERSION as FUNDING_PROMPT_VERSION,
+)
 from nous.llm.prompts.funding_extraction import FundingExtraction
 from nous.util.investor_name import (
     canonicalize_investor_name,
@@ -358,6 +362,9 @@ def _merge_extraction_into_round(
       downgrade.
     - primary_news_url: untouched — first-write-wins (the earliest attribution
       is the most stable reference).
+    - prompt_version: last-writer-wins — the row now reflects (at least partly)
+      THIS extraction, so the stamp is refreshed to the current
+      funding_extraction.PROMPT_VERSION along with the data.
 
     The amount-match path can pair a null-typed survivor with a typed extraction
     (or vice versa), so round_type is upgraded here rather than only gap-filled
@@ -379,6 +386,7 @@ def _merge_extraction_into_round(
     if _is_more_confident(extraction.confidence, existing.extraction_confidence):
         existing.extraction_confidence = extraction.confidence
     # primary_news_url: first-write-wins; do not overwrite.
+    existing.prompt_version = FUNDING_PROMPT_VERSION
 
 
 async def refresh_funding_round_count(
@@ -512,6 +520,7 @@ async def reconcile_funding_round(
             announced_date=None,
             primary_news_url=primary_news_url,
             extraction_confidence=extraction.confidence,
+            prompt_version=FUNDING_PROMPT_VERSION,
         )
         session.add(new_round)
         await session.flush()
@@ -573,6 +582,7 @@ async def reconcile_funding_round(
         announced_date=extraction.announced_date,
         primary_news_url=primary_news_url,
         extraction_confidence=extraction.confidence,
+        prompt_version=FUNDING_PROMPT_VERSION,
     )
     session.add(new_round)
     await session.flush()
@@ -759,6 +769,13 @@ _MERGE_FILL_COLUMNS: tuple[str, ...] = (
     "year_incorporated",
     "last_enriched_at",
     "last_enriched_payload",
+    # Prompt-provenance stamps travel with their content columns: the survivor
+    # takes the loser's stamp only when its own is NULL, mirroring how the
+    # enrichment fields / hq_country above gap-fill. eligibility_ and
+    # funding_prompt_version are deliberately absent — their content columns
+    # (exclusion_*, status, total_raised_*) do not gap-fill on merge either.
+    "enrichment_prompt_version",
+    "hq_country_prompt_version",
     "website_resolved_at",
 )
 
@@ -795,6 +812,18 @@ async def find_company_by_domain(
     return None
 
 
+def _should_record_slug_alias(loser_slug: str, survivor_slug: str) -> bool:
+    """True when the dying ``loser_slug`` should be recorded as an alias of the
+    survivor.
+
+    A slug equal to the survivor's own live slug is never recorded —
+    ``companies.slug`` is UNIQUE so two live rows can't share one, but keeping
+    the guard explicit makes the invariant local and load-bearing (a self-alias
+    would redirect a page to itself).
+    """
+    return loser_slug != survivor_slug
+
+
 async def merge_companies(
     session: AsyncSession, *, survivor_id: UUID, loser_id: UUID
 ) -> None:
@@ -823,6 +852,11 @@ async def merge_companies(
     - **company_relationships** — derived edges: drop every edge touching the
       loser (either direction); derive-relationships rebuilds the survivor's set
       on its next run (it follows dedup in discovery.yml).
+    - **slug_aliases** — the loser's slug is recorded as a permanent redirect
+      to the survivor, and aliases that pointed at the loser are repointed to
+      the survivor BEFORE the delete (the CASCADE would destroy the chain), so
+      A→B then B→C converges to both a and b aliasing C. Upsert on old_slug;
+      the survivor's own slug is never recorded.
 
     The survivor's NULL scalar/array/jsonb fields are then filled from the loser
     (see :data:`_MERGE_FILL_COLUMNS`) — a one-directional "fill the gaps" so we
@@ -984,6 +1018,38 @@ async def merge_companies(
             if loser_value is not None:
                 setattr(survivor, column, loser_value)
     session.add(survivor)
+
+    # --- slug_aliases: the loser's slug lives on as a permanent redirect ----
+    # Repoint the loser's existing aliases BEFORE the delete below. The FK is
+    # ON DELETE CASCADE, so leaving them to the cascade would silently destroy
+    # alias chains: merging A→B recorded (a → B); merging B→C must leave
+    # (a → C), not nothing.
+    await session.execute(
+        update(SlugAlias)
+        .where(SlugAlias.company_id == loser_id)
+        .values(company_id=survivor_id)
+    )
+    # A repointed alias may now shadow the survivor's own live slug (its
+    # old_slug was freed by an earlier merge, then reissued to the company
+    # that became this survivor). A company's current slug is never an alias —
+    # the web layer only consults aliases on a live-slug miss, so such a row
+    # could never fire, but a self-redirect must not exist even latently.
+    await session.execute(
+        delete(SlugAlias).where(SlugAlias.old_slug == survivor.slug)
+    )
+    # Record the dying slug. ON CONFLICT (old_slug) DO UPDATE — not DO
+    # NOTHING — so a slug that was freed, reissued, and merged again re-targets
+    # to the newest survivor, and replaying a merge converges instead of
+    # erroring. The guard never records the survivor's own slug.
+    if _should_record_slug_alias(loser.slug, survivor.slug):
+        await session.execute(
+            pg_insert(SlugAlias)
+            .values(old_slug=loser.slug, company_id=survivor_id)
+            .on_conflict_do_update(
+                index_elements=["old_slug"],
+                set_={"company_id": survivor_id, "updated_at": func.now()},
+            )
+        )
 
     # --- delete the loser ---------------------------------------------------
     # Flush first so the FK repoints above are visible to the delete; the loser

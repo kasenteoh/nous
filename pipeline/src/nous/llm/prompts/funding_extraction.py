@@ -23,6 +23,14 @@ from pydantic import BaseModel, Field
 
 from nous.llm.client import MAX_PROMPT_INPUT_CHARS
 
+# Version stamped onto rows whose content this prompt produced (funding_rounds
+# rows and companies status/total-raised fields via extract-funding). Covers
+# BOTH templates in this module (article + website fallback) — they share the
+# schema and evolve together. Scheme: "<date>.<same-day-counter>". Bump on ANY
+# semantic change to either template or the schema — even a wording tweak — so
+# data from a bad revision can be found and re-run.
+PROMPT_VERSION: str = "2026-07-10.1"
+
 # News articles are usually well under the shared ceiling, but we truncate
 # defensively so a malformed scrape can't blow the prompt budget.
 # Uses the shared MAX_PROMPT_INPUT_CHARS ceiling (32_000).
