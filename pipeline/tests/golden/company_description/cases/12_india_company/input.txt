@@ -1,0 +1,21 @@
+Kaveri Cloud — Cut your cloud bill, keep your speed
+
+Kaveri Cloud helps engineering teams reduce cloud spend without slowing down. Our
+platform connects to your AWS, GCP, or Azure accounts, builds a live map of what every
+service costs, and recommends rightsizing, scheduling, and commitment purchases that
+typically cut bills by 25-40%.
+
+Autopilot savings
+
+Turn on Autopilot and Kaveri Cloud executes approved optimizations for you: idle
+resources are parked on nights and weekends, oversized instances are stepped down
+gradually, and savings plans are purchased against forecasted usage.
+
+Engineering-first
+
+Unlike finance-oriented tools, Kaveri Cloud speaks in services and deployments, not
+just invoices. Slack alerts tell the owning team when a deploy doubles a service's
+burn rate.
+
+Founded in 2021, Kaveri Cloud is headquartered in Bangalore with customers across
+India, Southeast Asia, and the US. We are backed by leading early-stage investors.

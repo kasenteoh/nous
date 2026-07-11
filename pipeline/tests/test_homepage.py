@@ -13,11 +13,11 @@ from pathlib import Path
 import httpx
 import pytest
 
+from nous.sources._http import _is_retryable
 from nous.sources.homepage import (
     FetchResult,
     HomepageClient,
     RobotsBlockedError,
-    _is_retryable,
     resolve_homepage,
 )
 from nous.util.ssrf import BlockedAddressError

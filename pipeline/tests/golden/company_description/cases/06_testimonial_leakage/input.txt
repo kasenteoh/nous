@@ -1,0 +1,30 @@
+Shipstream — freight visibility software for modern logistics teams
+
+Shipstream tracks every shipment across ocean, air, and road in one dashboard. We pull
+live signals from carriers, ports, and telematics providers, normalize them, and give
+operations teams accurate ETAs with automated exception alerts when a container slips.
+
+Why teams choose Shipstream
+
+Predictive ETAs: our models flag delays days before the carrier updates its status.
+Exception workflows: route a late shipment to the right owner automatically.
+Customer portal: give shippers a live tracking page without email back-and-forth.
+
+What our customers say
+
+"Shipstream cut our check-call volume in half within a quarter."
+— Tiffany Jones, Co-Founder, COO, Palletworks
+
+"We finally stopped managing freight in spreadsheets."
+— Nancey Harris, Co-Founder, COO, Coastal Cargo Co.
+
+"The exception alerts alone paid for the product."
+— Wendy Webster, Co-Founder, COO, Meridian Freight
+
+Leadership
+
+Omar Haddad, Co-founder & CEO — former director of operations technology at a national
+freight brokerage.
+Lena Fischer, Co-founder & CTO — previously built tracking systems for a parcel carrier.
+
+Founded in 2019. Headquartered in Oakland, CA. Backed by leading logistics investors.

@@ -1,0 +1,23 @@
+{
+  "provenance": "simulated",
+  "model": null,
+  "recorded_at": null,
+  "response": {
+    "round_type": null,
+    "amount_raised_usd": 95000000,
+    "valuation_post_money_usd": 1200000000,
+    "valuation_source": null,
+    "announced_date": null,
+    "lead_investors": [
+      "Halcyon Growth"
+    ],
+    "other_investors": [
+      "Bay Laurel Capital"
+    ],
+    "status_event": null,
+    "status_confidence": null,
+    "total_raised_usd": null,
+    "is_funding_announcement": true,
+    "confidence": "high"
+  }
+}

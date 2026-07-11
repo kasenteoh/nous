@@ -4,15 +4,30 @@
 **Status:** Pre-implementation
 **Audience:** Claude Code, for decomposition into discrete coding tasks
 
-> **⚠️ Outdated: SEC Form D ingestion removed.** As of 2026-06, nous no longer
-> ingests SEC Form D filings. Company discovery now runs entirely off VC
-> portfolio scrapes and funding news (TechCrunch + Google News); funding,
-> valuation, and competitor data come from news + LLM enrichment. The
-> `filings` / `related_persons` tables, the `companies.cik` column, and the
-> `ingest-filings` stage have all been dropped. Sections below that describe
-> Form D as the "primary spine" (notably §1.1, §1.2, §3.1, §5.1, and the M1
-> milestone) are retained as historical context and are pending a rewrite of
-> the discovery architecture.
+> **⚠️ Current state (2026-07) — read this before any section below.** This
+> spec is the original design document; several load-bearing decisions have
+> since changed. The dated sections are retained as historical context — do
+> not implement from them without checking here first:
+>
+> - **Discovery spine:** SEC Form D ingestion was removed (2026-06). Discovery
+>   runs entirely off VC portfolio scrapes (13 firms) and funding news
+>   (TechCrunch, SiliconANGLE, PR Newswire, Crunchbase News + per-company
+>   Google News RSS). The `filings` / `related_persons` tables, the
+>   `companies.cik` column, and the `ingest-filings` stage are gone. Sections
+>   describing Form D as the "primary spine" (§1.1, §1.2, §3.1, §5.1, M1) are
+>   historical.
+> - **LLM:** all enrichment/extraction runs on **DeepSeek** (`deepseek-chat`,
+>   OpenAI-compatible API, paid) — it replaced Gemini, whose free tier (20
+>   RPD) could not support bulk enrichment. This is the one standing exception
+>   to the "free tiers only" rule (§1.1 goal 4, §3 table).
+> - **Cadence:** the pipeline is no longer weekly-only (§1.1 goal 3):
+>   `pipeline.yml` runs every 3 hours (news/funding/enrichment) and
+>   `discovery.yml` weekly (portfolio refresh, dedup, competitors, employees).
+> - **Migrations:** written by hand, never `--autogenerate` (it drops the
+>   trigram/partial/unique indexes it can't model).
+> - The authoritative list of stages and how they're scheduled lives in
+>   `README.md` ("Pipeline stages" / "How it runs"); working conventions live
+>   in `CLAUDE.md`.
 
 ---
 

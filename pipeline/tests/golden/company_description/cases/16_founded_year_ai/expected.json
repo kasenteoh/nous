@@ -1,0 +1,22 @@
+{
+  "description_short": "Tensorforge AI is a platform for fine-tuning and serving open-weight language models, with deployments that run in the customer's own cloud account.",
+  "description_long": "Tensorforge AI lets teams train, fine-tune, and serve open-weight language models: bring data, pick a base model, and get a deployed endpoint with autoscaling, observability, and cost controls. Weights, adapters, and training data stay under the customer's control, and every run is reproducible from a config file.\n\nManaged clusters schedule training across spot GPUs and inference servers batch and cache automatically; the company says serving costs drop by half versus generic GPU rentals. Founded in 2022 and headquartered in Seattle, WA, it serves customers in healthcare, finance, and developer tooling.",
+  "primary_category": "AI infrastructure",
+  "tags": [
+    "ai",
+    "llm",
+    "fine-tuning",
+    "inference",
+    "mlops",
+    "gpu"
+  ],
+  "people": [],
+  "hq_city": "Seattle",
+  "hq_state": "WA",
+  "industry": "AI infrastructure",
+  "website_state": "ok",
+  "is_startup": true,
+  "not_startup_reason": null,
+  "founded_year": 2022,
+  "hq_country": "US"
+}

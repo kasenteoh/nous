@@ -1,0 +1,5 @@
+{
+  "company_name": "Atlas Relay",
+  "variant": "default",
+  "notes": "People extraction: only founders/C-level should be listed. Recorded response includes a VP of Engineering \u2014 plausible over-extraction, people precision < 1."
+}

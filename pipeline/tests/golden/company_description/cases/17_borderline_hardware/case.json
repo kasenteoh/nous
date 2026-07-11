@@ -1,0 +1,5 @@
+{
+  "company_name": "Kinetic Circuits",
+  "variant": "default",
+  "notes": "Genuinely ambiguous startup call (hardware reseller vibes, age unstated). Expected is_startup=null; recorded true \u2014 accuracy miss by design."
+}

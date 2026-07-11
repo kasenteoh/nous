@@ -126,6 +126,11 @@ on:
         description: "Limit for the enrich backfill pass."
         required: false
         type: string
+      run_rejudge_nonstartup:
+        description: "Judge eligibility: ALSO re-judge included companies whose description matches non-startup prose signals (directories, agencies, coaching shops — the Manta/Lucra leak). Bounded by judge_limit. See docs/runbooks/non-us-and-nonstartup-backfill.md. Default: false."
+        required: false
+        type: boolean
+        default: false
       run_infer_country:
         description: "Run infer-hq-country: fetch about/contact/legal pages for shown companies with NULL hq_country and exclude non-US ones. Default: false."
         required: false
@@ -448,7 +453,15 @@ jobs:
         run: |
           JUDGE_LIMIT="${{ inputs.judge_limit }}"
           if [ -z "$JUDGE_LIMIT" ]; then JUDGE_LIMIT=30; fi
-          uv run nous judge-eligibility --limit "$JUDGE_LIMIT"
+          REJUDGE=""
+          if [ "${{ inputs.run_rejudge_nonstartup }}" = "true" ]; then
+            # One-time backfill sweep (runbook: non-us-and-nonstartup-backfill):
+            # resets the judged stamp on included rows whose description matches
+            # a non-startup prose signal, so this same bounded run re-judges
+            # them with the tightened prompt. Idempotent; never un-excludes.
+            REJUDGE="--rejudge-nonstartup-signals"
+          fi
+          uv run nous judge-eligibility --limit "$JUDGE_LIMIT" $REJUDGE
 
       - name: Infer HQ country (non-US detection backfill)
         if: ${{ github.event.inputs.run_infer_country == 'true' }}

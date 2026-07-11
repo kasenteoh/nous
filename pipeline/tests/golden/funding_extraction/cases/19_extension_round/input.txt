@@ -1,0 +1,12 @@
+Foundry Metrics adds $8M Series A extension
+
+Foundry Metrics, which makes yield-analytics software for semiconductor fabs, has
+closed an $8 million Series A extension led by returning investor Gatehouse Capital.
+The company raised its original Series A in 2024.
+
+The extension will fund deployments with two new fab customers in Arizona and a small
+Tokyo office to support Japanese manufacturers.
+
+Foundry Metrics says its software recovers one to two points of yield within the first
+six months of deployment, by correlating inline sensor data with end-of-line test
+results.

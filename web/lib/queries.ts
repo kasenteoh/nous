@@ -1,6 +1,9 @@
 // Server-side query helpers. This file must never be imported from a client
 // component — it uses createSupabaseServerClient() which requires the service
-// role key to be present in the server environment.
+// role key to be present in the server environment. The `server-only` import
+// makes that a build-time guarantee, not a comment.
+
+import "server-only";
 
 import { createSupabaseServerClient } from "@/lib/db";
 import { buildSpotlightPool, type Spotlight } from "@/lib/spotlight";

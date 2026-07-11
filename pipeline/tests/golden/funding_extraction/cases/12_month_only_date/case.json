@@ -1,0 +1,5 @@
+{
+  "company_name": "Copperseed",
+  "variant": "news",
+  "notes": "Only 'March 2026' is given. announced_date must be null; recorded returns 2026-03-01 \u2014 the default-to-the-1st error the prompt explicitly forbids."
+}

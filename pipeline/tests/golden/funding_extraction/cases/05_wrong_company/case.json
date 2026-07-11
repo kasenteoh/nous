@@ -1,0 +1,5 @@
+{
+  "company_name": "Bramble",
+  "variant": "news",
+  "notes": "Aggregator-leakage shape: the article is about Thornfield AI's round; Bramble appears only as a competitor mention. Must be is_funding_announcement=false."
+}

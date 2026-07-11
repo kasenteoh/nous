@@ -1,0 +1,17 @@
+Meridian Ops — Incident response that runs itself
+
+Meridian Ops is an incident management platform for engineering teams. When an alert
+fires, Meridian assembles the responders, opens a channel in Slack, pulls in the
+relevant runbook, and drafts the status-page update — before a human has typed a word.
+
+From alert to retro
+
+Meridian integrates with PagerDuty and Opsgenie for paging, captures the full incident
+timeline automatically, and generates a draft postmortem with contributing factors and
+action items. Action items sync to Jira and are tracked to completion.
+
+Trusted by more than 2,000 engineering teams.
+
+Founded in 2020. Remote-first, with a hub office in Austin, TX.
+
+Start free — connect your alerting tool and run your first incident in minutes.

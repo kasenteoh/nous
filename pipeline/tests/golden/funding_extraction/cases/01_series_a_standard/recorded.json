@@ -1,0 +1,24 @@
+{
+  "provenance": "simulated",
+  "model": null,
+  "recorded_at": null,
+  "response": {
+    "round_type": "Series A",
+    "amount_raised_usd": 18000000,
+    "valuation_post_money_usd": null,
+    "valuation_source": null,
+    "announced_date": "2026-03-12",
+    "lead_investors": [
+      "Meridian Ventures"
+    ],
+    "other_investors": [
+      "Foxglove Capital",
+      "Northgate Partners"
+    ],
+    "status_event": null,
+    "status_confidence": null,
+    "total_raised_usd": null,
+    "is_funding_announcement": true,
+    "confidence": "high"
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "description_short": "Loopnote is a private, end-to-end encrypted journaling app that turns entries into weekly reflections on themes, moods, and habits.",
+  "description_long": "Loopnote is a consumer journaling app: users write freely and the app notices themes, moods, and habits, delivering a Sunday summary of the week. Entries are end-to-end encrypted, with no ads, feeds, or social graph, and everything is exportable.\n\nThe site suggests uses from morning pages to therapy prep. It is free for 30 days, then $4 a month, on iOS and Android. The site names no team and states no location or founding year.",
+  "primary_category": "consumer",
+  "tags": [
+    "journaling",
+    "consumer",
+    "mobile-app",
+    "privacy"
+  ],
+  "people": [],
+  "hq_city": null,
+  "hq_state": null,
+  "industry": "consumer",
+  "website_state": "ok",
+  "is_startup": true,
+  "not_startup_reason": null,
+  "founded_year": null,
+  "hq_country": null
+}

@@ -1,0 +1,12 @@
+Palo Alto Networks acquires Saltmarsh Security for $410M
+
+Palo Alto Networks said Monday it has completed its acquisition of Saltmarsh Security,
+the cloud-permissions startup, in a deal valued at $410 million. Saltmarsh's
+26-person team will join Palo Alto's cloud security group, and its product will be
+folded into the Prisma line over the next year.
+
+Saltmarsh Security, founded in 2021, sold software that maps and trims excess
+permissions across cloud accounts. The company had raised venture funding from several
+security-focused firms before the sale.
+
+Terms suggest a strong outcome for the company's early backers.

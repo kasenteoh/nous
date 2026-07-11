@@ -38,7 +38,6 @@ import logging
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from typing import Literal, Protocol
-from urllib.parse import urlparse
 from uuid import UUID
 
 from pydantic import BaseModel
@@ -104,41 +103,15 @@ _MIN_TEXT_CHARS = 200
 # cadence / idempotency is unchanged.
 _DEFAULT_WEBSITE_CONCURRENCY: int = 5
 
-# Image / media-hosting hosts whose URLs must never be accepted as a funding
-# source.  These are not in AGGREGATOR_HOSTS (which covers directories and
-# editorial sites), so we check them locally.
-# TODO: fold these into reject_hosts.AGGREGATOR_HOSTS once the shared module
-# is next edited.
-_IMAGE_HOSTS: frozenset[str] = frozenset(
-    {
-        "imgur.com",
-        "i.imgur.com",
-        "i.redd.it",
-        "preview.redd.it",
-        "pbs.twimg.com",
-        "cdn.discordapp.com",
-        "media.giphy.com",
-    }
-)
-
-
 def _is_junk_source_url(url: str) -> bool:
     """Return True when *url* is unsuitable as a funding-round source.
 
-    Combines the shared aggregator/directory reject-list with a local check
-    for obvious image/CDN hosts.  A company's own website is NOT junk — only
-    third-party aggregator or image hosts are rejected.
+    Delegates entirely to the shared reject-list (which now also carries the
+    image/media-CDN hosts that used to be a local _IMAGE_HOSTS set here).
+    A company's own website is NOT junk — only third-party aggregator,
+    directory, or image hosts are rejected.
     """
-    if is_aggregator_url(url):
-        return True
-    parsed = urlparse(url)
-    host = parsed.netloc.lower()
-    if ":" in host:
-        host = host.split(":")[0]
-    bare = host[4:] if host.startswith("www.") else host
-    return bare in _IMAGE_HOSTS or any(
-        bare.endswith("." + h) for h in _IMAGE_HOSTS
-    )
+    return is_aggregator_url(url)
 
 
 class NewsRedirectResolver(Protocol):

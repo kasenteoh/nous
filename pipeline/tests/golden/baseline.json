@@ -1,0 +1,26 @@
+{
+  "company_description": {
+    "grounding_mean": 0.988,
+    "grounding_min": 0.769,
+    "is_startup_accuracy": 0.95,
+    "parse_rate": 1.0,
+    "people_precision": 0.857,
+    "people_recall": 1.0,
+    "slots_f1": 0.99,
+    "slots_precision": 1.0,
+    "slots_recall": 0.981,
+    "structure_pass_rate": 1.0,
+    "tags_f1": 0.986,
+    "website_state_accuracy": 1.0
+  },
+  "funding_extraction": {
+    "announcement_accuracy": 0.95,
+    "fields_f1": 0.895,
+    "fields_precision": 0.857,
+    "fields_recall": 0.937,
+    "investors_f1": 0.918,
+    "investors_precision": 0.894,
+    "investors_recall": 0.944,
+    "parse_rate": 1.0
+  }
+}

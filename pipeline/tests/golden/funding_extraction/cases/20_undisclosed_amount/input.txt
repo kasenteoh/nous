@@ -1,0 +1,12 @@
+Peregrine Labs raises seed round led by Sequoia for developer-security tooling
+
+Peregrine Labs, a startup building security tooling that runs inside developers' pull
+requests, has raised a seed round of undisclosed size led by Sequoia. A handful of
+security operators also participated, the company said.
+
+The product comments on risky changes — new network calls, permission escalations,
+dependency swaps — directly in code review, with suggested fixes developers can apply
+in one click.
+
+Peregrine Labs was started by two former security engineers and is currently working
+with design partners.

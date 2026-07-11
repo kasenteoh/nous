@@ -1,0 +1,5 @@
+{
+  "company_name": "TradeFinderUSA",
+  "variant": "default",
+  "notes": "Directory/listings business \u2014 an explicit is_startup=false category. Recorded response drifts on tags (one missing, one extra) to keep tag metrics honestly below 1.0."
+}

@@ -1,0 +1,16 @@
+{
+  "round_type": "Series A",
+  "amount_raised_usd": 15000000,
+  "valuation_post_money_usd": null,
+  "valuation_source": null,
+  "announced_date": "2025-09-10",
+  "lead_investors": [
+    "Craft Ventures"
+  ],
+  "other_investors": [],
+  "status_event": null,
+  "status_confidence": null,
+  "total_raised_usd": null,
+  "is_funding_announcement": true,
+  "confidence": "medium"
+}
