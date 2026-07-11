@@ -26,11 +26,13 @@ from nous.db.models import Company, Competitor, RawPage
 from nous.db.upsert import reconcile_funding_round
 from nous.llm.prompts import (
     company_description,
+    company_description_long,
     company_eligibility,
     competitor_analysis,
     funding_extraction,
 )
 from nous.llm.prompts.company_description import CompanyDescription
+from nous.llm.prompts.company_description_long import CompanyLongDescription
 from nous.llm.prompts.company_eligibility import EligibilityJudgment
 from nous.llm.prompts.competitor_analysis import (
     Competitor as CompetitorOut,
@@ -48,14 +50,22 @@ pytestmark = pytest.mark.skipif(
 
 Factory = async_sessionmaker[AsyncSession]
 
-# A page whose visible text clears enrich's _MIN_TEXT_CHARS (200) bar.
+# A page whose visible text clears enrich's _MIN_TEXT_CHARS (200) bar AND
+# the _MIN_DESCRIBE_CHARS (700) bar, so the stage runs the full two-call
+# judge + describe flow.
 _SUBSTANTIAL_PAGE = (
     "<html><body><p>This is a substantial enough page to pass the minimum "
     "text check. The company builds developer tools for API-first teams. "
     "Their platform enables engineers to design, test, and deploy APIs at "
     "scale. Founded in 2021, they serve hundreds of enterprise customers "
     "globally. Their flagship product is a cloud-native API gateway with "
-    "built-in observability.</p></body></html>"
+    "built-in observability. The gateway terminates traffic close to users "
+    "and applies rate limits, authentication, and schema validation before "
+    "requests reach upstream services. A control plane manages configuration "
+    "as code, with previews for every change and automatic rollback when "
+    "error rates rise. Customers integrate through declarative manifests "
+    "checked into their own repositories, and usage-based pricing scales "
+    "from side projects to large enterprise deployments.</p></body></html>"
 )
 
 
@@ -75,8 +85,9 @@ def _make_company(name: str, *, slug_prefix: str, **kwargs: object) -> Company:
 async def test_enrich_stamps_enrichment_and_eligibility_versions(
     db: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The enrich path stamps BOTH stamps with the description prompt's
-    version — its output carries the eligibility judgment too."""
+    """Two-call enrich (W-F): eligibility carries the JUDGE prompt's version
+    (its output holds the judgment), enrichment carries the DESCRIBE
+    prompt's version (it owns description_long state)."""
     company = _make_company("Stampable Inc", slug_prefix="pv-enrich")
     db.add(company)
     await db.flush()
@@ -91,14 +102,23 @@ async def test_enrich_stamps_enrichment_and_eligibility_versions(
 
     canned = CompanyDescription(
         description_short="Builds API tools.",
-        description_long="Builds API tools for teams.",
         primary_category="developer tools",
         tags=["api"],
         website_state="ok",
     )
+    canned_long = CompanyLongDescription(
+        description_long="Builds API tools for teams.\n\nUsed by platform teams."
+    )
+
+    async def _route(prompt: str, schema: type, **kwargs: object) -> object:
+        if schema is CompanyDescription:
+            return canned
+        assert schema is CompanyLongDescription
+        return canned_long
+
     monkeypatch.setattr(
         "nous.pipeline.enrich_companies.complete_json",
-        AsyncMock(return_value=canned),
+        _route,
     )
 
     summary = await run_enrich_companies(db)
@@ -107,7 +127,7 @@ async def test_enrich_stamps_enrichment_and_eligibility_versions(
     await db.refresh(company)
     assert (
         company.enrichment_prompt_version
-        == company_description.PROMPT_VERSION
+        == company_description_long.PROMPT_VERSION
     )
     assert (
         company.eligibility_prompt_version

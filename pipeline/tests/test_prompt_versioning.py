@@ -27,6 +27,7 @@ from nous.db.models import Company, Competitor, FundingRound
 from nous.db.upsert import _MERGE_FILL_COLUMNS, _merge_extraction_into_round
 from nous.llm.prompts import (
     company_description,
+    company_description_long,
     company_eligibility,
     competitor_analysis,
     funding_extraction,
@@ -52,6 +53,7 @@ _VERSION_SCHEME = re.compile(r"^\d{4}-\d{2}-\d{2}\.\d+$")
 # deliberately absent.
 _PERSISTING_PROMPTS = (
     company_description,
+    company_description_long,
     company_eligibility,
     competitor_analysis,
     funding_extraction,

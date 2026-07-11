@@ -29,13 +29,12 @@ from tests.conftest import ResponsePlan, build_chat_response, patch_async_client
 
 VALID_PAYLOAD: dict[str, Any] = {
     "description_short": "A short description.",
-    "description_long": "A longer description with detail.",
     "primary_category": "developer tools",
     "tags": ["api", "saas"],
     "website_state": "ok",
 }
 
-INVALID_PAYLOAD: dict[str, Any] = {"description_long": "missing required fields"}
+INVALID_PAYLOAD: dict[str, Any] = {"tags": ["missing", "required", "fields"]}
 
 
 @pytest.fixture(autouse=True)

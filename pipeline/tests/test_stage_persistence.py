@@ -35,6 +35,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from nous.db.models import Company, CompanyRelationship, Competitor, RawPage
 from nous.llm.prompts.company_description import CompanyDescription
+from nous.llm.prompts.company_description_long import CompanyLongDescription
 from nous.llm.prompts.competitor_analysis import (
     Competitor as CompetitorOut,
 )
@@ -182,15 +183,20 @@ async def test_enrich_companies_persists_across_sessions(
 
     canned = CompanyDescription(
         description_short="A short description of the company.",
-        description_long="A longer description with multiple paragraphs.",
         primary_category="developer tools",
         tags=["open-source", "api-first"],
         website_state="ok",
     )
+    canned_long = CompanyLongDescription(
+        description_long="A longer description.\n\nWith multiple paragraphs."
+    )
 
-    async def _fake_complete_json(prompt: str, schema: type) -> CompanyDescription:
-        assert schema is CompanyDescription
-        return canned
+    async def _fake_complete_json(prompt: str, schema: type) -> object:
+        # Two-call flow: the judge then (page permitting) the describe call.
+        if schema is CompanyDescription:
+            return canned
+        assert schema is CompanyLongDescription
+        return canned_long
 
     monkeypatch.setattr(
         "nous.pipeline.enrich_companies.complete_json", _fake_complete_json

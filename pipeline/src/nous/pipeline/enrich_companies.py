@@ -438,11 +438,12 @@ async def run_enrich_companies(
         company.tags = normalized_tags
         company.last_enriched_at = now
         # Audit payload keeps the historical single-call shape: judge output
-        # plus a description_long key, filled below when the describe call
-        # runs. Assigned to the column after the describe call so the stored
-        # JSONB reflects the whole enrichment.
+        # plus a description_long key, updated below when the describe call
+        # runs (otherwise it mirrors whatever the column already holds, e.g.
+        # in backfill mode). Assigned to the column after the describe call
+        # so the stored JSONB reflects the whole enrichment.
         payload: dict[str, object] = description.model_dump(mode="json")
-        payload["description_long"] = None
+        payload["description_long"] = company.description_long
 
         # Location + industry from the website. Only fill these when the LLM
         # returned a value AND the column is currently empty — don't clobber
@@ -513,8 +514,12 @@ async def run_enrich_companies(
         # hidden, so a long profile would be paid-for and unread. Excluded
         # rows keep their enrichment_prompt_version untouched — if a repair
         # later un-excludes one, --redescribe-outdated picks it up.
+        # Skipped entirely in backfill_missing_taxonomy mode: that mode is a
+        # taxonomy-only repair over companies that already HAVE a
+        # description_long (it's in the selection predicate) — paying a
+        # describe call there would double its cost for nothing.
         stop_after_commit = False
-        if company.exclusion_reason is None:
+        if company.exclusion_reason is None and not backfill_missing_taxonomy:
             if len(combined) >= _MIN_DESCRIBE_CHARS:
                 describe_text = truncate_to_chars(
                     combined, MAX_DESCRIPTION_INPUT_CHARS

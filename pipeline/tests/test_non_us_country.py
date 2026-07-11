@@ -22,6 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from nous.db.models import Company, RawPage
 from nous.db.upsert import auto_create_company
 from nous.llm.prompts.company_description import CompanyDescription
+from nous.llm.prompts.company_description_long import CompanyLongDescription
 from nous.llm.prompts.company_eligibility import EligibilityJudgment
 from nous.pipeline.enrich_companies import _infer_country_from_url, run_enrich_companies
 from nous.pipeline.judge_eligibility import run_judge_eligibility
@@ -163,7 +164,6 @@ async def test_enrich_sets_non_us_from_llm_country(
 
     canned = CompanyDescription(
         description_short="A beauty and wellness marketplace based in London.",
-        description_long="Long text about Fresha.",
         primary_category="marketplace",
         tags=["beauty", "wellness"],
         website_state="ok",
@@ -204,7 +204,6 @@ async def test_enrich_sets_non_us_from_cctld_when_llm_silent(
 
     canned = CompanyDescription(
         description_short="An online marketplace for independent sellers.",
-        description_long="Long text about NOTHS.",
         primary_category="e-commerce",
         tags=["marketplace", "retail"],
         website_state="ok",
@@ -244,7 +243,6 @@ async def test_enrich_infers_us_when_state_set(
 
     canned = CompanyDescription(
         description_short="A San Francisco-based developer tools startup.",
-        description_long="Long text about US Startup Inc.",
         primary_category="developer tools",
         tags=["saas", "cloud"],
         website_state="ok",
@@ -253,9 +251,17 @@ async def test_enrich_infers_us_when_state_set(
         hq_state="CA",
         hq_country=None,  # LLM doesn't explicitly state US
     )
+
+    async def _route(prompt: str, schema: type, **kwargs: Any) -> Any:
+        # Included company → the stage makes BOTH calls; return the type the
+        # requested schema promises (as the real client does).
+        if schema is CompanyDescription:
+            return canned
+        return CompanyLongDescription(description_long="Two grounded paragraphs.")
+
     monkeypatch.setattr(
         "nous.pipeline.enrich_companies.complete_json",
-        AsyncMock(return_value=canned),
+        _route,
     )
 
     await run_enrich_companies(db)
@@ -283,7 +289,6 @@ async def test_judge_eligibility_cctld_non_us(
             normalized_name="uk saas ltd",
             website="https://uksaas.co.uk",
             description_short="A UK-based SaaS company.",
-            description_long="Long text.",
         )
         s1.add(company)
         await s1.flush()
