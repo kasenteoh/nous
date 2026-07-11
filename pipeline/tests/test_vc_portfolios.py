@@ -147,6 +147,11 @@ async def test_yc_adapter_drops_pre_seed_and_keeps_other_stages() -> None:
         assert entry.firm == "yc"
         assert entry.source_url == adapter.PORTFOLIO_URL  # type: ignore[attr-defined]
         assert isinstance(entry, PortfolioEntry)
+        assert entry.name.strip()
+    # YC's Algolia hits carry a website field for most companies.
+    assert any(e.website for e in entries), (
+        "YC normally surfaces websites; fixture parse yielded none"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -155,18 +160,18 @@ async def test_yc_adapter_drops_pre_seed_and_keeps_other_stages() -> None:
 
 
 @pytest.mark.parametrize(
-    "firm,fixture,must_contain,min_count",
+    "firm,fixture,must_contain,min_count,has_websites",
     [
-        ("a16z", "a16z.html", "11x", 50),
-        ("sequoia", "sequoia.html", "Airbnb", 50),
-        ("lightspeed", "lightspeed.html", "Anthropic", 50),
-        ("founders_fund", "founders_fund.html", "Palantir", 50),
-        ("greylock", "greylock.html", "Anthropic", 50),
+        ("a16z", "a16z.html", "11x", 50, True),
+        ("sequoia", "sequoia.html", "Airbnb", 50, False),
+        ("lightspeed", "lightspeed.html", "Anthropic", 50, False),
+        ("founders_fund", "founders_fund.html", "Palantir", 50, True),
+        ("greylock", "greylock.html", "Anthropic", 50, True),
         # M5 additions — single-fetch HTML adapters.
-        ("bessemer", "bessemer.html", "Shopify", 50),
-        ("index_ventures", "index_ventures.html", "Figma", 50),
-        ("accel", "accel.html", "Atlassian", 50),
-        ("general_catalyst", "general_catalyst.html", "Stripe", 50),
+        ("bessemer", "bessemer.html", "Shopify", 50, False),
+        ("index_ventures", "index_ventures.html", "Figma", 50, False),
+        ("accel", "accel.html", "Atlassian", 50, False),
+        ("general_catalyst", "general_catalyst.html", "Stripe", 50, False),
     ],
 )
 async def test_adapter_parses_fixture(
@@ -174,6 +179,7 @@ async def test_adapter_parses_fixture(
     fixture: str,
     must_contain: str,
     min_count: int,
+    has_websites: bool,
 ) -> None:
     adapter = ADAPTERS[firm]
     routes = _html_routes(adapter.PORTFOLIO_URL, FIXTURES / fixture)  # type: ignore[attr-defined]
@@ -195,6 +201,15 @@ async def test_adapter_parses_fixture(
         assert entry.firm == firm
         assert entry.source_url == adapter.PORTFOLIO_URL  # type: ignore[attr-defined]
         assert isinstance(entry, PortfolioEntry)
+        # Well-formedness floor: a non-blank name on every entry, and any
+        # website the adapter surfaced must be a non-blank string too.
+        assert entry.name.strip(), f"{firm} yielded a blank company name"
+        if entry.website is not None:
+            assert entry.website.strip(), f"{firm} yielded a blank website"
+    if has_websites:
+        assert any(e.website for e in entries), (
+            f"{firm} normally surfaces websites; fixture parse yielded none"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -249,6 +264,11 @@ async def test_khosla_adapter_aggregates_categories() -> None:
         assert entry.firm == "khosla"
         assert entry.source_url == adapter.PORTFOLIO_URL  # type: ignore[attr-defined]
         assert isinstance(entry, PortfolioEntry)
+        assert entry.name.strip()
+    # Khosla cards carry the company homepage in the card href.
+    assert any(e.website for e in entries), (
+        "Khosla normally surfaces websites; fixture parse yielded none"
+    )
 
 
 # ---------------------------------------------------------------------------
