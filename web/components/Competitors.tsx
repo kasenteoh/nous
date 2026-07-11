@@ -3,6 +3,7 @@
 // link internally when the competitor resolved to an indexed company.
 
 import Link from "next/link";
+import { competitorLeaksMeta } from "@/lib/competitor-guards";
 import type { CompetitorWithResolved } from "@/lib/types";
 
 interface Props {
@@ -16,18 +17,11 @@ interface Props {
   alternativesSlug?: string;
 }
 
-// LLM scratch-notes occasionally leak into a competitor's stored rationale
-// (e.g. "Included temporarily for evaluation but should be dropped."). Drop any
-// such entry so internal model reasoning never reaches a customer. This is a
-// display-side guard; the durable fix is validating these out in the pipeline.
-const META_LEAK =
-  /should be dropped|for evaluation|temporar|placeholder|do not (include|display|show)|not a (real )?competitor/i;
-
 export function Competitors({ competitors, alternativesSlug }: Props) {
-  const shown = competitors.filter(
-    (c) =>
-      !META_LEAK.test(c.reasoning ?? "") && !META_LEAK.test(c.description ?? ""),
-  );
+  // LLM scratch-notes occasionally leak into a competitor's stored rationale;
+  // the shared guard (lib/competitor-guards.ts) drops such rows here and on
+  // every /alternatives surface with the same regex.
+  const shown = competitors.filter((c) => !competitorLeaksMeta(c));
   if (shown.length === 0) {
     // Section omitted entirely when there is nothing to show — same convention
     // as the FundingHistory empty state and spec §11 (unknown = hidden).

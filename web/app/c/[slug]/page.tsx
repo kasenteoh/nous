@@ -23,6 +23,7 @@ import {
   formatUsd,
   formatUsdExact,
 } from "@/lib/format";
+import { computeTotalRaised } from "@/lib/funding";
 import { CompanyLogo } from "@/components/CompanyCard";
 import { JsonLd } from "@/components/JsonLd";
 import { Markdown } from "@/components/Markdown";
@@ -286,29 +287,16 @@ export default async function CompanyPage({ params }: Props) {
   // 0021 until it runs there; select("*") omits unknown columns) — normalize
   // through `?? null` / Number() so the computed path renders unharmed.
   //
-  // Defense-in-depth against residual duplicate rounds: the historical news
-  // backfill could re-report ONE round from several articles (same amount,
-  // often a null round_type), and a naive sum would multiply it (Helion's
-  // $465M Series G summed to $2.3B across 5 rows). The pipeline data fix
-  // (reconcile + repair-duplicate-rounds) is the primary cure; here we sum
-  // over rounds DE-DUPLICATED on (round_type, amount_raised) so a stray dupe
-  // that slips through can't inflate the total. Distinct rounds that genuinely
-  // share an amount keep different round_types, so they still both count;
-  // null-amount rounds contribute nothing either way.
-  const seenRoundKeys = new Set<string>();
-  const computedTotal = fundingRounds.reduce<number>((acc, r) => {
-    if (r.amount_raised == null) return acc;
-    const key = `${r.round_type ?? ""}::${r.amount_raised}`;
-    if (seenRoundKeys.has(key)) return acc;
-    seenRoundKeys.add(key);
-    return acc + Number(r.amount_raised);
-  }, 0);
-  const hasComputedTotal = fundingRounds.some((r) => r.amount_raised != null);
-  const statedTotal =
-    company.total_raised_usd != null ? Number(company.total_raised_usd) : null;
-  const statedWins = statedTotal != null && statedTotal >= computedTotal;
-  const displayedTotal = statedWins ? statedTotal : computedTotal;
-  const hasTotalRaised = hasComputedTotal || statedTotal != null;
+  // Duplicate-round defense + max(stated, computed) both live in the shared
+  // helper (lib/funding.ts) so this tile, the OG card, and the compare table
+  // can never disagree — see computeTotalRaised for the full invariant
+  // (dedup on (round_type, amount_raised); Helion's $465M Series G once
+  // summed to $2.3B across 5 duplicate rows).
+  const {
+    total: displayedTotal,
+    statedWins,
+    hasTotal: hasTotalRaised,
+  } = computeTotalRaised(company.total_raised_usd ?? null, fundingRounds);
   const statedAsOf = company.total_raised_as_of ?? null;
 
   // FAQPage structured data (no visible UI) for AI answer engines / rich

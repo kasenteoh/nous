@@ -6,7 +6,7 @@ import {
   it,
   vi,
 } from "vitest";
-import { createSupabaseServerClient } from "@/lib/db";
+import { createSupabaseServerClient, SupabaseConfigError } from "@/lib/db";
 import {
   applyCompanyFilters,
   CATALOG_BAR_OR,
@@ -30,9 +30,12 @@ import {
   type Responder,
 } from "./helpers/mock-supabase";
 
-vi.mock("@/lib/db", () => ({
-  createSupabaseServerClient: vi.fn(),
-}));
+vi.mock("@/lib/db", async (importOriginal) => {
+  // Keep the real SupabaseConfigError so queries.ts's instanceof rethrow
+  // check works against the class the tests (and prod code) throw.
+  const actual = await importOriginal<typeof import("@/lib/db")>();
+  return { ...actual, createSupabaseServerClient: vi.fn() };
+});
 
 const mockedCreate = vi.mocked(createSupabaseServerClient);
 
@@ -779,5 +782,27 @@ describe("getAlsoBackedBy", () => {
     });
     await expect(getAlsoBackedBy(COMPANY)).resolves.toEqual([]);
     expect(mock.buildersFor("investors")).toHaveLength(0);
+  });
+});
+
+// ─── W-C.2: env-missing behavior ──────────────────────────────────────────────
+
+describe("Supabase config failures", () => {
+  it("degrades to empty on a benign not-configured error (secret-free CI/dev)", async () => {
+    mockedCreate.mockImplementation(() => {
+      throw new Error("SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must be set");
+    });
+    await expect(listCompanies({})).resolves.toEqual({ rows: [], total: 0 });
+    await expect(getCompanyBySlug("acme")).resolves.toBeNull();
+  });
+
+  it("rethrows SupabaseConfigError so a Vercel misconfig 500s instead of 404ing", async () => {
+    mockedCreate.mockImplementation(() => {
+      throw new SupabaseConfigError("SUPABASE_URL not set in the Vercel environment");
+    });
+    await expect(listCompanies({})).rejects.toBeInstanceOf(SupabaseConfigError);
+    await expect(getCompanyBySlug("acme")).rejects.toBeInstanceOf(
+      SupabaseConfigError,
+    );
   });
 });
