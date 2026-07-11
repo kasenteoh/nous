@@ -1,7 +1,7 @@
 {
-  "provenance": "simulated",
-  "model": null,
-  "recorded_at": null,
+  "provenance": "deepseek",
+  "model": "deepseek-chat",
+  "recorded_at": "2026-07-11T21:58:52+00:00",
   "response": {
     "description_long": null
   }
