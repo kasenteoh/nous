@@ -16,8 +16,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from nous.db.models import Company
 from nous.pipeline.normalize_taxonomy import run_normalize_taxonomy
 from nous.util.tags import (
-    CANONICAL_TAGS,
     _ALIAS_SOURCES,
+    CANONICAL_TAGS,
     canonicalize_tag,
     canonicalize_tags,
 )

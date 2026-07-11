@@ -35,7 +35,6 @@ obtained for the in-flight company are still committed).
 from __future__ import annotations
 
 import logging
-import re
 from datetime import UTC, datetime, timedelta
 from urllib.parse import urlparse
 
