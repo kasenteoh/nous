@@ -29,7 +29,15 @@ from pydantic import BaseModel, Field, field_validator
 # "<date>.<same-day-counter>". Bump on ANY semantic change to the template,
 # schema, or validators so outdated descriptions can be found and re-run via
 # ``enrich-companies --redescribe-outdated``.
-PROMPT_VERSION: str = "2026-07-10.1"
+#
+# Starts at "2026-07-11.1", NOT "2026-07-10.1": the pre-split single prompt
+# (company_description at 2026-07-10.1, migration-0031 era) stamped the same
+# column, so this prompt's version must sort strictly ABOVE that cohort or
+# --redescribe-outdated's `< current` selection would silently skip every row
+# the old prompt enriched (caught by test_redescribe_selection_boundaries in
+# CI). The handful of rows the new prompt stamped 2026-07-10.1 before this
+# bump simply get re-described once more (idempotent, ~cents).
+PROMPT_VERSION: str = "2026-07-11.1"
 
 # Input ceiling for THIS call. Deliberately above the shared 32k
 # MAX_PROMPT_INPUT_CHARS ceiling in nous.llm.client: the whole point of the
