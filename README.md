@@ -157,7 +157,20 @@ group so they never write the `companies` table at the same time:
   `refresh-vc-portfolios` + `ingest-news` over a wider lookback.
 
 `lint.yml` runs on every push and PR: `ruff`, `mypy`, `alembic upgrade head`, and
-`pytest` for the pipeline; `lint`, `build`, and a Playwright smoke test for the web.
+`pytest` for the pipeline; `lint`, `build`, a client-bundle secret scan
+(`npm run check:bundle`), and a Playwright smoke test for the web; plus a
+gitleaks full-history secret scan.
+
+## Secret hygiene
+
+- CI blocks any commit containing a detectable secret (gitleaks job in
+  `lint.yml`). False positives are suppressed per-fingerprint in
+  `.gitleaksignore` — never widen to a path allowlist.
+- The same scan runs locally as an **opt-in** pre-commit hook:
+  `brew install pre-commit && pre-commit install` (config in
+  `.pre-commit-config.yaml`).
+- The web build is scanned so no server secret can reach the browser — see
+  "Server-only boundary" in `web/AGENTS.md`.
 
 ## Deploy
 

@@ -12,9 +12,10 @@ Design:
 - One Chromium process per scrape-stage run, shared across all per-company
   fetches. Launch cost (~3-5s) amortizes; per-page cost is mostly the page's
   own JS hydration time.
-- Per-domain throttle is honored via the shared lock dict on this client —
-  same semantics as :class:`nous.sources.homepage.HomepageClient` so we don't
-  blast a single domain from two transports.
+- Per-domain throttle is honored via the process-wide registry in
+  :mod:`nous.sources._http` — the SAME registry
+  :class:`nous.sources.homepage.HomepageClient` uses by default, so the two
+  transports genuinely take turns on a host instead of double-hitting it.
 - robots.txt is the caller's responsibility (the scrape stage checks it once
   via HomepageClient before either path runs).
 - A new browser context per page (cheap) gives us a clean cookie jar /
@@ -27,13 +28,11 @@ via Playwright).
 
 from __future__ import annotations
 
-import asyncio
 import logging
-import time
 from types import TracebackType
 from typing import TYPE_CHECKING
-from urllib.parse import urlparse
 
+from nous.sources._http import DEFAULT_THROTTLE, DomainThrottle
 from nous.util.ssrf import BlockedAddressError, assert_public_url
 
 logger = logging.getLogger(__name__)
@@ -78,17 +77,17 @@ class HeadlessBrowserClient:
         requests_per_second_per_domain: float = 1.0,
         navigation_timeout_ms: int = 30_000,
         post_load_wait_ms: int = 1_500,
+        throttle: DomainThrottle | None = None,
     ) -> None:
         self._user_agent = user_agent or _DEFAULT_USER_AGENT
         self._min_interval: float = 1.0 / requests_per_second_per_domain
         self._navigation_timeout_ms = navigation_timeout_ms
         self._post_load_wait_ms = post_load_wait_ms
 
-        # Per-domain throttle state — mirrors HomepageClient so the two
-        # transports cooperate when targeting the same host.
-        self._domain_last_request: dict[str, float] = {}
-        self._domain_locks: dict[str, asyncio.Lock] = {}
-        self._registry_lock = asyncio.Lock()
+        # Process-wide throttle registry by default — shared with
+        # HomepageClient (and every other transport) so a browser-fallback
+        # fetch queues behind an httpx fetch to the same host.
+        self._throttle = throttle if throttle is not None else DEFAULT_THROTTLE
 
         self._playwright: Playwright | None = None
         self._browser: Browser | None = None
@@ -116,12 +115,6 @@ class HeadlessBrowserClient:
             await self._playwright.stop()
             self._playwright = None
 
-    async def _get_domain_lock(self, domain: str) -> asyncio.Lock:
-        async with self._registry_lock:
-            if domain not in self._domain_locks:
-                self._domain_locks[domain] = asyncio.Lock()
-            return self._domain_locks[domain]
-
     async def fetch_rendered_html(self, url: str) -> str | None:
         """Navigate to ``url``, wait for JS hydration, return rendered HTML.
 
@@ -141,17 +134,10 @@ class HeadlessBrowserClient:
                 "HeadlessBrowserClient must be used as an async context manager"
             )
 
-        parsed = urlparse(url)
-        domain = parsed.netloc
-
-        domain_lock = await self._get_domain_lock(domain)
-        async with domain_lock:
-            now = time.monotonic()
-            last = self._domain_last_request.get(domain, 0.0)
-            wait = self._min_interval - (now - last)
-            if wait > 0:
-                await asyncio.sleep(wait)
-
+        # Shared slot with the httpx transports; the slot stamps the domain's
+        # timestamp on exit whether the navigation succeeded or failed (a
+        # failed goto still hit the host).
+        async with self._throttle.slot_for_url(url, self._min_interval):
             context = await self._browser.new_context(user_agent=self._user_agent)
             await context.route("**/*", _abort_if_blocked)
             page = await context.new_page()
@@ -165,9 +151,7 @@ class HeadlessBrowserClient:
                 # frameworks sometimes commit a final hydration tick after
                 # the network calms down.
                 await page.wait_for_timeout(self._post_load_wait_ms)
-                content = await page.content()
-                self._domain_last_request[domain] = time.monotonic()
-                return content
+                return await page.content()
             except Exception as exc:
                 logger.info(
                     "headless-browser: fetch failed for %s: %s: %s",
@@ -175,7 +159,6 @@ class HeadlessBrowserClient:
                     type(exc).__name__,
                     exc,
                 )
-                self._domain_last_request[domain] = time.monotonic()
                 return None
             finally:
                 await page.close()

@@ -21,10 +21,12 @@ out/
 *.tsbuildinfo
 next-env.d.ts
 
-# Env
+# Env — ignore every .env variant (.env.production, .env.development, ...,
+# not just the *.local ones), then re-allow the placeholder-only example files.
 .env
-.env.local
-.env.*.local
+.env.*
+!.env.example
+!.env.local.example
 
 # OS
 .DS_Store

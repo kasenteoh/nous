@@ -14,7 +14,9 @@ older, looser prompt wrongly KEPT — business directories, coaching/courses
 shops, agencies, decades-old businesses (e.g. Manta, Lucra) — are caught by
 conservative description-prose signals (``nonstartup_signal_clause``), have
 their stamp reset, and are re-judged with the tightened prompt. Off by default,
-so the production cron is unchanged; no CLI flag is wired yet (follow-up).
+so the production cron is unchanged; exposed as ``judge-eligibility
+--rejudge-nonstartup-signals`` and gated behind the ``run_rejudge_nonstartup``
+workflow_dispatch input (see docs/runbooks/non-us-and-nonstartup-backfill.md).
 
 Connection resilience: each company is processed in its OWN short-lived session
 drawn from a session factory, so every company starts on a freshly pre-pinged
