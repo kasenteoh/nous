@@ -129,8 +129,17 @@ _GROUNDING_STOPWORDS: frozenset[str] = frozenset(
 )
 
 
+def _normalize_token(word: str) -> str:
+    """Lowercase; drop a possessive 's and stray leading/trailing puncts."""
+    token = word.lower()
+    if token.endswith("'s"):
+        token = token[:-2]
+    return token.strip(".-'")
+
+
 def _proper_noun_tokens(text: str) -> list[str]:
-    """Capitalized tokens in non-sentence-initial position (>= 3 chars)."""
+    """Capitalized tokens in non-sentence-initial position (>= 3 chars),
+    normalized (lowercased, possessive stripped)."""
     tokens: list[str] = []
     for fragment in _FRAGMENT_SPLIT.split(text):
         words = _WORD_RE.findall(fragment)
@@ -140,9 +149,10 @@ def _proper_noun_tokens(text: str) -> list[str]:
         for word in words[1:]:
             if len(word) < 3 or not word[0].isupper():
                 continue
-            if word.lower().strip(".-'") in _GROUNDING_STOPWORDS:
+            normalized = _normalize_token(word)
+            if normalized.replace(".", "") in _GROUNDING_STOPWORDS:
                 continue
-            tokens.append(word)
+            tokens.append(normalized)
     return tokens
 
 
@@ -159,7 +169,9 @@ def grounding_fraction(text: str, source: str) -> float:
     found = 0
     for token in _proper_noun_tokens(text):
         checked += 1
-        if token.lower().strip(".-'") in source_lower:
+        # Try the token as-is and dot-stripped ("u.s" -> "us") so dotted
+        # initialisms ground against their plain spelling.
+        if token in source_lower or token.replace(".", "") in source_lower:
             found += 1
     for number in _NUM_RE.findall(text):
         checked += 1
