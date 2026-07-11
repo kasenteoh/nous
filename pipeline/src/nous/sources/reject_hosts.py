@@ -66,6 +66,18 @@ AGGREGATOR_HOSTS: frozenset[str] = frozenset(
         "reddit.com",
         "medium.com",
         "substack.com",
+        # Search engines (never a company homepage; also avoids recursive
+        # results when filtering DDG search candidates)
+        "duckduckgo.com",
+        # Image / media-CDN hosts (formerly extract_funding._IMAGE_HOSTS):
+        # never a company homepage and never acceptable as a funding source.
+        # Base domains only — subdomain variants (i.imgur.com, pbs.twimg.com,
+        # cdn.discordapp.com, preview.redd.it) match via the suffix walk.
+        "imgur.com",
+        "redd.it",
+        "twimg.com",
+        "discordapp.com",
+        "giphy.com",
     }
 )
 
@@ -76,6 +88,30 @@ AGGREGATOR_HOSTS: frozenset[str] = frozenset(
 DIRECTORY_PATH_RE: str = r"^/(orgs|companies|company|startups|profile)(/|$)"
 
 _DIRECTORY_PATH_COMPILED: re.Pattern[str] = re.compile(DIRECTORY_PATH_RE)
+
+
+def is_aggregator_host(host: str) -> bool:
+    """Return True if *host* (a bare netloc, port/case tolerated) is in
+    AGGREGATOR_HOSTS, either directly or via a subdomain suffix match
+    (``pbs.twimg.com`` matches ``twimg.com``).
+
+    Host-only variant of :func:`is_aggregator_url` — the single matching
+    implementation shared with ``duckduckgo.is_aggregator`` so the two can
+    never drift apart again.
+    """
+    host = host.lower()
+    # Strip port if present
+    if ":" in host:
+        host = host.split(":")[0]
+
+    # Strip leading www. before domain matching
+    bare = host[4:] if host.startswith("www.") else host
+
+    # Direct match or suffix (subdomain) match
+    if bare in AGGREGATOR_HOSTS:
+        return True
+    parts = bare.split(".")
+    return any(".".join(parts[i:]) in AGGREGATOR_HOSTS for i in range(len(parts) - 1))
 
 
 def is_aggregator_url(url: str) -> bool:
@@ -94,21 +130,8 @@ def is_aggregator_url(url: str) -> bool:
         is_aggregator_url("https://acme.com/")  # False
     """
     parsed = urlparse(url)
-    host = parsed.netloc.lower()
-    # Strip port if present
-    if ":" in host:
-        host = host.split(":")[0]
-
-    # Strip leading www. before domain matching
-    bare = host[4:] if host.startswith("www.") else host
-
-    # Direct match or suffix (subdomain) match
-    if bare in AGGREGATOR_HOSTS:
+    if is_aggregator_host(parsed.netloc):
         return True
-    parts = bare.split(".")
-    for i in range(len(parts) - 1):
-        if ".".join(parts[i:]) in AGGREGATOR_HOSTS:
-            return True
 
     # Path-pattern match (directory listing path regardless of host)
     return bool(_DIRECTORY_PATH_COMPILED.match(parsed.path))

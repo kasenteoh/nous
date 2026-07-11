@@ -74,3 +74,42 @@ def test_own_domain_urls_are_not_rejected(url: str) -> None:
     assert not _is_junk_source_url(url), (
         f"Expected {url!r} to be accepted (company own domain)"
     )
+
+
+# ---------------------------------------------------------------------------
+# Blocklist-merge drift guard (W-C.3): duckduckgo.py used to carry its own
+# AGGREGATOR_DOMAINS copy, and extract_funding.py its own _IMAGE_HOSTS. Both
+# now live in reject_hosts.AGGREGATOR_HOSTS — pin every host that only existed
+# in one of the old copies so a future edit can't silently drop it.
+# ---------------------------------------------------------------------------
+
+
+def test_merged_blocklist_retains_every_former_entry() -> None:
+    from nous.sources.reject_hosts import AGGREGATOR_HOSTS
+
+    former_ddg_only = {"duckduckgo.com"}
+    former_image_hosts_bases = {
+        "imgur.com",  # covers i.imgur.com via suffix match
+        "redd.it",  # covers i.redd.it / preview.redd.it
+        "twimg.com",  # covers pbs.twimg.com
+        "discordapp.com",  # covers cdn.discordapp.com
+        "giphy.com",  # covers media.giphy.com
+    }
+    missing = (former_ddg_only | former_image_hosts_bases) - AGGREGATOR_HOSTS
+    assert not missing, f"Merged blocklist lost entries: {missing}"
+
+
+def test_ddg_is_aggregator_delegates_to_shared_list() -> None:
+    """duckduckgo.is_aggregator and reject_hosts must agree — they were two
+    hand-synced lists before W-C.3; now one delegates to the other."""
+    from nous.sources.duckduckgo import is_aggregator
+    from nous.sources.reject_hosts import is_aggregator_host
+
+    for url, host in [
+        ("https://duckduckgo.com/?q=acme", "duckduckgo.com"),
+        ("https://www.linkedin.com/company/acme", "www.linkedin.com"),
+        ("https://foo.crunchbase.com/x", "foo.crunchbase.com"),
+        ("https://i.imgur.com/a.png", "i.imgur.com"),
+        ("https://acme.com/", "acme.com"),
+    ]:
+        assert is_aggregator(url) == is_aggregator_host(host)
