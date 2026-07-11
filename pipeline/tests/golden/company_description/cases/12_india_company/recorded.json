@@ -6,7 +6,6 @@
     "description_short": "Kaveri Cloud is a cloud cost optimization platform that maps spend across AWS, GCP, and Azure and executes rightsizing and scheduling savings automatically.",
     "primary_category": "developer tools",
     "tags": [
-      "cloud-cost",
       "finops",
       "aws",
       "gcp",
