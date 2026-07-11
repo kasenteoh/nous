@@ -1,0 +1,5 @@
+{
+  "company_name": "Glowharbor",
+  "variant": "default",
+  "notes": "Padding failure: thin input (~90 words of substance) but recorded response stretches to 4 paragraphs of generic filler — exceeds the thin-input caps, so structure_pass_rate < 1 by design. Grounded (no invented entities), so only structure suffers."
+}

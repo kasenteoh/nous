@@ -4,7 +4,6 @@
   "recorded_at": null,
   "response": {
     "description_short": "Fluxline is a CI observability platform that ingests build telemetry from providers like GitHub Actions and CircleCI to surface flaky tests, slow pipelines, and regressions.",
-    "description_long": "Fluxline gives engineering teams one queryable view of their continuous integration: every build, test, and deploy streams from GitHub Actions, CircleCI, or Buildkite into a timeline the team can inspect. Its flake detector replays failing tests in isolation and flags the nondeterministic ones, so teams stop re-running whole suites to get a green check.\n\nThe product targets platform teams at companies with 50 to 5,000 engineers. Dashboards break down pipeline time by stage, repository, and team, and budget alerts fire when a merge queue backs up; the company says customers typically cut time-to-green by a third within the first month.\n\nFounded in 2021 by engineers who ran build infrastructure at scale, the company is remote-first and headquartered in San Francisco, CA. Pricing is free for open source, with team plans from $49 per month per repository and an enterprise tier adding SSO and audit logs.",
     "primary_category": "developer tools",
     "tags": [
       "ci-cd",

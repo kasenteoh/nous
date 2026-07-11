@@ -105,6 +105,15 @@ def paragraph_count(text: str) -> int:
     return len([p for p in _PARAGRAPH_SPLIT.split(text) if p.strip()])
 
 
+_WHITESPACE_WORD = re.compile(r"\S+")
+
+
+def word_count(text: str) -> int:
+    """Whitespace-delimited token count — the floor/cap unit for the
+    long-description structure checks."""
+    return len(_WHITESPACE_WORD.findall(text))
+
+
 # Word-ish tokens; keeps &/./- so "R&D", "Y.C.", "co-founder" stay whole.
 _WORD_RE = re.compile(r"[A-Za-z][A-Za-z0-9&.\-']*")
 # Digit runs with optional thousands separators / decimals ("45", "1.2", "12,000").

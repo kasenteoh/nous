@@ -1,0 +1,39 @@
+Ledgerline — Close the books without the spreadsheet marathon
+
+Ledgerline automates payment reconciliation for finance teams. It pulls
+transactions from Stripe, Adyen, PayPal, and your bank feeds, matches them
+against invoices and ledger entries, and flags every discrepancy with a
+suggested resolution.
+
+The problem
+
+For companies that sell across several payment providers, reconciliation is
+a monthly spreadsheet marathon: exports from each processor, VLOOKUPs,
+manual matching of fees, refunds, and chargebacks. Teams routinely spend the
+first week of every month closing the previous one.
+
+How Ledgerline works
+
+Connect your payment processors and bank accounts through read-only
+integrations. Ledgerline's matching engine pairs each payout with its
+underlying transactions, nets out processor fees, currency conversion, and
+refunds, and posts journal entries to NetSuite, QuickBooks, or Xero. Rules
+you accept once are applied automatically the next month. Anything the
+engine cannot match with confidence lands in a review queue with the
+evidence attached.
+
+Results our customers report
+
+Finance teams at over 400 companies use Ledgerline. Customers report closing
+the books in hours instead of days, and month-end close times cut by 70
+percent. Ledgerline is SOC 2 Type II certified and never holds funds.
+
+Pricing
+
+Usage-based: a flat platform fee plus a per-transaction rate that declines
+with volume. No implementation fee for standard integrations.
+
+About us
+
+Ledgerline was founded in 2021 in New York by a former controller and a
+payments engineer. We are 32 people across New York and Toronto.

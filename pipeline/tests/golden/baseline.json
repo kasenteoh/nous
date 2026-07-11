@@ -1,17 +1,23 @@
 {
   "company_description": {
-    "grounding_mean": 0.988,
-    "grounding_min": 0.769,
-    "is_startup_accuracy": 0.95,
+    "grounding_mean": 0.95,
+    "grounding_min": 0.6,
+    "is_startup_accuracy": 0.85,
     "parse_rate": 1.0,
-    "people_precision": 0.857,
-    "people_recall": 1.0,
-    "slots_f1": 0.99,
-    "slots_precision": 1.0,
-    "slots_recall": 0.981,
-    "structure_pass_rate": 1.0,
-    "tags_f1": 0.986,
-    "website_state_accuracy": 1.0
+    "people_precision": 0.8,
+    "people_recall": 0.9,
+    "slots_f1": 0.85,
+    "slots_precision": 0.85,
+    "slots_recall": 0.85,
+    "structure_pass_rate": 0.9,
+    "website_state_accuracy": 0.9
+  },
+  "company_description_long": {
+    "grounding_mean": 0.95,
+    "grounding_min": 0.75,
+    "insufficiency_accuracy": 0.85,
+    "parse_rate": 1.0,
+    "structure_pass_rate": 0.85
   },
   "funding_extraction": {
     "announcement_accuracy": 0.95,

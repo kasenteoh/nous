@@ -1,0 +1,20 @@
+Snipvault — Your team's snippets, everywhere
+
+Save code snippets. Organize with tags and collections. Share with your
+team. Sync across devices.
+
+Features
+
+- Syntax highlighting for 40+ languages
+- Search across every snippet in milliseconds
+- Team libraries with permissions
+- VS Code and JetBrains extensions
+- End-to-end encrypted sync
+
+Pricing
+
+Free for personal use. Teams: $5 per user per month.
+
+Get started — download Snipvault for Mac, Windows, or Linux.
+
+(c) Snipvault

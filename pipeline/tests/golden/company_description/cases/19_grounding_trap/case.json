@@ -1,5 +1,5 @@
 {
   "company_name": "Meridian Ops",
   "variant": "default",
-  "notes": "No-fabrication proxy: recorded description invents '12,000 teams', '99.99% uptime', and a customer name absent from the input. grounding_min < 1 by design."
+  "notes": "No-fabrication proxy: recorded description_short inflates the stated '2,000 engineering teams' to an invented '12,000'. grounding_min < 1 by design. (The long-description grounding traps live in the company_description_long golden set since the W-F split.)"
 }

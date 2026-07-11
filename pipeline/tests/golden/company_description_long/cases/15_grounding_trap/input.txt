@@ -1,0 +1,40 @@
+Relaymark — Customer messaging on autopilot
+
+Relaymark automates lifecycle messaging for e-commerce brands: welcome
+series, abandoned-cart recovery, win-back campaigns, and post-purchase
+flows across email and SMS.
+
+How it works
+
+Relaymark connects to Shopify and BigCommerce, builds a profile of every
+shopper from orders and browsing events, and runs journeys from a visual
+builder. Send-time optimization picks the hour each shopper is most likely
+to engage, and a holdout system measures true incremental revenue per flow
+rather than last-click attribution.
+
+Templates and testing
+
+Over 900 brands run on Relaymark. Journey templates encode what works —
+the site cites a 4-message abandoned-cart series as its most-copied
+template — and every flow can A/B test subject lines, timing, and offers.
+
+Deliverability
+
+Dedicated sending infrastructure, list hygiene tooling, and automatic
+suppression of unengaged addresses keep sender reputation healthy.
+
+Pricing scales with contactable profiles; email and SMS are metered
+separately. A free tier covers stores under 500 profiles.
+
+About
+
+Relaymark is a 30-person company founded in 2020, fully remote, with
+customers concentrated in fashion, beauty, and food & beverage.
+
+Integrations
+
+Beyond Shopify and BigCommerce, Relaymark syncs audiences to Meta and Google ad platforms for suppression and lookalikes, and webhooks stream every message event to your warehouse. Review-request flows integrate with Okendo and Judge.me.
+
+Support
+
+Every plan includes migration help: Relaymark's team rebuilds your existing flows during onboarding, typically inside two weeks, and a deliverability specialist reviews your first month of sends.

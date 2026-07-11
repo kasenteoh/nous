@@ -1,0 +1,39 @@
+Vaultra — Every secret, every workload, accounted for
+
+Vaultra discovers, rotates, and governs the non-human credentials that
+modern infrastructure runs on: API keys, service-account tokens, database
+passwords, signing certificates.
+
+The problem
+
+Machine identities now outnumber human ones by orders of magnitude, and
+they leak: keys hard-coded in repositories, tokens shared across services,
+credentials that outlive the engineer who created them. Breach reports
+keep tracing incidents back to a forgotten credential.
+
+How Vaultra works
+
+Agentless discovery connects to AWS, GCP, Azure, Kubernetes, GitHub, and
+your CI system, then builds an inventory of every credential, where it is
+used, and what it can access. A risk engine ranks findings: unrotated keys,
+over-privileged tokens, secrets in code. One-click rotation swaps a
+credential and updates every consumer through native integrations, with a
+rollback window. Policies enforce expiry and least privilege continuously,
+not as a quarterly audit.
+
+Compliance
+
+Vaultra maps findings to SOC 2 and ISO 27001 controls and exports
+audit-ready evidence. The platform itself is SOC 2 Type II certified.
+
+Customers
+
+Security teams at cloud-native companies from 50 to 5,000 employees.
+The site cites deployments inventorying over 100,000 machine credentials.
+
+Pricing is annual, tiered by number of identities under management.
+
+About
+
+Vaultra was founded in Austin, TX in 2022 by two security engineers who ran
+identity infrastructure at a large fintech. The team is 38 people.

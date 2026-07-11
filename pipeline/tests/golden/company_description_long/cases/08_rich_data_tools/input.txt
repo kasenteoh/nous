@@ -1,0 +1,41 @@
+Rowfern — Ship data pipelines you can trust
+
+Rowfern is testing and contract enforcement for data pipelines. It catches
+broken schemas, silent nulls, and volume anomalies before they reach your
+dashboards — in the pull request, not the postmortem.
+
+What Rowfern does
+
+Rowfern reads your dbt project or SQL pipelines and generates a suite of
+checks: schema contracts between producing and consuming models, freshness
+and volume expectations learned from history, and assertions you write in
+YAML. Checks run in CI on every pull request against a sampled snapshot of
+production data, so a column rename or a join that fans out gets caught
+before merge. In production, the same checks run on schedule and page the
+owning team through PagerDuty or Slack when a contract breaks.
+
+Open core
+
+The check engine is open source under an Apache 2.0 license. The commercial
+platform adds the catalog of contracts, ownership routing, historical
+baselines, and SSO.
+
+Who uses it
+
+Data platform teams at Chartbeam, Densify Analytics, and Copperline Health
+run Rowfern on more than 4,000 models. Teams adopt it after a visible data
+outage — a broken dashboard in a board meeting is a common origin story.
+
+Pricing
+
+The open-source engine is free. Cloud plans start at $500 per month per
+workspace, scaling with models under contract.
+
+About
+
+Rowfern was founded in Denver in 2022 by two former data engineers. The
+team is 19 people, remote across US time zones.
+
+Security
+
+Rowfern runs checks inside your warehouse or over a read-only connection; sampled data never leaves your environment unless you opt into cloud snapshots. SOC 2 Type II certified.

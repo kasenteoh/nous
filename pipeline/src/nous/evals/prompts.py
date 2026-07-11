@@ -8,8 +8,9 @@ A :class:`PromptSpec` bundles, for one prompt:
 
 The harness core (:mod:`nous.evals.harness`) is generic over specs, so
 adding a prompt to the golden set means writing one spec + fixtures — no
-harness changes. Currently scoped to the two highest-value prompts:
-``company_description`` and ``funding_extraction``.
+harness changes. Currently scoped to the highest-value prompts:
+``company_description`` (the judge), ``company_description_long`` (the
+dedicated long-form profile), and ``funding_extraction``.
 
 Scoring runs on responses that already passed the runtime
 parse/validate path (``schema.model_validate_json`` — including model
@@ -32,10 +33,18 @@ from nous.evals.scoring import (
     grounding_fraction,
     mean,
     paragraph_count,
+    word_count,
 )
 from nous.llm.client import MAX_PROMPT_INPUT_CHARS
 from nous.llm.prompts.company_description import CompanyDescription
 from nous.llm.prompts.company_description import build_prompt as build_description_prompt
+from nous.llm.prompts.company_description_long import (
+    MAX_DESCRIPTION_INPUT_CHARS,
+    CompanyLongDescription,
+)
+from nous.llm.prompts.company_description_long import (
+    build_prompt as build_long_description_prompt,
+)
 from nous.llm.prompts.funding_extraction import (
     FundingExtraction,
 )
@@ -80,15 +89,10 @@ def _issue(issues: dict[str, list[str]], case_id: str, message: str) -> None:
 
 
 # ---------------------------------------------------------------------------
-# company_description
+# company_description (the judge: classification + description_short)
 # ---------------------------------------------------------------------------
 
-# Inputs at or above this length are "rich" sites: with website_state == "ok"
-# the long description is expected to be a real multi-paragraph profile, not
-# a one-liner. Below it (thin/parked/placeholder pages) one paragraph is fine.
-_RICH_INPUT_CHARS = 1_500
 _MAX_SHORT_CHARS = 450
-_MAX_LONG_PARAGRAPHS = 10
 
 
 def _build_company_description_prompt(case: CaseSpec, input_text: str) -> str:
@@ -103,23 +107,19 @@ def _normalize_industry_label(value: str | None) -> str | None:
 
 
 def _description_structure_ok(
-    recorded: CompanyDescription, *, rich: bool
+    recorded: CompanyDescription,
 ) -> tuple[bool, list[str]]:
+    """Bounds on the judge's only free-text field, description_short.
+
+    The long-description structure checks (paragraph/word floors) moved to
+    the dedicated company_description_long scorer with the W-F prompt split.
+    """
     problems: list[str] = []
     short = recorded.description_short.strip()
     if not short:
         problems.append("description_short is empty")
     elif len(short) > _MAX_SHORT_CHARS:
         problems.append(f"description_short too long ({len(short)} > {_MAX_SHORT_CHARS} chars)")
-    long_paragraphs = paragraph_count(recorded.description_long)
-    if long_paragraphs < 1:
-        problems.append("description_long is empty")
-    elif rich and long_paragraphs < 2:
-        problems.append(f"description_long too thin for a rich site ({long_paragraphs} paragraph)")
-    elif long_paragraphs > _MAX_LONG_PARAGRAPHS:
-        problems.append(
-            f"description_long too long ({long_paragraphs} > {_MAX_LONG_PARAGRAPHS} paragraphs)"
-        )
     return (not problems, problems)
 
 
@@ -135,10 +135,17 @@ def score_company_description(cases: Sequence[CaseEvaluation]) -> PromptReport:
       founded_year).
     - people_precision / people_recall — casefolded name sets, AFTER the
       schema's implausible-roster validator has run (the runtime path).
-    - tags_f1 — normalized-tag set overlap (tags are subjective; F1 only).
-    - structure_pass_rate — length/paragraph bounds on the descriptions.
+    - structure_pass_rate — length bounds on description_short (the judge's
+      only free-text field since the W-F split).
     - grounding_mean / grounding_min — no-fabrication proxy: proper nouns
-      and numbers in the descriptions must appear in the input text.
+      and numbers in description_short must appear in the input text.
+
+    Informational (not gated): tags_* — normalized-tag set overlap. Tags
+    were briefly gated on exact-set F1, but the first live re-recording
+    showed DeepSeek picks a systematically different (equally reasonable)
+    tag vocabulary than a fixture author — exact overlap ran ~0.3 against a
+    0.98 simulated floor. Tag quality is subjective and vocabulary-sensitive,
+    so the metric is reported for visibility but does not gate.
     """
     from nous.pipeline.enrich_companies import _normalize_tag  # runtime tag normalizer
 
@@ -240,18 +247,13 @@ def score_company_description(cases: Sequence[CaseEvaluation]) -> PromptReport:
                 f" extra {sorted(recorded_tags - expected_tags)}",
             )
 
-        rich = (
-            len(case.input_text) >= _RICH_INPUT_CHARS and expected.website_state == "ok"
-        )
-        structure_ok, structure_problems = _description_structure_ok(recorded, rich=rich)
+        structure_ok, structure_problems = _description_structure_ok(recorded)
         structure.add(structure_ok)
         for problem in structure_problems:
             _issue(issues, case.case_id, f"structure: {problem}")
 
         source = f"{case.input_text}\n{case.spec.company_name}"
-        grounding = grounding_fraction(
-            f"{recorded.description_short}\n\n{recorded.description_long}", source
-        )
+        grounding = grounding_fraction(recorded.description_short, source)
         groundings.append(grounding)
         if grounding < 1.0:
             _issue(
@@ -269,12 +271,13 @@ def score_company_description(cases: Sequence[CaseEvaluation]) -> PromptReport:
         "slots_f1": slots.f1,
         "people_precision": people.precision,
         "people_recall": people.recall,
-        "tags_f1": tags.f1,
         "structure_pass_rate": structure.value,
         "grounding_mean": mean(groundings),
         "grounding_min": min(groundings) if groundings else 1.0,
-        # Informational (not gated): free-string category label agreement.
+        # Informational (not gated): free-string category label agreement,
+        # and tag overlap (vocabulary-sensitive — see docstring).
         "primary_category_accuracy": category.value,
+        "tags_f1": tags.f1,
         "tags_precision": tags.precision,
         "tags_recall": tags.recall,
     }
@@ -292,7 +295,169 @@ def score_company_description(cases: Sequence[CaseEvaluation]) -> PromptReport:
             "slots_f1",
             "people_precision",
             "people_recall",
-            "tags_f1",
+            "structure_pass_rate",
+            "grounding_mean",
+            "grounding_min",
+        ],
+        issues=issues,
+    )
+
+
+# ---------------------------------------------------------------------------
+# company_description_long (the dedicated long-form profile)
+# ---------------------------------------------------------------------------
+
+# Inputs at or above this length are "rich": the prompt's depth floor
+# (>= 4 substantial paragraphs, ~350-600 words) applies. Below it the honest
+# response is fewer, shorter paragraphs — padding a thin site is a failure.
+_LONG_RICH_INPUT_CHARS = 1_500
+# Rich-input floors. The word floor sits slightly below the prompt's ~350
+# target so a tight-but-real 4-paragraph profile doesn't flap the gate.
+_LONG_RICH_MIN_PARAGRAPHS = 4
+_LONG_RICH_MIN_WORDS = 300
+# Ceilings (any input): beyond these the model is padding, not profiling.
+_LONG_MAX_PARAGRAPHS = 8
+_LONG_MAX_WORDS = 800
+# Thin-input caps: an honest profile of a thin site is short. Exceeding
+# these on a sub-rich input is the padding signature the prompt forbids.
+_LONG_THIN_MAX_PARAGRAPHS = 3
+_LONG_THIN_MAX_WORDS = 250
+
+
+def _build_company_description_long_prompt(case: CaseSpec, input_text: str) -> str:
+    # Mirror enrich_companies: the describe call gets the LARGER 48k budget.
+    cleaned = truncate_to_chars(input_text, MAX_DESCRIPTION_INPUT_CHARS)
+    return build_long_description_prompt(
+        company_name=case.company_name, cleaned_text=cleaned
+    )
+
+
+def _long_structure_ok(
+    description: str, *, rich: bool
+) -> tuple[bool, list[str]]:
+    problems: list[str] = []
+    paragraphs = paragraph_count(description)
+    words = word_count(description)
+    if rich:
+        if paragraphs < _LONG_RICH_MIN_PARAGRAPHS:
+            problems.append(
+                f"only {paragraphs} paragraphs on a rich input"
+                f" (floor {_LONG_RICH_MIN_PARAGRAPHS})"
+            )
+        if words < _LONG_RICH_MIN_WORDS:
+            problems.append(
+                f"only {words} words on a rich input (floor {_LONG_RICH_MIN_WORDS})"
+            )
+    else:
+        if paragraphs > _LONG_THIN_MAX_PARAGRAPHS:
+            problems.append(
+                f"{paragraphs} paragraphs on a thin input"
+                f" (cap {_LONG_THIN_MAX_PARAGRAPHS}) — padding"
+            )
+        if words > _LONG_THIN_MAX_WORDS:
+            problems.append(
+                f"{words} words on a thin input (cap {_LONG_THIN_MAX_WORDS}) — padding"
+            )
+    if paragraphs > _LONG_MAX_PARAGRAPHS:
+        problems.append(
+            f"{paragraphs} paragraphs (cap {_LONG_MAX_PARAGRAPHS})"
+        )
+    if words > _LONG_MAX_WORDS:
+        problems.append(f"{words} words (cap {_LONG_MAX_WORDS})")
+    return (not problems, problems)
+
+
+def score_company_description_long(cases: Sequence[CaseEvaluation]) -> PromptReport:
+    """Score company_description_long recordings against ground truth.
+
+    Gated metrics:
+    - parse_rate — recordings surviving runtime schema validation.
+    - insufficiency_accuracy — null agreement: the model returns null exactly
+      when the hand-checked expectation is null. Describing an undescribable
+      site and refusing a describable one both cost this metric.
+    - structure_pass_rate — depth floors on rich inputs (>= 4 paragraphs,
+      >= 300 words) and padding caps on thin inputs (<= 3 paragraphs,
+      <= 250 words), plus global ceilings. Only scored when both sides agree
+      a description exists (null misses are already insufficiency misses).
+    - grounding_mean / grounding_min — the no-fabrication proxy over the
+      long description: proper nouns and numbers must appear in the input.
+
+    Informational: rich_word_mean (average word count on rich non-null
+    recordings — the "did descriptions actually get longer" dial).
+    """
+    issues: dict[str, list[str]] = {}
+    parse = Accuracy()
+    insufficiency = Accuracy()
+    structure = Accuracy()
+    groundings: list[float] = []
+    rich_words: list[float] = []
+    provenance: dict[str, int] = {}
+
+    for case in cases:
+        expected = case.expected
+        assert isinstance(expected, CompanyLongDescription)
+        parse.add(case.recorded is not None)
+        if case.recorded is None:
+            _issue(issues, case.case_id, "recorded response failed runtime schema validation")
+            continue
+        recorded = case.recorded
+        assert isinstance(recorded, CompanyLongDescription)
+
+        expected_null = expected.description_long is None
+        recorded_null = recorded.description_long is None
+        insufficiency.add(expected_null == recorded_null)
+        if expected_null != recorded_null:
+            _issue(
+                issues,
+                case.case_id,
+                "insufficiency: expected "
+                + ("null" if expected_null else "a description")
+                + ", got "
+                + ("null" if recorded_null else "a description"),
+            )
+
+        if expected_null or recorded.description_long is None:
+            # Nothing further to check: a wrong null/non-null is already an
+            # insufficiency miss, and a correct null has no text to score.
+            continue
+
+        rich = len(case.input_text) >= _LONG_RICH_INPUT_CHARS
+        structure_ok, structure_problems = _long_structure_ok(
+            recorded.description_long, rich=rich
+        )
+        structure.add(structure_ok)
+        for problem in structure_problems:
+            _issue(issues, case.case_id, f"structure: {problem}")
+        if rich:
+            rich_words.append(float(word_count(recorded.description_long)))
+
+        source = f"{case.input_text}\n{case.spec.company_name}"
+        grounding = grounding_fraction(recorded.description_long, source)
+        groundings.append(grounding)
+        if grounding < 1.0:
+            _issue(
+                issues,
+                case.case_id,
+                f"grounding: {grounding:.3f} — description asserts tokens absent from input",
+            )
+
+    metrics: dict[str, float] = {
+        "parse_rate": parse.value,
+        "insufficiency_accuracy": insufficiency.value,
+        "structure_pass_rate": structure.value,
+        "grounding_mean": mean(groundings),
+        "grounding_min": min(groundings) if groundings else 1.0,
+        # Informational (not gated): are rich descriptions actually long?
+        "rich_word_mean": mean(rich_words),
+    }
+    return PromptReport(
+        prompt="company_description_long",
+        case_count=len(cases),
+        provenance_counts=provenance,
+        metrics=metrics,
+        gated=[
+            "parse_rate",
+            "insufficiency_accuracy",
             "structure_pass_rate",
             "grounding_mean",
             "grounding_min",
@@ -462,6 +627,12 @@ PROMPT_SPECS: tuple[PromptSpec, ...] = (
         schema=CompanyDescription,
         build_prompt=_build_company_description_prompt,
         score=score_company_description,
+    ),
+    PromptSpec(
+        name="company_description_long",
+        schema=CompanyLongDescription,
+        build_prompt=_build_company_description_long_prompt,
+        score=score_company_description_long,
     ),
     PromptSpec(
         name="funding_extraction",

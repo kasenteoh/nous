@@ -4,7 +4,6 @@
   "recorded_at": null,
   "response": {
     "description_short": "Farepoint provides payout infrastructure for online marketplaces: one API for seller onboarding, compliance checks, and multi-currency payouts.",
-    "description_long": "Farepoint sells payout infrastructure to online marketplaces. A single API onboards sellers, runs compliance checks, and sends funds in 40+ currencies with same-day settlement in major corridors, while a dashboard handles KYC, tax forms, and reconciliation.\n\nThe company is an FCA-authorised payment institution that safeguards client funds in segregated accounts. It is based at 1 Finsbury Avenue, London, and employs a team of 60 across engineering, compliance, and partnerships.",
     "primary_category": "fintech",
     "tags": [
       "payments",

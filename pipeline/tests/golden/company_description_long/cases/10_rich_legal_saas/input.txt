@@ -1,0 +1,38 @@
+Briefhound — Contract review at in-house speed
+
+Briefhound reviews commercial contracts for in-house legal teams. Upload an
+NDA, MSA, or DPA and Briefhound redlines it against your playbook in
+minutes, in tracked changes, inside Microsoft Word.
+
+The problem
+
+In-house teams are buried in routine paper. Sales waits days for an NDA;
+legal burns evenings on low-risk redlines or ships them to outside counsel
+at hundreds of dollars an hour.
+
+How it works
+
+Your playbook — preferred positions, fallback language, walk-away terms —
+is encoded once, with a library of standard positions to start from.
+Briefhound's language models classify each clause, compare it to the
+playbook, and propose redlines with an explanation attached to every edit.
+Lawyers review in Microsoft Word with tracked changes, accept or adjust,
+and the playbook learns from what they change. An approvals dashboard shows
+cycle times and where negotiations stall.
+
+What customers see
+
+Legal teams report first-pass review in under 10 minutes and NDA turnaround
+cut from days to same-day. Briefhound handles NDAs, MSAs, DPAs, order
+forms, and vendor paper.
+
+Security: SOC 2 Type II, customer data never used to train shared models.
+
+Pricing: per-seat annual subscription with unlimited documents.
+
+About
+
+Briefhound was founded in Boston in 2021 by a former in-house counsel and
+two NLP engineers. 44 people. Compared to outside counsel, Briefhound
+positions routine review as software: the lawyer stays the decision-maker,
+the drafting grunt work moves to the machine.
