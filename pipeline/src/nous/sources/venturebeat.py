@@ -18,12 +18,17 @@ Quirks:
 - ``https://venturebeat.com/feed/`` 308-redirects to ``/feed`` (no trailing
   slash); we fetch the canonical URL directly to save the hop.
 - VentureBeat's RSS ``<description>`` carries the FULL article body (several
-  KB), not an excerpt. ``raw_content`` feeds the headline-company LLM prompt
-  in ingest-news, so we truncate it to ``SNIPPET_MAX_CHARS`` — the funded
-  company is always named in the lede, and unbounded snippets would
-  materially grow DeepSeek input volume for no extraction benefit. The
-  keyword filter inside ``_parse_rss`` runs on the full text *before* the
-  truncation, so recall is unaffected.
+  KB), not an excerpt. That breaks naive keyword filtering: a multi-KB
+  enterprise-research piece almost always mentions "funding"/"raised"
+  *somewhere*, so matching over the full body admits nearly every item
+  (verified live 2026-07: 6 of 7 items in a window with zero funding stories
+  passed). Each false positive burns an LLM headline-extraction call every
+  ingest run while it sits in the feed window. We therefore match
+  ``FUNDING_KEYWORDS`` against the **title + the first ``SNIPPET_MAX_CHARS``
+  of the body** — a genuine funding story declares itself in the lede
+  ("raised $100 million in a Series B funding round" appears in Railway's
+  first paragraph) — and store that same bounded lede as ``raw_content`` so
+  the DeepSeek prompt stays cheap by construction.
 """
 
 from __future__ import annotations
@@ -32,16 +37,22 @@ import logging
 
 import httpx
 
-from nous.sources.news import NewsArticleResult, NewsClient, RobotsBlockedError
+from nous.sources.news import (
+    NewsArticleResult,
+    NewsClient,
+    RobotsBlockedError,
+    _matches_funding_keyword,
+)
 
 logger = logging.getLogger(__name__)
 
 VENTUREBEAT_FEED = "https://venturebeat.com/feed"
 
-# Cap the stored RSS snippet: VB descriptions are full article bodies, and the
-# funded company is named in the lede. Mirrors the spirit of
-# ``news.RELEVANCE_BODY_PORTION_CHARS`` (600) — enough lede to identify the
-# company, bounded enough to keep the LLM prompt cheap.
+# Lede window: keywords are matched against (and raw_content truncated to)
+# this many chars of the full-body description. Mirrors the spirit of
+# ``news.RELEVANCE_BODY_PORTION_CHARS`` (600) — enough lede to declare a
+# funding round and name the company, bounded enough to keep the LLM prompt
+# cheap and the filter precise (see module docstring).
 SNIPPET_MAX_CHARS = 600
 
 
@@ -52,9 +63,11 @@ async def fetch_venturebeat_funding_articles(
 ) -> list[NewsArticleResult]:
     """Pull the VentureBeat main RSS feed, filter to funding stories.
 
-    The main feed is broad enterprise-tech/AI coverage, so funding-keyword
-    filtering (``require_keywords=True``) is essential — without it the
-    results would be dominated by research pieces and product coverage.
+    The main feed is broad enterprise-tech/AI coverage, so funding filtering
+    is essential — but it must run over the title + lede only, NOT the
+    full-body description ``_parse_rss`` would use with
+    ``require_keywords=True`` (see module docstring). We parse unfiltered,
+    then apply ``FUNDING_KEYWORDS`` to the bounded lede ourselves.
 
     Returns an empty list on robots block, HTTP error, or network failure —
     the caller treats this like any other empty-source case rather than
@@ -72,13 +85,17 @@ async def fetch_venturebeat_funding_articles(
     results = client._parse_rss(
         xml_text,
         lookback_days=lookback_days,
-        require_keywords=True,
+        require_keywords=False,
     )
-    # Truncate AFTER filtering: the keyword match sees the full description,
-    # the stored snippet stays bounded (see module docstring).
-    return [
-        r.model_copy(update={"raw_content": r.raw_content[:SNIPPET_MAX_CHARS]})
-        if len(r.raw_content) > SNIPPET_MAX_CHARS
-        else r
-        for r in results
-    ]
+    kept: list[NewsArticleResult] = []
+    for result in results:
+        lede = result.raw_content[:SNIPPET_MAX_CHARS]
+        # Precision gate: the keyword must appear in the headline or lede —
+        # an incidental mention deep in a full-body description is exactly
+        # the false-positive mode this adapter must not ship to the LLM.
+        if not _matches_funding_keyword(f"{result.title}\n{lede}"):
+            continue
+        if len(result.raw_content) > SNIPPET_MAX_CHARS:
+            result = result.model_copy(update={"raw_content": lede})
+        kept.append(result)
+    return kept

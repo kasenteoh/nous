@@ -142,19 +142,28 @@ async def test_venturebeat_drops_non_funding_items() -> None:
     )
 
 
-async def test_venturebeat_truncates_full_body_descriptions() -> None:
-    """VB descriptions are full article bodies; raw_content must stay bounded
-    while the keyword filter still sees the full text (keyword only deep in
-    the description)."""
-    long_tail = "word " * 400  # pushes the keyword position past the cap
+async def test_venturebeat_lede_filter_and_truncation() -> None:
+    """VB descriptions are full article bodies. The keyword gate runs on the
+    title + first SNIPPET_MAX_CHARS only: an incidental keyword deep in a
+    long body must NOT admit the item (that mode admits nearly every VB
+    research piece), and a genuine lede-declared funding item is kept with
+    raw_content truncated to the same bounded lede."""
+    long_tail = "word " * 400  # pushes any later keyword past the lede window
     rss = f"""<?xml version="1.0" encoding="UTF-8"?>
     <rss version="2.0"><channel>
       <title>VentureBeat</title>
       <item>
+        <title>Enterprise agents research deep dive</title>
+        <link>https://venturebeat.com/research-piece-incidental-keyword</link>
+        <pubDate>Sat, 13 Jun 2026 12:00:00 +0000</pubDate>
+        <description>{long_tail} Analysts noted the vendor previously raised funding.</description>
+      </item>
+      <item>
         <title>Acme lands new capital to expand</title>
         <link>https://venturebeat.com/acme-lands-capital</link>
         <pubDate>Sat, 13 Jun 2026 12:00:00 +0000</pubDate>
-        <description>{long_tail} The round was led by Example Ventures funding.</description>
+        <description>Acme raised a Series B funding round led by Example
+        Ventures. {long_tail}</description>
       </item>
     </channel></rss>
     """
@@ -163,8 +172,14 @@ async def test_venturebeat_truncates_full_body_descriptions() -> None:
         _inject(client, _MockTransport(_routes(feed_body=rss)))
         results = await fetch_venturebeat_funding_articles(client, lookback_days=-1)
 
-    assert len(results) == 1, "keyword beyond the cap must still match (filter pre-truncation)"
-    assert len(results[0].raw_content) == SNIPPET_MAX_CHARS
+    urls = {r.url for r in results}
+    assert "https://venturebeat.com/research-piece-incidental-keyword" not in urls, (
+        "keyword buried past the lede window must not admit the item"
+    )
+    assert urls == {"https://venturebeat.com/acme-lands-capital"}
+    assert len(results[0].raw_content) == SNIPPET_MAX_CHARS, (
+        "kept items must carry the bounded lede as raw_content"
+    )
 
 
 # ---------------------------------------------------------------------------

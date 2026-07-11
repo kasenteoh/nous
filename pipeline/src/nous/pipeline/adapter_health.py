@@ -33,13 +33,20 @@ The six broad funding-news feeds (TechCrunch venture tag, SiliconANGLE,
 PR Newswire VC, Crunchbase News, VentureBeat, GeekWire funding tag) feed the
 same auto-create path via ingest-news and die just as silently — a feed URL
 that starts 404ing or a robots change turns into a permanent ``[]`` inside
-the fetcher.  The sweep therefore also probes every :data:`NEWS_FEEDS` entry
+the fetcher.  The sweep therefore also probes every :data:`NEWS_FEEDS` URL
 through a live :class:`~nous.sources.news.NewsClient` and reports it under a
-``news:<slug>`` key.  Feeds get :data:`DEFAULT_NEWS_FLOOR` (0 — healthy means
-*any* entry parsed) because RSS windows are shallow (VentureBeat serves ~7
-items) and keyword filtering legitimately thins slow weeks; the probe uses a
-:data:`NEWS_PROBE_LOOKBACK_DAYS`-day window to make an all-items-outside-
-lookback false positive implausible.
+``news:<slug>`` key.
+
+Feed probes measure **aliveness, not funding yield**: the probe parses the
+feed raw (no keyword filter) and counts items in a
+:data:`NEWS_PROBE_LOOKBACK_DAYS`-day window against
+:data:`DEFAULT_NEWS_FLOOR` (0 — healthy means *any* item parsed).  Probing
+the keyword-filtered fetchers instead would flap: VentureBeat's window is ~7
+items and regularly contains zero funding stories, and a flapping canary
+teaches people to ignore it.  Probing the URL directly also means transport
+failures (robots block, 404, network) surface as recorded *errors* here
+rather than being swallowed into ``[]`` the way the ingest-path fetchers
+deliberately do.
 
 This stage is **read-only**: it performs network fetches and writes exactly one
 ``pipeline_runs`` audit row, nothing else.  It is **resilient**: each adapter is
@@ -58,55 +65,44 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Awaitable
 from dataclasses import dataclass, field
-from typing import Protocol
 
 from pydantic import BaseModel
 
 from nous.observability import write_step_summary
-from nous.sources.crunchbase_news import fetch_crunchbase_news_funding_articles
-from nous.sources.geekwire import fetch_geekwire_funding_articles
+from nous.sources.crunchbase_news import CB_NEWS_FEED
+from nous.sources.geekwire import GEEKWIRE_FUNDING_FEED
 from nous.sources.homepage import HomepageClient
-from nous.sources.news import NewsArticleResult, NewsClient
-from nous.sources.prnewswire import fetch_prnewswire_funding_articles
-from nous.sources.siliconangle import fetch_siliconangle_funding_articles
-from nous.sources.techcrunch import fetch_techcrunch_funding_articles
+from nous.sources.news import NewsClient
+from nous.sources.prnewswire import PRNEWSWIRE_VC_FEED
+from nous.sources.siliconangle import SILICONANGLE_FEED
+from nous.sources.techcrunch import TC_FUNDING_FEED
 from nous.sources.vc_portfolios import ADAPTERS, PortfolioAdapter
-from nous.sources.venturebeat import fetch_venturebeat_funding_articles
+from nous.sources.venturebeat import VENTUREBEAT_FEED
 
 logger = logging.getLogger(__name__)
 
-
-class NewsFeedFetcher(Protocol):
-    """Signature shared by the ``fetch_*_funding_articles`` functions."""
-
-    def __call__(
-        self, client: NewsClient, *, lookback_days: int
-    ) -> Awaitable[list[NewsArticleResult]]: ...
-
-
-# Broad funding-news feeds probed by the sweep, keyed by the same slug used
-# for ``companies.discovered_via``. Reported as ``news:<slug>`` so firm and
-# feed keys can never collide in the summary maps.
-NEWS_FEEDS: dict[str, NewsFeedFetcher] = {
-    "techcrunch": fetch_techcrunch_funding_articles,
-    "siliconangle": fetch_siliconangle_funding_articles,
-    "prnewswire": fetch_prnewswire_funding_articles,
-    "crunchbase_news": fetch_crunchbase_news_funding_articles,
-    "venturebeat": fetch_venturebeat_funding_articles,
-    "geekwire": fetch_geekwire_funding_articles,
+# Broad funding-news feed URLs probed by the sweep, keyed by the same slug
+# used for ``companies.discovered_via``. Reported as ``news:<slug>`` so firm
+# and feed keys can never collide in the summary maps. Probed as raw URLs
+# (not through the fetch_*_funding_articles wrappers) — see the module
+# docstring's "News feeds" section for why.
+NEWS_FEEDS: dict[str, str] = {
+    "techcrunch": TC_FUNDING_FEED,
+    "siliconangle": SILICONANGLE_FEED,
+    "prnewswire": PRNEWSWIRE_VC_FEED,
+    "crunchbase_news": CB_NEWS_FEED,
+    "venturebeat": VENTUREBEAT_FEED,
+    "geekwire": GEEKWIRE_FUNDING_FEED,
 }
 
-# Feed floor: healthy means *any* entry parsed (count > 0). RSS windows are
-# shallow and keyword-filtered, so a count floor above zero would flap on slow
-# news weeks; zero entries over NEWS_PROBE_LOOKBACK_DAYS is the collapse
-# signal (dead URL, robots change, feed format drift — the fetchers map all
-# of those to []).
+# Feed floor: healthy means *any* raw item parsed (count > 0). The probe is
+# unfiltered, so a live feed always clears this; zero items over
+# NEWS_PROBE_LOOKBACK_DAYS means the feed is dead, frozen, or no longer RSS.
 DEFAULT_NEWS_FLOOR = 0
 
-# Wide probe window so "every item happens to be older than the standing
-# 14-day ingest lookback" cannot trip the canary on its own.
+# Wide probe window so a slow publishing fortnight cannot trip the canary on
+# its own (the standing ingest lookback is 14 days).
 NEWS_PROBE_LOOKBACK_DAYS = 30
 
 # Global default floor: an adapter yielding this many entries or fewer is
@@ -252,23 +248,28 @@ async def _probe_adapter(
 
 async def _probe_news_feed(
     slug: str,
-    fetcher: NewsFeedFetcher,
+    url: str,
     client: NewsClient,
 ) -> AdapterHealth:
-    """Run one news-feed fetcher and classify it against its floor.
+    """Fetch one feed URL, parse it raw, and classify against its floor.
 
-    The fetchers already map transport failures (robots block, HTTP error,
-    network error) to ``[]``, so a dead feed usually shows up as a zero count
-    rather than an error; the try/except still isolates anything unexpected
-    (parser blow-up, event-loop cancellation) the same way ``_probe_adapter``
-    does.
+    Deliberately bypasses the ``fetch_*_funding_articles`` wrappers: they
+    keyword-filter (which makes counts flap on funding-free windows) and map
+    transport failures to ``[]`` (which hides them). Here a robots block,
+    HTTP error, or network failure is *recorded as the error it is*, and the
+    count reflects raw feed aliveness.
     """
     key = f"news:{slug}"
     floor = news_floor_for(slug)
     try:
-        results = await fetcher(client, lookback_days=NEWS_PROBE_LOOKBACK_DAYS)
+        xml_text = await client.fetch_text(url)
+        results = client._parse_rss(
+            xml_text,
+            lookback_days=NEWS_PROBE_LOOKBACK_DAYS,
+            require_keywords=False,
+        )
     except Exception as exc:  # noqa: BLE001 — per-feed isolation is the point
-        logger.exception("adapter-health: news feed %s raised during fetch", slug)
+        logger.exception("adapter-health: news feed %s failed during probe", slug)
         return AdapterHealth(firm=key, count=0, floor=floor, error=repr(exc))
 
     count = len(results)
@@ -289,7 +290,7 @@ async def run_adapter_health(
     adapters: dict[str, PortfolioAdapter] | None = None,
     global_floor: int = DEFAULT_GLOBAL_FLOOR,
     news_client: NewsClient | None = None,
-    news_feeds: dict[str, NewsFeedFetcher] | None = None,
+    news_feeds: dict[str, str] | None = None,
 ) -> AdapterHealthReport:
     """Probe every adapter (and news feed) and return an :class:`AdapterHealthReport`.
 
@@ -303,8 +304,9 @@ async def run_adapter_health(
         news_client: An entered :class:`NewsClient` for the news-feed probes.
             ``None`` (the default) skips the feed sweep entirely — VC-only
             callers and existing tests are unaffected.
-        news_feeds: Feed registry to probe when ``news_client`` is given;
-            defaults to :data:`NEWS_FEEDS`.  Results are keyed ``news:<slug>``.
+        news_feeds: slug -> feed-URL registry to probe when ``news_client``
+            is given; defaults to :data:`NEWS_FEEDS`.  Results are keyed
+            ``news:<slug>``.
 
     Adapters are probed sequentially.  Each adapter already throttles its own
     HTTP (the shared per-domain 1 req/s budget in :class:`HomepageClient`), and

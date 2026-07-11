@@ -19,7 +19,6 @@ from nous.pipeline.adapter_health import (
     DEFAULT_GLOBAL_FLOOR,
     DEFAULT_NEWS_FLOOR,
     NEWS_FEEDS,
-    NEWS_PROBE_LOOKBACK_DAYS,
     AdapterHealth,
     AdapterHealthReport,
     build_summary,
@@ -28,9 +27,15 @@ from nous.pipeline.adapter_health import (
     news_floor_for,
     run_adapter_health,
 )
+from nous.sources.crunchbase_news import CB_NEWS_FEED
+from nous.sources.geekwire import GEEKWIRE_FUNDING_FEED
 from nous.sources.homepage import HomepageClient
-from nous.sources.news import NewsArticleResult, NewsClient
+from nous.sources.news import NewsClient, RobotsBlockedError
+from nous.sources.prnewswire import PRNEWSWIRE_VC_FEED
+from nous.sources.siliconangle import SILICONANGLE_FEED
+from nous.sources.techcrunch import TC_FUNDING_FEED
 from nous.sources.vc_portfolios import PortfolioEntry
+from nous.sources.venturebeat import VENTUREBEAT_FEED
 
 # ---------------------------------------------------------------------------
 # Test doubles
@@ -321,28 +326,37 @@ def test_build_summary_counts_and_failures() -> None:
 # ---------------------------------------------------------------------------
 
 
-class StubNewsClient:
-    """No-op NewsClient stand-in; the fake fetchers ignore it entirely."""
+class StubNewsClient(NewsClient):
+    """NewsClient whose fetch_text serves canned bodies (or raises) per URL.
 
-    async def __aenter__(self) -> StubNewsClient:
-        return self
+    Subclasses the real client so ``_parse_rss`` is the production parser —
+    the probe's fetch is the only thing stubbed. Never entered as a context
+    manager: fetch_text is overridden and _parse_rss is transport-free.
+    """
 
-    async def __aexit__(self, *args: object) -> None:
-        return None
+    def __init__(self, responses: dict[str, str | Exception]) -> None:
+        super().__init__(user_agent="nous-test test@example.com")
+        self._responses = responses
+
+    async def fetch_text(self, url: str) -> str:
+        outcome = self._responses[url]
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
 
 
-def _stub_news_client() -> NewsClient:
-    return StubNewsClient()  # type: ignore[return-value]
+# Items carry no pubDate on purpose: undated entries survive any lookback
+# cutoff, keeping these tests independent of the wall clock.
+_ALIVE_FEED_XML = """<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"><channel><title>Feed</title>
+  <item><title>Post one</title><link>https://feed.example.com/one</link></item>
+  <item><title>Post two</title><link>https://feed.example.com/two</link></item>
+</channel></rss>
+"""
 
-
-def _feed_result(i: int) -> NewsArticleResult:
-    return NewsArticleResult(
-        url=f"https://feed.example.com/item-{i}",
-        title=f"Startup {i} raises ${i}M",
-        source="feed.example.com",
-        published_date=None,
-        raw_content="snippet",
-    )
+_EMPTY_FEED_XML = """<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"><channel><title>Feed</title></channel></rss>
+"""
 
 
 def test_news_floor_for_defaults_to_news_floor() -> None:
@@ -351,91 +365,82 @@ def test_news_floor_for_defaults_to_news_floor() -> None:
 
 def test_news_feeds_registry_matches_broad_sweep_sources() -> None:
     """Every ingest-news broad feed is canary-covered, keyed by its
-    discovered_via slug."""
-    assert set(NEWS_FEEDS) == {
-        "techcrunch",
-        "siliconangle",
-        "prnewswire",
-        "crunchbase_news",
-        "venturebeat",
-        "geekwire",
+    discovered_via slug, probing the exact URL the fetcher uses."""
+    assert NEWS_FEEDS == {
+        "techcrunch": TC_FUNDING_FEED,
+        "siliconangle": SILICONANGLE_FEED,
+        "prnewswire": PRNEWSWIRE_VC_FEED,
+        "crunchbase_news": CB_NEWS_FEED,
+        "venturebeat": VENTUREBEAT_FEED,
+        "geekwire": GEEKWIRE_FUNDING_FEED,
     }
 
 
 async def test_news_feeds_probed_and_classified() -> None:
-    """Feeds are reported under news:<slug>: >0 healthy, 0 unhealthy,
-    raise isolated + recorded."""
-    lookbacks: list[int] = []
-
-    async def _ok(client: NewsClient, *, lookback_days: int) -> list[NewsArticleResult]:
-        lookbacks.append(lookback_days)
-        return [_feed_result(i) for i in range(3)]
-
-    async def _empty(
-        client: NewsClient, *, lookback_days: int
-    ) -> list[NewsArticleResult]:
-        return []
-
-    async def _boom(
-        client: NewsClient, *, lookback_days: int
-    ) -> list[NewsArticleResult]:
-        raise RuntimeError("simulated feed outage")
+    """Feeds report under news:<slug>: raw items > 0 healthy, an empty feed
+    unhealthy, and a transport failure recorded as an error (NOT hidden as
+    [] the way the ingest-path fetchers deliberately do)."""
+    news_client = StubNewsClient(
+        {
+            "https://ok.example.com/feed": _ALIVE_FEED_XML,
+            "https://dead.example.com/feed": _EMPTY_FEED_XML,
+            "https://blocked.example.com/feed": RobotsBlockedError(
+                "robots.txt disallows: https://blocked.example.com/feed"
+            ),
+        }
+    )
 
     report = await run_adapter_health(
         _stub_client(),
         adapters={},
-        news_client=_stub_news_client(),
-        news_feeds={"okfeed": _ok, "deadfeed": _empty, "boomfeed": _boom},
+        news_client=news_client,
+        news_feeds={
+            "okfeed": "https://ok.example.com/feed",
+            "deadfeed": "https://dead.example.com/feed",
+            "blockedfeed": "https://blocked.example.com/feed",
+        },
     )
 
     by_key = {a.firm: a for a in report.adapters}
-    assert set(by_key) == {"news:okfeed", "news:deadfeed", "news:boomfeed"}
+    assert set(by_key) == {"news:okfeed", "news:deadfeed", "news:blockedfeed"}
 
     assert by_key["news:okfeed"].healthy is True
-    assert by_key["news:okfeed"].count == 3
+    assert by_key["news:okfeed"].count == 2
     assert by_key["news:okfeed"].floor == DEFAULT_NEWS_FLOOR
 
-    # Zero entries sits AT the floor (0) — not healthy: an empty feed is the
-    # collapse signal the fetchers produce for dead URLs / robots changes.
+    # Zero raw items sits AT the floor (0) — not healthy: an unfiltered parse
+    # of a live feed always has items, so zero means dead/frozen/format-drift.
     assert by_key["news:deadfeed"].healthy is False
     assert by_key["news:deadfeed"].error is None
 
-    assert by_key["news:boomfeed"].healthy is False
-    assert by_key["news:boomfeed"].error is not None
-    assert "simulated feed outage" in by_key["news:boomfeed"].error
-
-    # Probes use the wide canary lookback, not the standing ingest window.
-    assert lookbacks == [NEWS_PROBE_LOOKBACK_DAYS]
+    assert by_key["news:blockedfeed"].healthy is False
+    assert by_key["news:blockedfeed"].error is not None
+    assert "robots.txt disallows" in by_key["news:blockedfeed"].error
 
 
 async def test_news_feeds_skipped_without_news_client() -> None:
     """No news_client (the default) means a VC-only sweep — existing callers
     and tests see identical behavior."""
-
-    async def _ok(client: NewsClient, *, lookback_days: int) -> list[NewsArticleResult]:
-        raise AssertionError("feed fetcher must not run without a news client")
-
     report = await run_adapter_health(
         _stub_client(),
         adapters={"acme": FakeAdapter(firm="acme", count=20)},
-        news_feeds={"okfeed": _ok},
+        news_feeds={"okfeed": "https://ok.example.com/feed"},
     )
     assert [a.firm for a in report.adapters] == ["acme"]
 
 
 async def test_mixed_sweep_reports_firms_and_feeds_together() -> None:
     """Firms and feeds land in one report/summary with disjoint keys."""
-
-    async def _ok(client: NewsClient, *, lookback_days: int) -> list[NewsArticleResult]:
-        return [_feed_result(1)]
+    news_client = StubNewsClient({"https://acme.example.com/feed": _ALIVE_FEED_XML})
 
     report = await run_adapter_health(
         _stub_client(),
         adapters={"acme": FakeAdapter(firm="acme", count=20)},
-        news_client=_stub_news_client(),
-        news_feeds={"acme": _ok},  # same bare slug as the firm — must not collide
+        news_client=news_client,
+        # Same bare slug as the firm — the news: prefix must prevent collision.
+        news_feeds={"acme": "https://acme.example.com/feed"},
     )
     summary = build_summary(report)
-    assert summary.counts == {"acme": 20, "news:acme": 1}
+    assert summary.counts == {"acme": 20, "news:acme": 2}
     assert summary.adapters_checked == 2
     assert summary.adapters_unhealthy == 0
