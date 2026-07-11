@@ -203,10 +203,25 @@ def scrape_homepages(
         "drops out of the selection. Mutually exclusive with --refetch-after-days."
     ),
 )
+@click.option(
+    "--redescribe-outdated",
+    is_flag=True,
+    default=False,
+    help=(
+        "After the normal pass, additionally regenerate description_long for "
+        "companies whose enrichment_prompt_version is NULL or older than the "
+        "current description prompt (shown companies with scraped content "
+        "only). Descriptions only — eligibility/people/taxonomy untouched. "
+        "Bounded by --limit; idempotent (each visited company is stamped "
+        "current and drops out). Mutually exclusive with "
+        "--backfill-missing-taxonomy."
+    ),
+)
 def enrich_companies(
     limit: int | None,
     refetch_after_days: int | None,
     backfill_missing_taxonomy: bool,
+    redescribe_outdated: bool,
 ) -> None:
     """Call the LLM to generate descriptions + people for companies with raw pages."""
     import asyncio
@@ -214,7 +229,17 @@ def enrich_companies(
 
     from nous.db.session import AsyncSessionLocal
     from nous.observability import emit_run_telemetry, record_pipeline_run
-    from nous.pipeline.enrich_companies import run_enrich_companies
+    from nous.pipeline.enrich_companies import (
+        run_enrich_companies,
+        run_redescribe_outdated,
+    )
+
+    if redescribe_outdated and backfill_missing_taxonomy:
+        raise click.UsageError(
+            "--redescribe-outdated and --backfill-missing-taxonomy are "
+            "mutually exclusive (one regenerates descriptions, the other "
+            "taxonomy)."
+        )
 
     async def _run() -> None:
         started = datetime.now(UTC)
@@ -235,6 +260,25 @@ def enrich_companies(
                 summary=summary,
                 flag_empty=True,
             )
+            if redescribe_outdated:
+                # Second pass, separately bounded by --limit: drain the
+                # outdated-description backlog. Recorded as its own
+                # pipeline_runs row so the drain is observable; flag_empty
+                # stays off because an empty selection is the steady state
+                # once the backlog drains.
+                redescribe_started = datetime.now(UTC)
+                async with AsyncSessionLocal() as session:
+                    redescribe_summary = await run_redescribe_outdated(
+                        session, max_companies=limit
+                    )
+                    click.echo(redescribe_summary.model_dump_json(indent=2))
+                await record_pipeline_run(
+                    "redescribe-outdated",
+                    started_at=redescribe_started,
+                    inputs_seen=redescribe_summary.companies_seen,
+                    rows_written=redescribe_summary.descriptions_written,
+                    summary=redescribe_summary,
+                )
         finally:
             emit_run_telemetry("enrich-companies")
 

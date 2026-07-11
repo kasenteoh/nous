@@ -1,8 +1,13 @@
-"""Company-description prompt per spec §6.1.
+"""Company judge prompt per spec §6.1 (classification + short description).
 
 Input: cleaned visible text from a company's homepage + about/product
-subpages.  Output: a Pydantic model with short + long descriptions,
-primary category, and tags.
+subpages.  Output: a Pydantic model with the short description, primary
+category, tags, people, HQ, and the eligibility judgment.
+
+The long-form ``description_long`` used to live here too, but the
+classification instructions crowded it down to three thin paragraphs; it now
+has its own dedicated prompt (:mod:`nous.llm.prompts.company_description_long`)
+run as a second pass by enrich-companies for companies this judge keeps.
 """
 
 from __future__ import annotations
@@ -15,10 +20,13 @@ from pydantic import BaseModel, Field, model_validator
 from nous.util.industry import CANONICAL_INDUSTRIES
 
 # Version stamped onto rows whose content this prompt produced (companies
-# enrichment fields via enrich-companies). Scheme: "<date>.<same-day-counter>".
+# eligibility/classification fields via enrich-companies — see
+# eligibility_prompt_version). Scheme: "<date>.<same-day-counter>".
 # Bump on ANY semantic change to the template, schema, or validators — even a
 # wording tweak — so data from a bad revision can be found and re-run.
-PROMPT_VERSION: str = "2026-07-10.1"
+# .2: description_long moved out to the dedicated company_description_long
+# prompt (W-F); this prompt now judges + writes description_short only.
+PROMPT_VERSION: str = "2026-07-10.2"
 
 # Singular C-suite titles — at most one person can credibly hold each. When a
 # page's testimonials / customer logos get mis-read as leadership, the model
@@ -46,14 +54,6 @@ class CompanyDescription(BaseModel):
     description_short: str = Field(
         ...,
         description="1–2 sentences. Plain language. No marketing fluff.",
-    )
-    description_long: str = Field(
-        ...,
-        description=(
-            "3–6 paragraphs of markdown. What the product does, who it's for, "
-            "how it works, what makes it distinctive. Write like a curious "
-            "analyst, not a press release."
-        ),
     )
     primary_category: str = Field(
         ...,
@@ -173,18 +173,16 @@ class CompanyDescription(BaseModel):
 
 
 PROMPT_TEMPLATE = """\
-You are an analyst writing a short profile of the company below. You will read
-text scraped from their public website (homepage + about/product/team pages)
-and produce a JSON object that matches the provided schema.
+You are an analyst assessing the company below. You will read text scraped
+from their public website (homepage + about/product/team pages) and produce a
+JSON object that matches the provided schema: a 1–2 sentence description plus
+classification, people, and location fields.
 
 Rules:
 - Strip marketing language. Write like a curious analyst, not a press release.
 - If the page is thin or unclear about what the company does, say so plainly in
   the description (e.g. "The website does not clearly describe the product").
   Do NOT invent details that aren't supported by the text.
-- The long description should be 3–6 paragraphs of markdown a reader would
-  actually enjoy: what they build, who it's for, how it works, what's
-  distinctive about it.
 - `primary_category` should be a common bucket like "developer tools",
   "fintech", "AI infrastructure", "vertical SaaS", "consumer", "biotech tooling".
   Don't invent obscure categories.
@@ -211,8 +209,8 @@ Rules:
   launching-soon pages with no product info, 'unrelated_site' when the text
   describes a different business than {company_name}, 'insufficient_info'
   when there is too little text to tell, and 'ok' otherwise. When the state
-  is not 'ok', still fill the description fields with a one-line factual note
-  (they will not be published).
+  is not 'ok', still fill `description_short` with a one-line factual note
+  (it will not be published).
 - `is_startup`: true ONLY for a venture-scale SOFTWARE startup — an
   independent, PRIVATE company, founded within roughly the last 15 years,
   whose core offering is a software product or platform (SaaS, a developer
