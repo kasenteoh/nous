@@ -30,6 +30,28 @@ page is a React/Next.js shell waiting for hydration), the optional
 stored content with the JS-rendered DOM. This recovers sites like
 anspect-technologies.com that have no static body content at all.
 
+Husk rescue (H-1): companies that are shown but have no ``description_short``
+("husks" — Perplexity was the flagship example) get three escalations, all
+riding the existing limits (no new pipeline.yml inputs):
+
+1. They sort FIRST in the selection (before the standing prominence order),
+   so a bounded ``--limit`` run always spends its slots on rescues before
+   routine refetches.
+2. Their pages refetch on the short ``rescue_refetch_after_days`` cycle
+   (default 7 days) instead of the standing 90-day window, so a thin scrape
+   doesn't bury them for a quarter. Bounded: at most one scrape set per
+   company per cycle, same robots + 1 req/s/domain throttle as everything
+   else. The zero-page ``failure_backoff_days`` window is deliberately NOT
+   shortened — a dead/blocked site is a different failure class and
+   re-hammering it weekly buys nothing.
+3. The headless-browser threshold is raised from the near-zero shell check
+   (200 chars) to enrich's describe threshold (``_MIN_DESCRIBE_CHARS``,
+   700 chars): a JS-heavy SPA that serves a 200-OK shell with a few hundred
+   chars of static nav text (the Perplexity shape) previously slipped
+   through the 200-char check, stored thin nav text, and never cleared
+   enrichment's input bars. For husks, any static result under the describe
+   threshold now forces the Playwright render.
+
 Storage semantics: ``raw_pages.content`` holds the *extracted visible text*
 of the page (capped at ``_MAX_STORED_CHARS``), not the raw HTML. Every
 downstream consumer (enrich-companies, extract-funding-website) runs
@@ -64,6 +86,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from nous.db.models import Company, RawPage
 from nous.db.upsert import upsert_raw_page
+from nous.pipeline.enrich_companies import _MIN_DESCRIBE_CHARS
 from nous.sources.favicon import fetch_logo_url
 from nous.sources.headless_browser import HeadlessBrowserClient
 from nous.sources.homepage import FetchResult, HomepageClient, RobotsBlockedError
@@ -74,6 +97,18 @@ from nous.util.text import extract_visible_text
 # certainly a JS-only SPA shell — trigger the headless-browser fallback if
 # one is configured.
 _BROWSER_FALLBACK_TEXT_THRESHOLD: int = 200
+
+# For description-less ("husk") companies the browser threshold is raised to
+# enrich's describe threshold: static text under this bound can never feed the
+# long-description call, so force the Playwright render instead of storing a
+# thin SPA shell. Imported (not copied) from enrich_companies so the two
+# stages can't drift apart.
+_RESCUE_BROWSER_TEXT_THRESHOLD: int = _MIN_DESCRIBE_CHARS
+
+# Refetch cycle for husks (shown companies with description_short IS NULL):
+# short enough that a rescue lands within days, long enough not to hammer a
+# site that keeps scraping thin. See the module docstring ("Husk rescue").
+_DEFAULT_RESCUE_REFETCH_DAYS: int = 7
 
 # Per-page cap on stored extracted text. Enrichment truncates the multi-page
 # concatenation anyway (32k for the judge call, 48k for the describe call);
@@ -285,19 +320,25 @@ async def _persist_fetched_page(
 async def _resolve_content_with_fallback(
     static_result: FetchResult,
     browser_client: HeadlessBrowserClient | None,
+    *,
+    min_text_chars: int = _BROWSER_FALLBACK_TEXT_THRESHOLD,
 ) -> tuple[str, bool]:
     """Return ``(content, used_browser_fallback)`` for a fetched page.
 
-    If the static HTML extracts to too little visible text AND a browser
-    client is configured, fetch the same URL via headless Chromium and
-    return that instead. Falls back to the static content when the browser
-    path fails or returns no improvement.
+    If the static HTML extracts to fewer than ``min_text_chars`` chars of
+    visible text AND a browser client is configured, fetch the same URL via
+    headless Chromium and return that instead. Falls back to the static
+    content when the browser path fails or returns no improvement.
+
+    ``min_text_chars`` defaults to the near-zero SPA-shell check; the husk
+    rescue passes ``_RESCUE_BROWSER_TEXT_THRESHOLD`` to force a render for
+    any static result too thin to feed the describe call.
     """
     if browser_client is None:
         return static_result.content, False
 
     static_text_len = len(extract_visible_text(static_result.content))
-    if static_text_len >= _BROWSER_FALLBACK_TEXT_THRESHOLD:
+    if static_text_len >= min_text_chars:
         return static_result.content, False
 
     logger.info(
@@ -356,12 +397,18 @@ async def _scrape_one(
     website: str,
     *,
     max_extra_pages: int,
+    browser_text_threshold: int = _BROWSER_FALLBACK_TEXT_THRESHOLD,
 ) -> _ScrapeOutcome:
     """Fetch a company's homepage + relevant sub-pages over the network.
 
     No DB access, so a batch of companies can run concurrently against the
     shared clients — their per-domain locks keep 1 req/sec/domain, and a single
     company's own (same-host) pages stay serial within this coroutine.
+
+    ``browser_text_threshold`` is the per-company headless-fallback trigger:
+    the near-zero shell check by default, the describe threshold for husks
+    (see the module docstring). It applies to the homepage and every
+    discovered sub-page alike.
     """
     homepage_url = urljoin(website, "/")
     homepage = await _fetch_one(client, homepage_url)
@@ -377,7 +424,7 @@ async def _scrape_one(
     sub_failed = 0
 
     homepage_content, used_browser = await _resolve_content_with_fallback(
-        homepage, browser_client
+        homepage, browser_client, min_text_chars=browser_text_threshold
     )
     if used_browser:
         browser_fallbacks += 1
@@ -408,7 +455,7 @@ async def _scrape_one(
             continue
         assert isinstance(sub, FetchResult)
         sub_content, sub_used_browser = await _resolve_content_with_fallback(
-            sub, browser_client
+            sub, browser_client, min_text_chars=browser_text_threshold
         )
         if sub_used_browser:
             browser_fallbacks += 1
@@ -425,6 +472,7 @@ async def run_scrape_homepages(
     *,
     refetch_after_days: int = 90,
     failure_backoff_days: int = 30,
+    rescue_refetch_after_days: int = _DEFAULT_RESCUE_REFETCH_DAYS,
     limit: int | None = None,
     max_extra_pages: int = 5,
     browser_client: HeadlessBrowserClient | None = None,
@@ -446,7 +494,14 @@ async def run_scrape_homepages(
     - it has at least one raw_page OR last_scrape_attempt_at is NULL/older
       than ``failure_backoff_days``, AND
     - it has no raw_pages OR all of its raw_pages.fetched_at <
-      (now - ``refetch_after_days``).
+      (now - ``refetch_after_days``) OR — husk rescue — it has no
+      description_short and all of its raw_pages.fetched_at <
+      (now - ``rescue_refetch_after_days``).
+
+    Husks (description_short IS NULL; every selected company is shown — the
+    query filters exclusion_reason IS NULL) additionally sort ahead of all
+    routine refetches and get the raised ``_RESCUE_BROWSER_TEXT_THRESHOLD``
+    headless-fallback trigger. See the module docstring ("Husk rescue").
 
     ``max_runtime_minutes`` is a clean-exit wall-clock budget: the loop stops
     at the next *batch* boundary once exceeded. Combined with per-company
@@ -466,6 +521,7 @@ async def run_scrape_homepages(
 
     cutoff = datetime.now(tz=UTC) - timedelta(days=refetch_after_days)
     failure_cutoff = datetime.now(tz=UTC) - timedelta(days=failure_backoff_days)
+    rescue_cutoff = datetime.now(tz=UTC) - timedelta(days=rescue_refetch_after_days)
 
     # Find companies with a website that have no recent raw_pages.
     latest_fetch_subq = (
@@ -488,6 +544,15 @@ async def run_scrape_homepages(
         .where(
             (latest_fetch_subq.c.latest_fetched_at.is_(None))
             | (latest_fetch_subq.c.latest_fetched_at < cutoff)
+            # Husk rescue: description-less companies re-enter on the short
+            # cycle instead of waiting out the full refetch window, so a thin
+            # scrape (SPA shell, WAF challenge page) can't bury a prominent
+            # husk for 90 days at a time. Bounded by rescue_cutoff — never
+            # more than one scrape set per cycle per company.
+            | (
+                Company.description_short.is_(None)
+                & (latest_fetch_subq.c.latest_fetched_at < rescue_cutoff)
+            )
         )
         # Failure back-off: if a company has zero pages on record and was
         # attempted recently, suppress retry until the back-off elapses.
@@ -498,14 +563,19 @@ async def run_scrape_homepages(
             | (Company.last_scrape_attempt_at.is_(None))
             | (Company.last_scrape_attempt_at < failure_cutoff)
         )
-        # Prominence-first: when --limit only admits a slice of the backlog,
+        # Husks first (description_short IS NULL sorts ahead — in Postgres
+        # booleans sort false < true, so DESC puts the husk tier on top), so a
+        # bounded --limit run always spends its slots on rescues before
+        # routine refetches of already-described companies. Within each tier,
+        # prominence-first: when --limit only admits a slice of the backlog,
         # scrape the highest-raise companies first so marquee names get pages
         # (and thus enrichment) ahead of the long tail. latest_round_amount is
         # the denormalized "most recent round" column on companies; NULLS LAST
         # keeps amount-less companies behind funded ones. funding_round_count
         # breaks ties, and id makes successive bounded runs deterministic.
-        # Eligibility (the WHERE clauses above) is unchanged.
+        # Eligibility (the WHERE clauses above) is unchanged by the ordering.
         .order_by(
+            Company.description_short.is_(None).desc(),
             Company.latest_round_amount.desc().nulls_last(),
             Company.funding_round_count.desc(),
             Company.id,
@@ -540,6 +610,13 @@ async def run_scrape_homepages(
                     browser_client,
                     c.website,  # type: ignore[arg-type]  # query guarantees IS NOT NULL
                     max_extra_pages=max_extra_pages,
+                    # Husks get the raised threshold: any static page too thin
+                    # to feed the describe call forces the headless render.
+                    browser_text_threshold=(
+                        _RESCUE_BROWSER_TEXT_THRESHOLD
+                        if c.description_short is None
+                        else _BROWSER_FALLBACK_TEXT_THRESHOLD
+                    ),
                 )
                 for c in batch
             ),
