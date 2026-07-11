@@ -3,11 +3,11 @@
 For each company we already track, query Google News RSS for funding-related
 articles in the lookback window and persist them to ``news_articles`` — storing
 the funding headline (Google News links are opaque redirects whose body is
-unreachable; see ``_GOOGLE_NEWS_HOST``). Then, if requested, sweep four
+unreachable; see ``_GOOGLE_NEWS_HOST``). Then, if requested, sweep six
 broad funding-news feeds (TechCrunch venture-tag, SiliconANGLE, PR Newswire,
-and Crunchbase News) to catch funding announcements for companies we don't yet
-have — asking the LLM to identify the funded company from each headline +
-snippet and auto-creating a row.
+Crunchbase News, VentureBeat, and GeekWire's funding tag) to catch funding
+announcements for companies we don't yet have — asking the LLM to identify
+the funded company from each headline + snippet and auto-creating a row.
 
 Commit cadence: per-article so a mid-run crash leaves a clean state.
 
@@ -31,6 +31,7 @@ from nous.db.upsert import auto_create_company
 from nous.llm.client import LLMError, LLMRateLimitError, complete_json
 from nous.llm.prompts.news_company import HeadlineCompany, build_prompt
 from nous.sources.crunchbase_news import fetch_crunchbase_news_funding_articles
+from nous.sources.geekwire import fetch_geekwire_funding_articles
 from nous.sources.news import (
     _GOOGLE_NEWS_HOST,
     NewsArticleResult,
@@ -41,6 +42,7 @@ from nous.sources.news import (
 from nous.sources.prnewswire import fetch_prnewswire_funding_articles
 from nous.sources.siliconangle import fetch_siliconangle_funding_articles
 from nous.sources.techcrunch import fetch_techcrunch_funding_articles
+from nous.sources.venturebeat import fetch_venturebeat_funding_articles
 from nous.util.url import canonical_url, hostname
 
 logger = logging.getLogger(__name__)
@@ -208,6 +210,8 @@ _DISCOVERED_VIA_BY_HOST: dict[str, str] = {
     "prnewswire.com": "prnewswire",
     "news.crunchbase.com": "crunchbase_news",
     "crunchbase.com": "crunchbase_news",
+    "venturebeat.com": "venturebeat",
+    "geekwire.com": "geekwire",
 }
 
 
@@ -254,13 +258,14 @@ async def run_ingest_news(
     it with the funded set bounds the backfill's DeepSeek spend. Default False
     keeps the standing rotation (every non-excluded company) unchanged.
 
-    Broad-feed path (``include_techcrunch_broad=True``): aggregate four
+    Broad-feed path (``include_techcrunch_broad=True``): aggregate six
     funding-news feeds — TechCrunch venture tag, SiliconANGLE, PR Newswire
-    VC feed, and Crunchbase News — dedup the combined list by canonical URL,
-    then for each article whose title parses to a candidate company name,
-    find-or-auto-create the company and persist the article.  All four sources
-    are gated by the same flag so adding new feeds never changes the
-    ``--no-techcrunch`` CLI behaviour.
+    VC feed, Crunchbase News, VentureBeat, and GeekWire's funding tag —
+    dedup the combined list by canonical URL, then for each article whose
+    title parses to a candidate company name, find-or-auto-create the
+    company and persist the article.  All six sources are gated by the same
+    flag so adding new feeds never changes the ``--no-techcrunch`` CLI
+    behaviour.
     """
     summary = IngestNewsSummary()
 
@@ -349,12 +354,32 @@ async def run_ingest_news(
             logger.exception("Crunchbase News feed fetch failed")
             cb_results = []
 
+        # 5. VentureBeat (main feed + keyword filter)
+        try:
+            vb_results = await fetch_venturebeat_funding_articles(
+                client, lookback_days=lookback_days
+            )
+        except Exception:
+            logger.exception("VentureBeat feed fetch failed")
+            vb_results = []
+
+        # 6. GeekWire funding tag
+        try:
+            gw_results = await fetch_geekwire_funding_articles(
+                client, lookback_days=lookback_days
+            )
+        except Exception:
+            logger.exception("GeekWire funding feed fetch failed")
+            gw_results = []
+
         # Dedup by canonical URL before processing so the same article
         # surfaced by multiple feeds is processed exactly once. First
-        # occurrence wins (TC → SA → PRN → CB priority).
+        # occurrence wins (TC → SA → PRN → CB → VB → GW priority).
         seen_urls: set[str] = set()
         broad_results: list[NewsArticleResult] = []
-        for result in tc_results + sa_results + prn_results + cb_results:
+        for result in (
+            tc_results + sa_results + prn_results + cb_results + vb_results + gw_results
+        ):
             key = canonical_url(result.url)
             if key not in seen_urls:
                 seen_urls.add(key)
