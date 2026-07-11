@@ -14,6 +14,12 @@ from pydantic import BaseModel, Field, model_validator
 
 from nous.util.industry import CANONICAL_INDUSTRIES
 
+# Version stamped onto rows whose content this prompt produced (companies
+# enrichment fields via enrich-companies). Scheme: "<date>.<same-day-counter>".
+# Bump on ANY semantic change to the template, schema, or validators — even a
+# wording tweak — so data from a bad revision can be found and re-run.
+PROMPT_VERSION: str = "2026-07-10.1"
+
 # Singular C-suite titles — at most one person can credibly hold each. When a
 # page's testimonials / customer logos get mis-read as leadership, the model
 # tends to stamp the SAME exec title on several names (e.g. 3x "Co-Founder, COO"
