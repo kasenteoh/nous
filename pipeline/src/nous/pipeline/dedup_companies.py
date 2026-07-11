@@ -23,6 +23,10 @@ second run finds the same domain groups collapsed to one row and the same
 fuzzy pairs already merged — nothing new to do. Per-merge commits mean a
 partial run leaves a consistent DB.
 
+A merged-away loser's slug is not lost: ``merge_companies`` records it in
+``slug_aliases`` so the web layer permanently redirects the dead URL to the
+survivor (see the slug_aliases section of its docstring for chain semantics).
+
 Quota discipline (spec §11): at most ``llm_limit`` LLM judgments per run,
 highest-similarity pairs first. When more candidates exist than the cap, the
 overflow count is logged and reported in the summary — never silently dropped.

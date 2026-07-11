@@ -8,8 +8,8 @@ export const revalidate = 21600;
 
 import type { Metadata } from "next";
 import Link from "next/link";
-import { notFound } from "next/navigation";
-import { getAlternatives } from "@/lib/queries";
+import { notFound, permanentRedirect } from "next/navigation";
+import { getAliasTargetSlug, getAlternatives } from "@/lib/queries";
 import type { AlternativesData } from "@/lib/types";
 import { CompanyCard } from "@/components/CompanyCard";
 import { JsonLd } from "@/components/JsonLd";
@@ -106,6 +106,13 @@ export default async function AlternativesPage({ params }: Props) {
   // Unknown or excluded company → 404. (An existing company with zero
   // competitors is NOT null — it renders the graceful empty state below.)
   if (!data) {
+    // Same miss-path alias redirect as /c/[slug]: a merged-away slug 308s to
+    // the survivor's alternatives page. Lookup only on miss — valid slugs pay
+    // zero extra queries. See the /c/[slug] page for the loop-guard rationale.
+    const target = await getAliasTargetSlug(slug);
+    if (target && target !== slug) {
+      permanentRedirect(`/alternatives/${target}`);
+    }
     notFound();
   }
 
