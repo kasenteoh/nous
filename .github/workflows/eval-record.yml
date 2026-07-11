@@ -1,0 +1,89 @@
+name: eval-record
+
+# Re-record the LLM golden set against live DeepSeek and open a PR with the
+# refreshed recordings (and, optionally, refreshed baseline floors).
+#
+# Why a workflow: DEEPSEEK_API_KEY exists only as an Actions secret — there is
+# no local key — so this is the one place record mode can run. Cost is tiny
+# (one deepseek-chat call per fixture, ~cents per full run) but it IS a paid
+# call, hence manual dispatch only, never cron.
+#
+# The recordings land as a PR, never a direct push: the whole point of the
+# golden gate is that a human (or the orchestrating agent) reviews the metric
+# deltas the new recordings produce before they become the committed truth.
+#
+# No `nous-pipeline-db` concurrency group: eval-prompts never touches the
+# database.
+
+on:
+  workflow_dispatch:
+    inputs:
+      prompt:
+        description: "Only re-record this prompt (e.g. 'company_description'). Empty = all."
+        required: false
+        type: string
+      update_baseline:
+        description: "Also rewrite baseline.json floors from the new scores."
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  record:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: pipeline
+    env:
+      DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39 # v3
+
+      - name: Install dependencies
+        run: uv sync
+
+      - name: Re-record golden set against live DeepSeek
+        # Continue even when a gated metric falls below its floor — a floor
+        # breach is exactly what the PR diff is for; the recordings must still
+        # be pushed so the delta can be reviewed. The gate stays authoritative
+        # in lint.yml on the PR itself.
+        continue-on-error: true
+        run: |
+          ARGS="--record"
+          if [ -n "${{ inputs.prompt }}" ]; then ARGS="$ARGS --prompt ${{ inputs.prompt }}"; fi
+          if [ "${{ inputs.update_baseline }}" = "true" ]; then ARGS="$ARGS --update-baseline"; fi
+          uv run nous eval-prompts $ARGS 2>&1 | tee "$GITHUB_STEP_SUMMARY"
+
+      - name: Open PR with refreshed recordings
+        working-directory: .
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if git diff --quiet -- pipeline/tests/golden; then
+            echo "No recording changes — nothing to PR."
+            exit 0
+          fi
+          BRANCH="eval-record/$(date -u +%Y%m%d-%H%M%S)"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$BRANCH"
+          git add pipeline/tests/golden
+          git commit -m "test(golden): re-record fixtures against live DeepSeek
+
+Recorded by the eval-record workflow (run ${{ github.run_id }}).
+prompt filter: '${{ inputs.prompt }}'; update_baseline: ${{ inputs.update_baseline }}"
+          git push -u origin "$BRANCH"
+          gh pr create \
+            --title "test(golden): live DeepSeek re-recording ($(date -u +%Y-%m-%d))" \
+            --body "Automated golden-set re-recording from the [eval-record workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}). Review the metric delta table in the run's step summary, then merge if the deltas are acceptable. The lint.yml golden gate runs on this PR as usual."
