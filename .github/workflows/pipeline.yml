@@ -163,9 +163,13 @@ jobs:
     runs-on: ubuntu-latest
     # Hard backstop. The per-stage --limit / --max-runtime budgets keep a
     # healthy run well under this; hitting it means a stage hung, and the next
-    # run (≤~2.4h later) resumes cleanly. Far below GitHub's 360-min kill, and
-    # much tighter than the old 150 (10x/day runs must stay short).
-    timeout-minutes: 30
+    # run (≤~2.4h later) resumes cleanly. Far below GitHub's 360-min kill.
+    # Raised 30 → 45 with W-F: the enrich step alone may legitimately run 25
+    # minutes (two-call flow + --redescribe-outdated), and the 2026-07-11
+    # 13:15/15:54 crons were killed at this backstop while news/funding also
+    # ran. Stages are stamped/resumable, so a kill loses little — but a healthy
+    # full run must fit inside the budget, not race it.
+    timeout-minutes: 45
     defaults:
       run:
         working-directory: pipeline
