@@ -11,9 +11,14 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from nous.pipeline.scrape_homepages import _resolve_content_with_fallback
+from nous.pipeline.scrape_homepages import (
+    _BROWSER_FALLBACK_TEXT_THRESHOLD,
+    _RESCUE_BROWSER_TEXT_THRESHOLD,
+    _resolve_content_with_fallback,
+)
 from nous.sources.headless_browser import HeadlessBrowserClient
 from nous.sources.homepage import FetchResult
+from nous.util.text import extract_visible_text
 
 # 600 chars of body text — well above the 200-char threshold.
 RICH_HTML = (
@@ -110,6 +115,100 @@ async def test_threshold_boundary(
         browser.fetch_rendered_html.assert_called()
     else:
         browser.fetch_rendered_html.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Husk rescue: the raised (describe-threshold) trigger for description-less
+# companies — the Perplexity regression class.
+# ---------------------------------------------------------------------------
+
+# A Perplexity-shaped SPA shell: HTTP 200 whose *extracted* text (lifted SEO
+# meta + a few visible chip labels; extract_visible_text strips nav/script)
+# lands in the dead zone — above the near-zero shell check (200) but below
+# enrich's describe threshold (700). Pre-H-1 this slipped past the fallback
+# entirely: not empty enough to render, not rich enough to describe.
+DEAD_ZONE_SHELL_HTML = (
+    "<html><head><title>Perplexity - Where knowledge begins</title>"
+    '<meta name="description" content="Ask anything and get a cited, '
+    "conversational answer drawn from the live web. Follow up naturally, "
+    'explore sources, and turn curiosity into understanding.">'
+    '<meta property="og:description" content="An AI-powered answer engine '
+    'that searches the web and responds with cited, up-to-date answers.">'
+    "</head><body>"
+    '<div id="__next"><div class="chips">'
+    "<span>Discover</span><span>Spaces</span><span>Finance</span>"
+    "<span>Travel</span><span>Academic</span><span>Pro</span>"
+    "<span>Enterprise</span><span>Try asking about anything</span>"
+    "</div></div></body></html>"
+)
+
+
+def test_dead_zone_fixture_sits_between_the_thresholds() -> None:
+    """Keep the fixture honest: its visible text must fall in the dead zone
+    (>= the default trigger, < the rescue trigger) or the tests below prove
+    nothing."""
+    shell_len = len(extract_visible_text(DEAD_ZONE_SHELL_HTML))
+    assert _BROWSER_FALLBACK_TEXT_THRESHOLD <= shell_len < _RESCUE_BROWSER_TEXT_THRESHOLD
+
+
+async def test_default_threshold_misses_dead_zone_shell() -> None:
+    """With the default (near-zero) trigger, a dead-zone shell keeps its thin
+    static content — this is the pre-H-1 behavior the rescue exists to fix."""
+    static = _result(DEAD_ZONE_SHELL_HTML)
+    browser = AsyncMock(spec=HeadlessBrowserClient)
+    browser.fetch_rendered_html = AsyncMock(return_value=RENDERED_HTML)
+    content, used = await _resolve_content_with_fallback(static, browser)
+    assert content == DEAD_ZONE_SHELL_HTML
+    assert used is False
+    browser.fetch_rendered_html.assert_not_called()
+
+
+async def test_rescue_threshold_forces_render_for_dead_zone_shell() -> None:
+    """Regression (Perplexity shape): static 200-OK shell with a few hundred
+    chars of visible text + the rescue threshold → the headless render fires
+    and its richer content wins."""
+    static = _result(DEAD_ZONE_SHELL_HTML)
+    browser = AsyncMock(spec=HeadlessBrowserClient)
+    browser.fetch_rendered_html = AsyncMock(return_value=RENDERED_HTML)
+    content, used = await _resolve_content_with_fallback(
+        static, browser, min_text_chars=_RESCUE_BROWSER_TEXT_THRESHOLD
+    )
+    assert content == RENDERED_HTML
+    assert used is True
+    browser.fetch_rendered_html.assert_awaited_once_with("https://example.com/")
+
+
+async def test_rescue_threshold_still_skips_genuinely_rich_static() -> None:
+    """A static page already above the describe threshold never pays for a
+    render, even on the rescue path."""
+    rich = (
+        "<html><body><p>" + ("Real describable content here. " * 30) + "</p></body></html>"
+    )
+    assert len(extract_visible_text(rich)) >= _RESCUE_BROWSER_TEXT_THRESHOLD
+    static = _result(rich)
+    browser = AsyncMock(spec=HeadlessBrowserClient)
+    browser.fetch_rendered_html = AsyncMock(return_value=RENDERED_HTML)
+    content, used = await _resolve_content_with_fallback(
+        static, browser, min_text_chars=_RESCUE_BROWSER_TEXT_THRESHOLD
+    )
+    assert content == rich
+    assert used is False
+    browser.fetch_rendered_html.assert_not_called()
+
+
+async def test_rescue_render_no_improvement_keeps_static() -> None:
+    """If the render is no richer than the dead-zone static text (e.g. a WAF
+    challenge page), keep the static content — never store a worse page."""
+    static = _result(DEAD_ZONE_SHELL_HTML)
+    browser = AsyncMock(spec=HeadlessBrowserClient)
+    browser.fetch_rendered_html = AsyncMock(
+        return_value="<html><body>Checking your browser</body></html>"
+    )
+    content, used = await _resolve_content_with_fallback(
+        static, browser, min_text_chars=_RESCUE_BROWSER_TEXT_THRESHOLD
+    )
+    assert content == DEAD_ZONE_SHELL_HTML
+    assert used is False
 
 
 async def test_rendered_fetch_blocks_internal_url() -> None:
