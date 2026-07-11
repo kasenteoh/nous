@@ -910,6 +910,51 @@ export async function getCompanyOgData(
 }
 
 /**
+ * Survivor slug for a dead (merged-away) company slug, or null when no alias
+ * exists. Dedup merges DELETE the loser row but record its slug in
+ * slug_aliases (migration 0032) so inbound links keep working: the /c/[slug]
+ * and /alternatives/[slug] pages consult this ONLY on their miss path — a live
+ * slug resolves via its own query first, so valid pages pay zero extra
+ * queries and a live slug always shadows a stale alias.
+ *
+ * One query: the alias row keyed by old_slug with the survivor's CURRENT slug
+ * embedded through the company_id FK (aliases store the id, not a slug copy,
+ * so later merges/renames can't leave a redirect pointing at a second dead
+ * slug). Returns null on missing env, unknown slug (PGRST116), or a dangling
+ * embed — callers then fall through to notFound() exactly as before. Until
+ * migration 0032 reaches prod, the select 400s (unknown table) and lands on
+ * the same null path, so the pages degrade to today's plain 404.
+ */
+export async function getAliasTargetSlug(slug: string): Promise<string | null> {
+  const supabase = supabaseOrNull("getAliasTargetSlug");
+  if (!supabase) return null;
+
+  const { data, error } = await supabase
+    .from("slug_aliases")
+    .select("companies!company_id(slug)")
+    .eq("old_slug", slug)
+    .single();
+
+  if (error || !data) {
+    if (error?.code !== "PGRST116") {
+      // PGRST116 = "no rows" — the expected miss; anything else is unexpected.
+      console.error("[getAliasTargetSlug] query failed:", error?.message);
+    }
+    return null;
+  }
+
+  // PostgREST may hand the embed back as an object or a single-element array;
+  // normalize (same idiom as every other embed in this file).
+  const row = data as unknown as {
+    companies: { slug: string | null } | { slug: string | null }[] | null;
+  };
+  const company = Array.isArray(row.companies)
+    ? row.companies[0]
+    : row.companies;
+  return company?.slug ?? null;
+}
+
+/**
  * Return the full detail for a single company identified by slug.
  * Returns null when the slug does not exist.
  *

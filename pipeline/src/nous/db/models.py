@@ -719,3 +719,42 @@ class PipelineRun(Base):
             name="ck_pipeline_runs_status",
         ),
     )
+
+
+class SlugAlias(Base):
+    """A dead company slug that permanently redirects to a surviving company.
+
+    Dedup merges (``merge_companies``) DELETE the loser row, which would kill
+    its slug and 404 every inbound link / burn its SEO equity. At merge time
+    the loser's slug is recorded here pointing at the survivor, and the web
+    layer 308-redirects ``/c/<old_slug>`` (and ``/alternatives/<old_slug>``)
+    to the survivor's current slug — but only on a lookup miss, so live slugs
+    always win over stale aliases and valid pages pay zero extra queries.
+
+    ``old_slug`` is the natural primary key — deliberately NOT the house
+    surrogate-UUID convention (the inherited ``id`` is cancelled below). The
+    PK *is* the invariant: a dead slug aliases exactly one survivor, and it is
+    the upsert conflict target that makes merge chains converge (A→B then B→C
+    re-targets A's alias to C via ON CONFLICT (old_slug) DO UPDATE).
+
+    ``company_id`` is ON DELETE CASCADE so a company deleted outside the merge
+    path (manual cleanup, exclusion purge) takes its aliases with it instead
+    of leaving rows that redirect to a 404. The merge path itself repoints the
+    loser's aliases to the survivor BEFORE deleting the loser, so chains
+    survive merges — the cascade is only the backstop for non-merge deletes.
+    """
+
+    __tablename__ = "slug_aliases"
+
+    # Cancel the surrogate-UUID pk inherited from Base: old_slug is the key.
+    id = None  # type: ignore[assignment]
+
+    old_slug: Mapped[str] = mapped_column(Text, primary_key=True)
+    # Indexed: the merge path repoints aliases with WHERE company_id = loser,
+    # and it's an FK (house rule: index every FK).
+    company_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("companies.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )

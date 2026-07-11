@@ -881,10 +881,10 @@ async def test_tc_path_passes_similarity_threshold_to_auto_create(
 
 
 # ---------------------------------------------------------------------------
-# Broad-feed aggregation: all four sources wired + cross-source dedup
+# Broad-feed aggregation: all six sources wired + cross-source dedup
 # ---------------------------------------------------------------------------
 #
-# These are pure unit tests — no DB needed. They monkeypatch the four
+# These are pure unit tests — no DB needed. They monkeypatch the six
 # fetch_*_funding_articles functions and the session/auto-create layer,
 # then assert on which articles reached the processing loop.
 
@@ -903,40 +903,39 @@ def _broad_result(
     )
 
 
-async def test_broad_sweep_calls_all_four_sources(
+_BROAD_FETCHERS: list[tuple[str, str]] = [
+    ("fetch_techcrunch_funding_articles", "techcrunch"),
+    ("fetch_siliconangle_funding_articles", "siliconangle"),
+    ("fetch_prnewswire_funding_articles", "prnewswire"),
+    ("fetch_crunchbase_news_funding_articles", "crunchbase_news"),
+    ("fetch_venturebeat_funding_articles", "venturebeat"),
+    ("fetch_geekwire_funding_articles", "geekwire"),
+]
+
+
+def _patch_broad_fetchers(
+    monkeypatch: pytest.MonkeyPatch, calls: list[str]
+) -> None:
+    """Stub every broad-feed fetcher to record its slug and return []."""
+    for attr, tag in _BROAD_FETCHERS:
+
+        async def _stub(
+            client: Any, *, lookback_days: int = 14, _tag: str = tag
+        ) -> list[NewsArticleResult]:
+            calls.append(_tag)
+            return []
+
+        monkeypatch.setattr(f"nous.pipeline.ingest_news.{attr}", _stub)
+
+
+async def test_broad_sweep_calls_all_sources(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """All four fetch_*_funding_articles functions are called during the broad sweep."""
+    """All six fetch_*_funding_articles functions are called during the broad sweep."""
     from unittest.mock import AsyncMock, MagicMock
 
     calls: list[str] = []
-
-    async def _tc(client: Any, *, lookback_days: int = 7) -> list[NewsArticleResult]:
-        calls.append("techcrunch")
-        return []
-
-    async def _sa(client: Any, *, lookback_days: int = 14) -> list[NewsArticleResult]:
-        calls.append("siliconangle")
-        return []
-
-    async def _prn(client: Any, *, lookback_days: int = 14) -> list[NewsArticleResult]:
-        calls.append("prnewswire")
-        return []
-
-    async def _cb(client: Any, *, lookback_days: int = 14) -> list[NewsArticleResult]:
-        calls.append("crunchbase_news")
-        return []
-
-    monkeypatch.setattr("nous.pipeline.ingest_news.fetch_techcrunch_funding_articles", _tc)
-    monkeypatch.setattr(
-        "nous.pipeline.ingest_news.fetch_siliconangle_funding_articles", _sa
-    )
-    monkeypatch.setattr(
-        "nous.pipeline.ingest_news.fetch_prnewswire_funding_articles", _prn
-    )
-    monkeypatch.setattr(
-        "nous.pipeline.ingest_news.fetch_crunchbase_news_funding_articles", _cb
-    )
+    _patch_broad_fetchers(monkeypatch, calls)
 
     mock_result = MagicMock()
     mock_result.scalars.return_value.all.return_value = []
@@ -952,33 +951,19 @@ async def test_broad_sweep_calls_all_four_sources(
         include_techcrunch_broad=True,
     )
 
-    assert "techcrunch" in calls
-    assert "siliconangle" in calls
-    assert "prnewswire" in calls
-    assert "crunchbase_news" in calls
+    assert set(calls) == {slug for _, slug in _BROAD_FETCHERS}, (
+        f"Expected every broad feed called once, got: {calls}"
+    )
 
 
 async def test_broad_sweep_skipped_when_flag_false(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """When include_techcrunch_broad=False none of the four feeds are called."""
+    """When include_techcrunch_broad=False none of the six feeds are called."""
     from unittest.mock import AsyncMock, MagicMock
 
     calls: list[str] = []
-
-    for attr, tag in [
-        ("fetch_techcrunch_funding_articles", "techcrunch"),
-        ("fetch_siliconangle_funding_articles", "siliconangle"),
-        ("fetch_prnewswire_funding_articles", "prnewswire"),
-        ("fetch_crunchbase_news_funding_articles", "crunchbase_news"),
-    ]:
-        async def _stub(
-            client: Any, *, lookback_days: int = 14, _tag: str = tag
-        ) -> list[NewsArticleResult]:
-            calls.append(_tag)
-            return []
-
-        monkeypatch.setattr(f"nous.pipeline.ingest_news.{attr}", _stub)
+    _patch_broad_fetchers(monkeypatch, calls)
 
     mock_result = MagicMock()
     mock_result.scalars.return_value.all.return_value = []
@@ -1016,33 +1001,25 @@ async def test_broad_sweep_deduplicates_cross_source(
     shared_url_cb = "https://techcrunch.com/2026/06/01/acme-raises-50m?utm_source=cb"
     prn_url = "https://www.prnewswire.com/news/betaco-raises-20m"
 
-    tc_articles = [_broad_result(shared_url_tc, "techcrunch.com")]
-    sa_articles = [_broad_result(shared_url_sa, "siliconangle.com")]
-    prn_articles = [_broad_result(prn_url, "prnewswire.com")]
-    cb_articles = [_broad_result(shared_url_cb, "crunchbase.com")]
+    per_feed_articles: dict[str, list[NewsArticleResult]] = {
+        "techcrunch": [_broad_result(shared_url_tc, "techcrunch.com")],
+        "siliconangle": [_broad_result(shared_url_sa, "siliconangle.com")],
+        "prnewswire": [_broad_result(prn_url, "prnewswire.com")],
+        "crunchbase_news": [_broad_result(shared_url_cb, "crunchbase.com")],
+        # New feeds return nothing here — the dedup semantics under test are
+        # cross-source; the six-feed wiring is asserted separately above.
+        "venturebeat": [],
+        "geekwire": [],
+    }
 
-    async def _tc(client: Any, *, lookback_days: int = 7) -> list[NewsArticleResult]:
-        return tc_articles
+    for attr, tag in _BROAD_FETCHERS:
 
-    async def _sa(client: Any, *, lookback_days: int = 14) -> list[NewsArticleResult]:
-        return sa_articles
+        async def _feed_stub(
+            client: Any, *, lookback_days: int = 14, _tag: str = tag
+        ) -> list[NewsArticleResult]:
+            return per_feed_articles[_tag]
 
-    async def _prn(client: Any, *, lookback_days: int = 14) -> list[NewsArticleResult]:
-        return prn_articles
-
-    async def _cb(client: Any, *, lookback_days: int = 14) -> list[NewsArticleResult]:
-        return cb_articles
-
-    monkeypatch.setattr("nous.pipeline.ingest_news.fetch_techcrunch_funding_articles", _tc)
-    monkeypatch.setattr(
-        "nous.pipeline.ingest_news.fetch_siliconangle_funding_articles", _sa
-    )
-    monkeypatch.setattr(
-        "nous.pipeline.ingest_news.fetch_prnewswire_funding_articles", _prn
-    )
-    monkeypatch.setattr(
-        "nous.pipeline.ingest_news.fetch_crunchbase_news_funding_articles", _cb
-    )
+        monkeypatch.setattr(f"nous.pipeline.ingest_news.{attr}", _feed_stub)
 
     # Record which URLs reach the processing loop via _article_already_stored.
     seen_processing: list[str] = []
@@ -1082,38 +1059,18 @@ async def test_broad_sweep_deduplicates_cross_source(
 async def test_broad_sweep_one_failing_source_does_not_block_others(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """If one adapter raises an unexpected exception, the other three still run."""
+    """If one adapter raises an unexpected exception, the other five still run."""
     from unittest.mock import AsyncMock, MagicMock
 
     calls: list[str] = []
+    _patch_broad_fetchers(monkeypatch, calls)
 
     async def _tc_fail(client: Any, *, lookback_days: int = 7) -> list[NewsArticleResult]:
         calls.append("techcrunch")
         raise RuntimeError("simulated TC outage")
 
-    async def _sa(client: Any, *, lookback_days: int = 14) -> list[NewsArticleResult]:
-        calls.append("siliconangle")
-        return []
-
-    async def _prn(client: Any, *, lookback_days: int = 14) -> list[NewsArticleResult]:
-        calls.append("prnewswire")
-        return []
-
-    async def _cb(client: Any, *, lookback_days: int = 14) -> list[NewsArticleResult]:
-        calls.append("crunchbase_news")
-        return []
-
     monkeypatch.setattr(
         "nous.pipeline.ingest_news.fetch_techcrunch_funding_articles", _tc_fail
-    )
-    monkeypatch.setattr(
-        "nous.pipeline.ingest_news.fetch_siliconangle_funding_articles", _sa
-    )
-    monkeypatch.setattr(
-        "nous.pipeline.ingest_news.fetch_prnewswire_funding_articles", _prn
-    )
-    monkeypatch.setattr(
-        "nous.pipeline.ingest_news.fetch_crunchbase_news_funding_articles", _cb
     )
 
     mock_result = MagicMock()
@@ -1131,6 +1088,6 @@ async def test_broad_sweep_one_failing_source_does_not_block_others(
         include_techcrunch_broad=True,
     )
 
-    assert set(calls) == {"techcrunch", "siliconangle", "prnewswire", "crunchbase_news"}, (
-        f"Expected all four adapters called, got: {calls}"
+    assert set(calls) == {slug for _, slug in _BROAD_FETCHERS}, (
+        f"Expected all six adapters called despite the TC failure, got: {calls}"
     )

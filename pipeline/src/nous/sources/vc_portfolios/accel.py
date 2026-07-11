@@ -15,7 +15,7 @@ import re
 from selectolax.parser import HTMLParser
 
 from nous.sources.homepage import HomepageClient
-from nous.sources.vc_portfolios.base import PortfolioEntry
+from nous.sources.vc_portfolios.base import PortfolioEntry, ensure_entries
 
 _VIEW_ARIA_RE = re.compile(r"^View\s+(.+?)\s+company details$", re.IGNORECASE)
 
@@ -47,4 +47,6 @@ class AccelAdapter:
                     source_url=self.PORTFOLIO_URL,
                 )
             )
-        return entries
+        return ensure_entries(
+            entries, self.firm, context="no 'View <Name> company details' aria-labels matched"
+        )

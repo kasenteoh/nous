@@ -4,6 +4,21 @@ Each adapter is responsible for one VC firm's portfolio page (or backing
 JSON API). The contract is intentionally narrow: hand back a list of
 ``PortfolioEntry`` rows. Caller (M3 vc-portfolios pipeline stage, landing
 in Chunk 6b) owns dedup, fuzzy-matching, and DB writes.
+
+Hard-fail contract
+------------------
+A successful ``fetch`` returns a **non-empty** list. Every registered firm
+has a public portfolio, so zero parsed entries always means the page's
+structure drifted out from under the adapter (selector rot, moved JSON
+island, redesign) — never "this firm has no companies". Historically some
+adapters raised on a structural miss while others silently returned ``[]``,
+which read as an empty portfolio and rotted unnoticed. The contract is now
+uniform: a zero-yield parse raises :class:`AdapterStructuralError` (use
+:func:`ensure_entries`), so the breakage lands in
+``refresh-vc-portfolios``' per-firm failure isolation and trips the
+``adapter-health`` canary instead of silently starving the catalog.
+Transport-level failures (HTTP errors, robots blocks, timeouts) are NOT
+wrapped — they propagate as their own exception types.
 """
 
 from __future__ import annotations
@@ -65,6 +80,39 @@ def is_placeholder_name(name: str) -> bool:
     return stripped.lower() in _PLACEHOLDER_NAMES
 
 
+class AdapterStructuralError(RuntimeError):
+    """The page fetched fine but its expected structure was missing.
+
+    Raised when an adapter's anchor (CSS selector, JSON island, sitemap
+    pattern, API response shape) matches nothing, or when a parse walks the
+    page and yields zero usable entries. Distinct from transport errors
+    (``httpx.HTTPStatusError``, ``RobotsBlockedError``, timeouts), which mean
+    the page never arrived — this one means the site redesigned and the
+    adapter needs updating.
+
+    Subclasses ``RuntimeError`` so pre-existing ``except RuntimeError``
+    handlers and tests keep working.
+    """
+
+
+def ensure_entries(
+    entries: list[PortfolioEntry], firm: str, *, context: str
+) -> list[PortfolioEntry]:
+    """Enforce the hard-fail contract: zero parsed entries is a structural miss.
+
+    Adapters call this on their final entry list (after any pagination /
+    aggregation, so a legitimately-empty *page* within a multi-page walk is
+    fine — only a zero *total* trips it). ``context`` names the structure
+    that came up empty so the error is actionable from a log line alone.
+    """
+    if not entries:
+        raise AdapterStructuralError(
+            f"{firm}: parsed 0 portfolio entries ({context}); "
+            "page structure likely changed"
+        )
+    return entries
+
+
 class PortfolioEntry(BaseModel):
     """One company surfaced from a VC portfolio page."""
 
@@ -76,7 +124,14 @@ class PortfolioEntry(BaseModel):
 
 
 class PortfolioAdapter(Protocol):
-    """Async adapter that maps a single VC's portfolio page to PortfolioEntry rows."""
+    """Async adapter that maps a single VC's portfolio page to PortfolioEntry rows.
+
+    ``fetch`` returns a non-empty list or raises: structural misses raise
+    :class:`AdapterStructuralError` (see the module docstring's hard-fail
+    contract); transport failures propagate as their own types. Callers
+    (``refresh-vc-portfolios``, ``adapter-health``) isolate per-firm errors,
+    so raising never takes down a whole sweep.
+    """
 
     firm: str
 

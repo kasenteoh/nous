@@ -15,7 +15,12 @@ import httpx
 import pytest
 
 from nous.sources.homepage import HomepageClient
-from nous.sources.vc_portfolios import ADAPTERS, FIRM_DISPLAY_NAMES, PortfolioEntry
+from nous.sources.vc_portfolios import (
+    ADAPTERS,
+    FIRM_DISPLAY_NAMES,
+    AdapterStructuralError,
+    PortfolioEntry,
+)
 
 FIXTURES = Path(__file__).parent / "fixtures" / "vc_portfolios"
 USER_AGENT = "nous-test test@example.com"
@@ -142,6 +147,11 @@ async def test_yc_adapter_drops_pre_seed_and_keeps_other_stages() -> None:
         assert entry.firm == "yc"
         assert entry.source_url == adapter.PORTFOLIO_URL  # type: ignore[attr-defined]
         assert isinstance(entry, PortfolioEntry)
+        assert entry.name.strip()
+    # YC's Algolia hits carry a website field for most companies.
+    assert any(e.website for e in entries), (
+        "YC normally surfaces websites; fixture parse yielded none"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -150,18 +160,18 @@ async def test_yc_adapter_drops_pre_seed_and_keeps_other_stages() -> None:
 
 
 @pytest.mark.parametrize(
-    "firm,fixture,must_contain,min_count",
+    "firm,fixture,must_contain,min_count,has_websites",
     [
-        ("a16z", "a16z.html", "11x", 50),
-        ("sequoia", "sequoia.html", "Airbnb", 50),
-        ("lightspeed", "lightspeed.html", "Anthropic", 50),
-        ("founders_fund", "founders_fund.html", "Palantir", 50),
-        ("greylock", "greylock.html", "Anthropic", 50),
+        ("a16z", "a16z.html", "11x", 50, True),
+        ("sequoia", "sequoia.html", "Airbnb", 50, False),
+        ("lightspeed", "lightspeed.html", "Anthropic", 50, False),
+        ("founders_fund", "founders_fund.html", "Palantir", 50, True),
+        ("greylock", "greylock.html", "Anthropic", 50, True),
         # M5 additions — single-fetch HTML adapters.
-        ("bessemer", "bessemer.html", "Shopify", 50),
-        ("index_ventures", "index_ventures.html", "Figma", 50),
-        ("accel", "accel.html", "Atlassian", 50),
-        ("general_catalyst", "general_catalyst.html", "Stripe", 50),
+        ("bessemer", "bessemer.html", "Shopify", 50, False),
+        ("index_ventures", "index_ventures.html", "Figma", 50, False),
+        ("accel", "accel.html", "Atlassian", 50, False),
+        ("general_catalyst", "general_catalyst.html", "Stripe", 50, False),
     ],
 )
 async def test_adapter_parses_fixture(
@@ -169,6 +179,7 @@ async def test_adapter_parses_fixture(
     fixture: str,
     must_contain: str,
     min_count: int,
+    has_websites: bool,
 ) -> None:
     adapter = ADAPTERS[firm]
     routes = _html_routes(adapter.PORTFOLIO_URL, FIXTURES / fixture)  # type: ignore[attr-defined]
@@ -190,6 +201,15 @@ async def test_adapter_parses_fixture(
         assert entry.firm == firm
         assert entry.source_url == adapter.PORTFOLIO_URL  # type: ignore[attr-defined]
         assert isinstance(entry, PortfolioEntry)
+        # Well-formedness floor: a non-blank name on every entry, and any
+        # website the adapter surfaced must be a non-blank string too.
+        assert entry.name.strip(), f"{firm} yielded a blank company name"
+        if entry.website is not None:
+            assert entry.website.strip(), f"{firm} yielded a blank website"
+    if has_websites:
+        assert any(e.website for e in entries), (
+            f"{firm} normally surfaces websites; fixture parse yielded none"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -244,6 +264,11 @@ async def test_khosla_adapter_aggregates_categories() -> None:
         assert entry.firm == "khosla"
         assert entry.source_url == adapter.PORTFOLIO_URL  # type: ignore[attr-defined]
         assert isinstance(entry, PortfolioEntry)
+        assert entry.name.strip()
+    # Khosla cards carry the company homepage in the card href.
+    assert any(e.website for e in entries), (
+        "Khosla normally surfaces websites; fixture parse yielded none"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -407,3 +432,77 @@ def test_yc_fixture_contains_pre_seed_and_non_pre_seed_entries() -> None:
     stages = {h.get("stage") for h in hits}
     assert "Pre-Seed" in stages, "YC fixture lacks a Pre-Seed entry"
     assert stages - {"Pre-Seed"}, "YC fixture lacks any non-Pre-Seed entries"
+
+
+# ---------------------------------------------------------------------------
+# Hard-fail contract: a well-formed page whose expected structure is missing
+# (the "site redesigned" case) must raise AdapterStructuralError — never
+# return [], which reads as "this firm has no companies" and rots silently.
+# ---------------------------------------------------------------------------
+
+
+# A perfectly valid HTML page that simply isn't the portfolio structure any
+# adapter expects — no JSON islands, no company cards, no sitemap <loc>s.
+_REDESIGNED_PAGE = b"""<!DOCTYPE html>
+<html><head><title>Portfolio</title></head>
+<body><main><h1>Our companies</h1><p>We back bold founders.</p></main></body>
+</html>
+"""
+
+
+@pytest.mark.parametrize("firm", sorted(set(ADAPTERS) - {"yc"}))
+async def test_adapter_raises_structural_error_on_redesigned_page(firm: str) -> None:
+    """Serving a structure-less page to any adapter must raise, not yield []."""
+    adapter = ADAPTERS[firm]
+    netloc = httpx.URL(adapter.PORTFOLIO_URL).host  # type: ignore[attr-defined]
+    routes = [
+        _Route(f"{netloc}/robots.txt", b"", status=404),
+        # Catch-all for the host: portfolio page, sitemap, category pages —
+        # every URL the adapter tries gets the redesigned page.
+        _Route(netloc, _REDESIGNED_PAGE),
+    ]
+    async with HomepageClient(
+        user_agent=USER_AGENT, requests_per_second_per_domain=1000.0
+    ) as client:
+        _inject_transport(client, _MockTransport(routes))
+        with pytest.raises(AdapterStructuralError):
+            await adapter.fetch(client)
+
+
+async def test_yc_raises_structural_error_when_algolia_opts_missing() -> None:
+    """YC page without window.AlgoliaOpts is a structural miss."""
+    routes = [
+        _Route("ycombinator.com/robots.txt", b"", status=404),
+        _Route("ycombinator.com/companies", _REDESIGNED_PAGE),
+    ]
+    adapter = ADAPTERS["yc"]
+    async with HomepageClient(user_agent=USER_AGENT) as client:
+        _inject_transport(client, _MockTransport(routes))
+        with pytest.raises(AdapterStructuralError):
+            await adapter.fetch(client)
+
+
+async def test_yc_raises_structural_error_on_well_formed_empty_results() -> None:
+    """A well-formed but empty Algolia page ({"hits": []}) still hard-fails.
+
+    YC's directory lists thousands of companies, so zero usable entries across
+    all pages always signals drift (index renamed, params changed, stage filter
+    swallowing everything) — the one adapter where "empty but well-formed" can
+    physically occur must still trip the contract.
+    """
+    empty_page = json.dumps({"results": [{"hits": [], "nbPages": 1}]}).encode()
+    routes = [
+        _Route("ycombinator.com/robots.txt", b"", status=404),
+        _Route("ycombinator.com/companies", _YC_PORTFOLIO_HTML.encode("utf-8")),
+        _Route(
+            "algolia.net",
+            empty_page,
+            content_type="application/json",
+            method="POST",
+        ),
+    ]
+    adapter = ADAPTERS["yc"]
+    async with HomepageClient(user_agent=USER_AGENT) as client:
+        _inject_transport(client, _MockTransport(routes))
+        with pytest.raises(AdapterStructuralError):
+            await adapter.fetch(client)

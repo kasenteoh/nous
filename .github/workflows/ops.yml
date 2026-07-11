@@ -1,0 +1,92 @@
+name: ops
+
+# Manual operational levers against the production DB. The runbooks
+# (docs/runbooks/) reference `nous exclude-company` / `nous unexclude-company`,
+# but no local environment holds DATABASE_URL — Actions secrets are the only
+# place these commands can actually run. Dispatch-gated, single-command,
+# choice-allowlisted.
+#
+# Example (the 2026-07-11 Aidoc case: confirmed Tel Aviv HQ in the
+# infer-hq-country dry-run, but the apply run's fetch flaked and the stage's
+# one-shot checked_at stamp means it will never re-select the row):
+#
+#   gh workflow run ops.yml -f command=exclude-company -f slug=aidoc \
+#     -f reason=non_us -f detail="Tel Aviv HQ per https://www.aidoc.com/about/contact/"
+
+on:
+  workflow_dispatch:
+    inputs:
+      command:
+        description: "Operation to run."
+        required: true
+        type: choice
+        options:
+          - exclude-company
+          - unexclude-company
+      slug:
+        description: "Company slug to operate on."
+        required: true
+        type: string
+      reason:
+        description: "exclude-company only: recorded exclusion reason."
+        required: false
+        type: choice
+        options:
+          - manual
+          - non_us
+          - not_a_startup
+          - parse_artifact
+        default: manual
+      detail:
+        description: "exclude-company only: free-form audit note (e.g. the source URL for the decision)."
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+# Mutates the companies table — serialize with every other DB-writing workflow.
+concurrency:
+  group: nous-pipeline-db
+  cancel-in-progress: false
+
+jobs:
+  ops:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: pipeline
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39 # v3
+
+      - name: Install dependencies
+        run: uv sync
+
+      - name: Run operation
+        env:
+          OP_COMMAND: ${{ inputs.command }}
+          OP_SLUG: ${{ inputs.slug }}
+          OP_REASON: ${{ inputs.reason }}
+          OP_DETAIL: ${{ inputs.detail }}
+        # Inputs pass through env vars (never string-interpolated into the
+        # script) and the command itself is a choice allowlist.
+        run: |
+          if [ "$OP_COMMAND" = "exclude-company" ]; then
+            if [ -n "$OP_DETAIL" ]; then
+              uv run nous exclude-company "$OP_SLUG" --reason "$OP_REASON" --detail "$OP_DETAIL" | tee "$GITHUB_STEP_SUMMARY"
+            else
+              uv run nous exclude-company "$OP_SLUG" --reason "$OP_REASON" | tee "$GITHUB_STEP_SUMMARY"
+            fi
+          else
+            uv run nous unexclude-company "$OP_SLUG" | tee "$GITHUB_STEP_SUMMARY"
+          fi

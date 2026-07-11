@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"><channel>
+  <title>VentureBeat</title>
+  <link>https://venturebeat.com</link>
+  <item>
+    <title><![CDATA[Railway secures $100 million to challenge AWS with AI-native cloud infrastructure]]></title>
+    <link>https://venturebeat.com/infrastructure/railway-secures-usd100-million-to-challenge-aws-with-ai-native-cloud</link>
+    <pubDate>Thu, 22 Jan 2026 14:00:00 GMT</pubDate>
+    <description><![CDATA[Railway , a San Francisco-based cloud platform that has quietly amassed two million developers without spending a dollar on marketing, announced Thursday that it raised $100 million in a Series B funding round, as surging demand for artificial intelligence applications exposes the limitations of legacy cloud infrastructure. TQ Ventures led the round, with participation from FPV Ventures , Redpoint]]></description>
+  </item>
+  <item>
+    <title><![CDATA[Listen Labs raises $69M after viral billboard hiring stunt to scale AI customer interviews]]></title>
+    <link>https://venturebeat.com/technology/listen-labs-raises-usd69m-after-viral-billboard-hiring-stunt-to-scale-ai</link>
+    <pubDate>Fri, 16 Jan 2026 14:01:00 GMT</pubDate>
+    <description><![CDATA[Alfred Wahlforss was running out of options. His startup, Listen Labs , needed to hire over 100 engineers, but competing against Mark Zuckerberg&#x27;s $100 million offers seemed impossible. So he spent $5,000 — a fifth of his marketing budget — on a billboard in San Francisco displaying what looked like gibberish: five strings of random numbers. The numbers were actually AI tokens. Decoded, they ]]></description>
+  </item>
+  <item>
+    <title><![CDATA[57% of enterprises have watched AI agents be confidently wrong. The fix is an agentic context layer, but who has one?]]></title>
+    <link>https://venturebeat.com/data/57-of-enterprises-have-watched-ai-agents-be-confidently-wrong-the-fix-is-an-agentic-context-layer-but-who-has-one</link>
+    <pubDate>Fri, 10 Jul 2026 20:58:32 GMT</pubDate>
+    <description><![CDATA[An enterprise AI agent answers with total confidence, but the number is wrong. Nobody catches it until someone traces it back to a stale metric definition or a document the retrieval system never pulled. The model did not fail. The context it was given did. In the past six months, 57% of enterprises traced a confident but wrong AI agent answer to missing or inconsistent business context, and 31% s]]></description>
+  </item>
+  <item>
+    <title><![CDATA[OpenAI introduces ChatGPT Work, a cloud-based AI agent that manages tasks across email, Slack and calendars]]></title>
+    <link>https://venturebeat.com/technology/openai-introduces-chatgpt-work-a-cloud-based-ai-agent-that-manages-tasks-across-email-slack-and-calendars</link>
+    <pubDate>Fri, 10 Jul 2026 20:20:00 GMT</pubDate>
+    <description><![CDATA[OpenAI on Thursday launched ChatGPT Work , a new AI agent embedded inside its flagship chatbot that aims to transform ChatGPT from a question-and-answer tool into an autonomous work platform capable of executing complex, multi-step tasks across users&#x27; email, calendars, code repositories, and messaging apps. The product is powered by OpenAI&#x27;s latest flagship model, GPT-5.6 , and is design]]></description>
+  </item>
+  <item>
+    <title><![CDATA[Wall Street is debating the AI buildout. Enterprises just answered: 86% say their GPUs run at half capacity or less]]></title>
+    <link>https://venturebeat.com/orchestration/wall-street-is-debating-the-ai-buildout-enterprises-just-answered-86-say-their-gpus-run-at-half-capacity-or-less</link>
+    <pubDate>Fri, 10 Jul 2026 19:29:07 GMT</pubDate>
+    <description><![CDATA[Enterprise companies are running AI agents ahead of the controls needed to manage them — and they deployed that way knowingly. That is the central finding from VentureBeat Research&#x27;s June survey of 573 technical leaders at companies with 100 or more employees, fielded across five parallel surveys of the agentic stack. Enterprises are now retrofitting to catch up with their own standards, and ]]></description>
+  </item>
+  <item>
+    <title><![CDATA[Enterprise AI is entering an evaluation gap: Agents are gaining autonomy faster than companies can verify them]]></title>
+    <link>https://venturebeat.com/orchestration/enterprise-ai-is-entering-an-evaluation-gap-agents-are-gaining-autonomy-faster-than-companies-can-verify-them</link>
+    <pubDate>Fri, 10 Jul 2026 18:21:13 GMT</pubDate>
+    <description><![CDATA[Enterprise AI teams are giving agents more freedom at the same moment their confidence in automated testing is collapsing. Half of enterprises have deployed an AI agent or LLM feature that passed internal evaluations and yet still caused a customer-facing failure — one in four more than once — according to the June 2026 VB Pulse survey of 157 qualified enterprise respondents at companies with 100 ]]></description>
+  </item>
+  <item>
+    <title><![CDATA[Google's TabFM skips per-dataset training and still predicts on tables it's never seen]]></title>
+    <link>https://venturebeat.com/technology/googles-tabfm-skips-per-dataset-training-and-still-predicts-on-tables-its-never-seen</link>
+    <pubDate>Fri, 10 Jul 2026 16:14:24 GMT</pubDate>
+    <description><![CDATA[The vast majority of business data is tabular — living in data warehouses, CRMs, and financial ledgers — yet building a reliable model from it still means training a new one from scratch for every dataset, then maintaining hyperparameter tuning loops, feature engineering, and retraining pipelines to fight data drift. Google Research is proposing a way around that: a new foundation model called Tab]]></description>
+  </item>
+  <item>
+    <title><![CDATA[Shared API keys expose AI agents at 69% of enterprises, new VentureBeat research finds]]></title>
+    <link>https://venturebeat.com/security/shared-api-keys-expose-ai-agent-fleets-venturebeat-research</link>
+    <pubDate>Thu, 09 Jul 2026 20:45:43 GMT</pubDate>
+    <description><![CDATA[Share one API key across five AI agents, and a single compromised agent inherits the reach of all five. The attacker immediately benefits from the accumulated permissions of every workflow that the key touches. The forensic trail goes cold at the credential level because five agents on one account leave no record of which agent did what. Sixty-nine percent of enterprises run agents with credential]]></description>
+  </item>
+  <item>
+    <title><![CDATA[Enterprises using multiple AI models are underestimating failure rates by 2.25x]]></title>
+    <link>https://venturebeat.com/orchestration/enterprises-using-multiple-ai-models-are-underestimating-failure-rates-by-2-25x</link>
+    <pubDate>Thu, 09 Jul 2026 18:46:56 GMT</pubDate>
+    <description><![CDATA[A team routing queries across a coding specialist, a logic specialist, and a generalist model assumes each will cover the others&#x27; blind spots. A new study evaluating 67 frontier models from 21 providers shows that assumption is mathematically flawed — and the flaw has a name: the co-failure ceiling. The assumption works like this: as long as two models don&#x27;t usually fail on the exact sam]]></description>
+  </item>
+</channel></rss>

@@ -15,7 +15,7 @@ from __future__ import annotations
 from selectolax.parser import HTMLParser
 
 from nous.sources.homepage import HomepageClient
-from nous.sources.vc_portfolios.base import PortfolioEntry
+from nous.sources.vc_portfolios.base import PortfolioEntry, ensure_entries
 
 _GENERIC_LINK_TEXT = {"", "learn more", "view", "read more", "visit"}
 
@@ -61,7 +61,9 @@ class GeneralCatalystAdapter:
                     source_url=self.PORTFOLIO_URL,
                 )
             )
-        return entries
+        return ensure_entries(
+            entries, self.firm, context='no a[href*="/companies/"] anchors matched'
+        )
 
 
 def _slug_to_name(slug: str) -> str:

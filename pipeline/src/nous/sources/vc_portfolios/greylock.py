@@ -19,7 +19,7 @@ import re
 from selectolax.parser import HTMLParser
 
 from nous.sources.homepage import HomepageClient
-from nous.sources.vc_portfolios.base import PortfolioEntry
+from nous.sources.vc_portfolios.base import PortfolioEntry, ensure_entries
 
 # Greylock logo alts carry inconsistent decorated suffixes — "<Name> Logo",
 # "<Name> Logo Grey", "<Name> Logo NEW", "<Name> Logo NEW 2" — so we strip from
@@ -61,7 +61,11 @@ class GreylockAdapter:
                     source_url=self.PORTFOLIO_URL,
                 )
             )
-        return entries
+        return ensure_entries(
+            entries,
+            self.firm,
+            context="no .portfolio-modal-box.cropped_modal nodes matched",
+        )
 
 
 def _extract_name(modal: object, slug: str) -> str | None:

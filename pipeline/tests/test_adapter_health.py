@@ -17,15 +17,25 @@ import pytest
 from nous.pipeline.adapter_health import (
     ADAPTER_FLOORS,
     DEFAULT_GLOBAL_FLOOR,
+    DEFAULT_NEWS_FLOOR,
+    NEWS_FEEDS,
     AdapterHealth,
     AdapterHealthReport,
     build_summary,
     emit_adapter_health_annotations,
     floor_for,
+    news_floor_for,
     run_adapter_health,
 )
+from nous.sources.crunchbase_news import CB_NEWS_FEED
+from nous.sources.geekwire import GEEKWIRE_FUNDING_FEED
 from nous.sources.homepage import HomepageClient
+from nous.sources.news import NewsClient, RobotsBlockedError
+from nous.sources.prnewswire import PRNEWSWIRE_VC_FEED
+from nous.sources.siliconangle import SILICONANGLE_FEED
+from nous.sources.techcrunch import TC_FUNDING_FEED
 from nous.sources.vc_portfolios import PortfolioEntry
+from nous.sources.venturebeat import VENTUREBEAT_FEED
 
 # ---------------------------------------------------------------------------
 # Test doubles
@@ -309,3 +319,128 @@ def test_build_summary_counts_and_failures() -> None:
     assert set(summary.below_floor) == {"low", "crash"}
     # Must be JSON-serializable for the pipeline_runs.summary jsonb column.
     assert "below_floor" in summary.model_dump(mode="json")
+
+
+# ---------------------------------------------------------------------------
+# News-feed probing — the broad funding feeds get the same canary treatment
+# ---------------------------------------------------------------------------
+
+
+class StubNewsClient(NewsClient):
+    """NewsClient whose fetch_text serves canned bodies (or raises) per URL.
+
+    Subclasses the real client so ``_parse_rss`` is the production parser —
+    the probe's fetch is the only thing stubbed. Never entered as a context
+    manager: fetch_text is overridden and _parse_rss is transport-free.
+    """
+
+    def __init__(self, responses: dict[str, str | Exception]) -> None:
+        super().__init__(user_agent="nous-test test@example.com")
+        self._responses = responses
+
+    async def fetch_text(self, url: str) -> str:
+        outcome = self._responses[url]
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+
+# Items carry no pubDate on purpose: undated entries survive any lookback
+# cutoff, keeping these tests independent of the wall clock.
+_ALIVE_FEED_XML = """<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"><channel><title>Feed</title>
+  <item><title>Post one</title><link>https://feed.example.com/one</link></item>
+  <item><title>Post two</title><link>https://feed.example.com/two</link></item>
+</channel></rss>
+"""
+
+_EMPTY_FEED_XML = """<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"><channel><title>Feed</title></channel></rss>
+"""
+
+
+def test_news_floor_for_defaults_to_news_floor() -> None:
+    assert news_floor_for("totally-unknown-feed") == DEFAULT_NEWS_FLOOR
+
+
+def test_news_feeds_registry_matches_broad_sweep_sources() -> None:
+    """Every ingest-news broad feed is canary-covered, keyed by its
+    discovered_via slug, probing the exact URL the fetcher uses."""
+    assert NEWS_FEEDS == {
+        "techcrunch": TC_FUNDING_FEED,
+        "siliconangle": SILICONANGLE_FEED,
+        "prnewswire": PRNEWSWIRE_VC_FEED,
+        "crunchbase_news": CB_NEWS_FEED,
+        "venturebeat": VENTUREBEAT_FEED,
+        "geekwire": GEEKWIRE_FUNDING_FEED,
+    }
+
+
+async def test_news_feeds_probed_and_classified() -> None:
+    """Feeds report under news:<slug>: raw items > 0 healthy, an empty feed
+    unhealthy, and a transport failure recorded as an error (NOT hidden as
+    [] the way the ingest-path fetchers deliberately do)."""
+    news_client = StubNewsClient(
+        {
+            "https://ok.example.com/feed": _ALIVE_FEED_XML,
+            "https://dead.example.com/feed": _EMPTY_FEED_XML,
+            "https://blocked.example.com/feed": RobotsBlockedError(
+                "robots.txt disallows: https://blocked.example.com/feed"
+            ),
+        }
+    )
+
+    report = await run_adapter_health(
+        _stub_client(),
+        adapters={},
+        news_client=news_client,
+        news_feeds={
+            "okfeed": "https://ok.example.com/feed",
+            "deadfeed": "https://dead.example.com/feed",
+            "blockedfeed": "https://blocked.example.com/feed",
+        },
+    )
+
+    by_key = {a.firm: a for a in report.adapters}
+    assert set(by_key) == {"news:okfeed", "news:deadfeed", "news:blockedfeed"}
+
+    assert by_key["news:okfeed"].healthy is True
+    assert by_key["news:okfeed"].count == 2
+    assert by_key["news:okfeed"].floor == DEFAULT_NEWS_FLOOR
+
+    # Zero raw items sits AT the floor (0) — not healthy: an unfiltered parse
+    # of a live feed always has items, so zero means dead/frozen/format-drift.
+    assert by_key["news:deadfeed"].healthy is False
+    assert by_key["news:deadfeed"].error is None
+
+    assert by_key["news:blockedfeed"].healthy is False
+    assert by_key["news:blockedfeed"].error is not None
+    assert "robots.txt disallows" in by_key["news:blockedfeed"].error
+
+
+async def test_news_feeds_skipped_without_news_client() -> None:
+    """No news_client (the default) means a VC-only sweep — existing callers
+    and tests see identical behavior."""
+    report = await run_adapter_health(
+        _stub_client(),
+        adapters={"acme": FakeAdapter(firm="acme", count=20)},
+        news_feeds={"okfeed": "https://ok.example.com/feed"},
+    )
+    assert [a.firm for a in report.adapters] == ["acme"]
+
+
+async def test_mixed_sweep_reports_firms_and_feeds_together() -> None:
+    """Firms and feeds land in one report/summary with disjoint keys."""
+    news_client = StubNewsClient({"https://acme.example.com/feed": _ALIVE_FEED_XML})
+
+    report = await run_adapter_health(
+        _stub_client(),
+        adapters={"acme": FakeAdapter(firm="acme", count=20)},
+        news_client=news_client,
+        # Same bare slug as the firm — the news: prefix must prevent collision.
+        news_feeds={"acme": "https://acme.example.com/feed"},
+    )
+    summary = build_summary(report)
+    assert summary.counts == {"acme": 20, "news:acme": 2}
+    assert summary.adapters_checked == 2
+    assert summary.adapters_unhealthy == 0

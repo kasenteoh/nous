@@ -22,7 +22,7 @@ from typing import Any
 import httpx
 
 from nous.sources.homepage import HomepageClient
-from nous.sources.vc_portfolios.base import PortfolioEntry
+from nous.sources.vc_portfolios.base import AdapterStructuralError, PortfolioEntry
 
 logger = logging.getLogger(__name__)
 
@@ -77,6 +77,18 @@ class YcAdapter:
 
         if dropped_stages:
             logger.info("yc: dropped %s, kept %d", dropped_stages, len(results))
+        if not results:
+            # Algolia can legitimately return a *well-formed* empty page
+            # ({"hits": []}), so unlike the HTML adapters this zero can arrive
+            # without any shape error. It is still treated as structural: YC's
+            # directory lists thousands of companies, so zero usable entries
+            # across all pages means the index name, query params, or stage
+            # filter drifted — never a genuinely empty portfolio.
+            raise AdapterStructuralError(
+                "yc: Algolia query returned 0 usable companies "
+                f"(dropped_stages={dropped_stages or None}); index or page "
+                "structure likely changed"
+            )
         return results
 
     async def _discover_algolia_credentials(self, client: HomepageClient) -> tuple[str, str]:
@@ -84,18 +96,20 @@ class YcAdapter:
         page_html = (await client.fetch(self.PORTFOLIO_URL)).content
         match = self._ALGOLIA_OPTS_RE.search(page_html)
         if not match:
-            raise RuntimeError(
+            raise AdapterStructuralError(
                 "yc: could not locate window.AlgoliaOpts in portfolio page; "
                 "the page structure likely changed."
             )
         try:
             opts = json.loads(match.group(1))
         except json.JSONDecodeError as exc:
-            raise RuntimeError(f"yc: AlgoliaOpts blob is not valid JSON: {exc}") from exc
+            raise AdapterStructuralError(
+                f"yc: AlgoliaOpts blob is not valid JSON: {exc}"
+            ) from exc
         app_id = opts.get("app")
         api_key = opts.get("key")
         if not isinstance(app_id, str) or not isinstance(api_key, str):
-            raise RuntimeError("yc: AlgoliaOpts missing app/key fields")
+            raise AdapterStructuralError("yc: AlgoliaOpts missing app/key fields")
         return app_id, api_key
 
     async def _algolia_page(
@@ -136,8 +150,8 @@ class YcAdapter:
         body = resp.json()
         results = body.get("results")
         if not isinstance(results, list) or not results:
-            raise RuntimeError(f"yc: unexpected Algolia response shape: {body!r}")
+            raise AdapterStructuralError(f"yc: unexpected Algolia response shape: {body!r}")
         first = results[0]
         if not isinstance(first, dict):
-            raise RuntimeError(f"yc: unexpected Algolia results entry: {first!r}")
+            raise AdapterStructuralError(f"yc: unexpected Algolia results entry: {first!r}")
         return first
