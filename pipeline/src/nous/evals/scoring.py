@@ -127,12 +127,19 @@ _FRAGMENT_SPLIT = re.compile(r"(?<=[.!?:])\s+|\n+")
 # Generic capitalized tokens that are not proper-noun evidence: common
 # acronyms/initialisms and title-cased generic words that legitimately show
 # up in analyst prose without appearing verbatim in the source text.
+# "ide"/"ides" earned their place from the first live DeepSeek re-recording
+# (2026-07-11): the model wrote "JetBrains IDEs" for an input that said
+# "JetBrains extensions" — legitimate analyst paraphrase, same initialism
+# class as "api"/"sdk", not fabrication evidence. Genuinely invented entities
+# in that same recording (e.g. a competitor the site never names) still
+# ground-fail, which is the proxy working as intended.
 _GROUNDING_STOPWORDS: frozenset[str] = frozenset(
     {
         "ai", "api", "apis", "arr", "aws", "b2b", "b2c", "ceo", "cfo", "cio",
         "ciso", "cmo", "coo", "cpo", "cro", "cto", "eu", "gdpr", "gtm", "hq",
-        "hr", "ipo", "it", "llm", "llms", "ml", "r&d", "saas", "sdk", "seo",
-        "smb", "smbs", "soc", "sql", "uk", "us", "usd", "vc", "vcs",
+        "hr", "ide", "ides", "ipo", "it", "llm", "llms", "ml", "r&d", "saas",
+        "sdk", "sdks", "seo", "smb", "smbs", "soc", "sql", "uk", "us", "usd",
+        "vc", "vcs",
         "i", "markdown", "json",
     }
 )
