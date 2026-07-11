@@ -1048,14 +1048,16 @@ def snapshot_companies(week: str | None) -> None:
 def normalize_taxonomy_cmd() -> None:
     """Recanonicalize companies' free-text taxonomy in place (zero LLM).
 
-    Applies nous.util.category.normalize_category to primary_category AND
-    nous.util.industry.normalize_industry to industry_group, collapsing the
-    historical free-text spelling sprawl (ad-tech / adtech / advertising
-    technology; biotech / biotech tooling; healthcare / healthtech /
-    healthcare AI) onto the canonical sets. Backfilling industry_group here
-    heals the browse dropdown without waiting on re-enrichment. Set-based per
-    distinct value and idempotent: a second run finds nothing to change. No
-    schema change (string update only).
+    Applies nous.util.category.normalize_category to primary_category,
+    nous.util.industry.normalize_industry to industry_group, AND
+    nous.util.tags.canonicalize_tags to tags, collapsing the historical
+    free-text spelling sprawl (ad-tech / adtech / advertising technology;
+    biotech / biotech tooling; healthcare / healthtech / healthcare AI;
+    ci-observability / ci-cd) onto the canonical sets. Backfilling here heals
+    the browse dropdown and the /tag/* long tail without waiting on
+    re-enrichment. Set-based per distinct value (tags: per distinct array)
+    and idempotent: a second run finds nothing to change. No schema change
+    (content update only).
     """
     import asyncio
     from datetime import UTC, datetime
