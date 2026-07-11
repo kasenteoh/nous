@@ -130,3 +130,67 @@ inherited from the prompt, not a claim about which model wrote the code.
   matches the company-page tile). Helion-style regression tests. 149 web
   tests total. **W-C is complete** (C.1 #132, C.5/C.6 #133, C.3-pipeline
   #134, C.2/C.3-web/C.4 #138).
+
+## PRs #139/#140/#143 — eval-record workflow (merged 2026-07-11)
+
+- `workflow_dispatch`-only workflow that re-records the golden set against
+  live DeepSeek (the API key exists only as an Actions secret) and pushes a
+  reviewable branch. #140 fixed a YAML parse bug (unindented commit-message
+  lines terminated the `run: |` block — GitHub's tell is the workflow
+  registering with its path as its name); #143 made PR-creation failure
+  non-fatal (repo settings forbid Actions-created PRs; kept that way).
+- First live run: all 40 fixtures recorded (0 failures). Gate correctly
+  flagged simulated-vs-live drift — headline: tags_f1 0.265 vs 0.986 floor
+  (live DeepSeek's tag vocabulary diverges from hand-authored tags).
+  Recordings held on branch `eval-record/20260711-081233` until W-F's
+  golden-set rewrite lands; floors get recalibrated against live output in
+  one pass after that.
+
+## PR #141 — W-E.4: slug aliases + 308 redirects (merged 2026-07-11)
+
+- Migration 0032: `slug_aliases` (old_slug natural PK — documented exception;
+  company_id FK CASCADE, indexed). `merge_companies` repoints the loser's
+  aliases before the delete (chains converge: A→B then B→C leaves a→C),
+  clears survivor-slug shadows, upserts the dying slug.
+- Web: `getAliasTargetSlug` + `permanentRedirect` (308) on the miss path of
+  /c/[slug] and /alternatives/[slug]. Deviation from plan: no middleware — a
+  per-request DB hit to serve the rare dead-slug case loses to a
+  miss-path-only lookup (valid slugs pay zero extra queries).
+
+## PR #142 — ops workflow (merged 2026-07-11)
+
+- Dispatch-gated `ops.yml`: choice-allowlisted `exclude-company` /
+  `unexclude-company` against prod (only Actions holds DATABASE_URL — the
+  runbook's manual + rollback levers had no execution path). First consumer:
+  the Aidoc residual (Tel Aviv HQ confirmed in the infer-hq-country dry run;
+  the apply run's fetch flaked and the one-shot `hq_country_checked_at`
+  stamp would never re-select it).
+
+## PR #144 — W-D: discovery expansion + adapter resilience (merged 2026-07-11)
+
+- Shared JSON-island walker (`vc_portfolios/_json_island.py`) replaces the
+  a16z / Founders Fund / Felicis triplicates.
+- Uniform hard-fail contract: `AdapterStructuralError` + `ensure_entries` —
+  zero-yield parses raise instead of returning `[]` (8 adapters silently
+  degraded before); per-firm isolation in the callers verified; canaries
+  strengthened for all 13 VC adapters + mangled-fixture structural-miss
+  tests.
+- New feeds riding ingest-news + auto-create: GeekWire funding tag (live: 6
+  entries/30d) and VentureBeat main feed with a title+lede keyword gate (no
+  funding-specific VB feed exists). `adapter-health` probes the six news
+  feeds and is now actually wired into discovery.yml (annotate-only).
+- Accelerator lists (Techstars/500 Global/Antler/Alchemist) documented as
+  JS-only skips; GitHub-trending mapper deferred (needs an LLM pass).
+- Known follow-up (task chip): the funding-keyword matcher substring-matches
+  "evaluations" → "valuation".
+
+## Prod operations log (2026-07-11)
+
+- **Non-US drain (lever 1)**: dry-run batch 1 (40 checked → 3 intended
+  exclusions, all verified correct); apply batch 1 excluded Ada (DE) + AIM
+  (CY), Aidoc flaked → handled via ops.yml exclusion with the dry-run
+  evidence; batch 2 (limit 80) dispatched.
+- **Non-startup re-judge (lever 2)**: batch 1 (200-limit): 22 judged, 15
+  excluded. Batch 2 dispatched.
+- Batches repeat until each lever reports an empty selection, per the
+  runbook.
