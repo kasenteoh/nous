@@ -3,8 +3,9 @@ export const revalidate = 21600;
 
 import type { Metadata } from "next";
 import Link from "next/link";
-import { notFound } from "next/navigation";
+import { notFound, permanentRedirect } from "next/navigation";
 import {
+  getAliasTargetSlug,
   getAlsoBackedBy,
   getCompanyBySlug,
   getInvestorNameToSlugMap,
@@ -262,6 +263,17 @@ export default async function CompanyPage({ params }: Props) {
   ]);
 
   if (!detail) {
+    // Miss path only (valid slugs pay zero extra queries): a merged-away
+    // company's slug lives on in slug_aliases, so a dead URL 308s to the
+    // survivor's current slug instead of burning the link. An excluded
+    // survivor still redirects — the target page's own exclusion logic 404s
+    // (truthful: the alias exists, the destination is gone). The
+    // target !== slug guard is write-time-guaranteed (a live slug is never an
+    // alias); kept as defense-in-depth against a redirect loop.
+    const target = await getAliasTargetSlug(slug);
+    if (target && target !== slug) {
+      permanentRedirect(`/c/${target}`);
+    }
     notFound();
   }
 
