@@ -14,7 +14,12 @@ import re
 
 from nous.sources.homepage import HomepageClient
 from nous.sources.vc_portfolios._json_island import find_balanced
-from nous.sources.vc_portfolios.base import PortfolioEntry, is_placeholder_name
+from nous.sources.vc_portfolios.base import (
+    AdapterStructuralError,
+    PortfolioEntry,
+    ensure_entries,
+    is_placeholder_name,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +36,7 @@ class A16zAdapter:
         html = (await client.fetch(self.PORTFOLIO_URL)).content
         array_text = find_balanced(html, self._ISLAND_RE)
         if array_text is None:
-            raise RuntimeError(
+            raise AdapterStructuralError(
                 "a16z: window.a16z_portfolio_companies array not found in page; "
                 "DOM likely changed."
             )
@@ -65,4 +70,8 @@ class A16zAdapter:
                     source_url=self.PORTFOLIO_URL,
                 )
             )
-        return entries
+        return ensure_entries(
+            entries,
+            self.firm,
+            context="portfolio JSON array parsed but held no usable companies",
+        )

@@ -21,7 +21,7 @@ import httpx
 from selectolax.parser import HTMLParser
 
 from nous.sources.homepage import HomepageClient, RobotsBlockedError
-from nous.sources.vc_portfolios.base import PortfolioEntry
+from nous.sources.vc_portfolios.base import PortfolioEntry, ensure_entries
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +50,13 @@ class KhoslaAdapter:
             for entry in _parse_cards(HTMLParser(cat_html), self.firm, self.PORTFOLIO_URL):
                 seen.setdefault(entry.name, entry)
 
-        return list(seen.values())
+        # Zero *total* across landing + all categories is a structural miss;
+        # an individual empty/failed category page above is tolerated.
+        return ensure_entries(
+            list(seen.values()),
+            self.firm,
+            context="no a.company-slide cards on landing or category pages",
+        )
 
 
 def _parse_cards(tree: HTMLParser, firm: str, source_url: str) -> list[PortfolioEntry]:

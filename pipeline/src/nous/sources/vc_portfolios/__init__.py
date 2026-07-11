@@ -14,7 +14,11 @@ from __future__ import annotations
 
 from nous.sources.vc_portfolios.a16z import A16zAdapter
 from nous.sources.vc_portfolios.accel import AccelAdapter
-from nous.sources.vc_portfolios.base import PortfolioAdapter, PortfolioEntry
+from nous.sources.vc_portfolios.base import (
+    AdapterStructuralError,
+    PortfolioAdapter,
+    PortfolioEntry,
+)
 from nous.sources.vc_portfolios.bessemer import BessemerAdapter
 from nous.sources.vc_portfolios.felicis import FelicisAdapter
 from nous.sources.vc_portfolios.founders_fund import FoundersFundAdapter
@@ -62,4 +66,10 @@ FIRM_DISPLAY_NAMES: dict[str, str] = {
     "general_catalyst": "General Catalyst",
 }
 
-__all__ = ["ADAPTERS", "FIRM_DISPLAY_NAMES", "PortfolioAdapter", "PortfolioEntry"]
+__all__ = [
+    "ADAPTERS",
+    "FIRM_DISPLAY_NAMES",
+    "AdapterStructuralError",
+    "PortfolioAdapter",
+    "PortfolioEntry",
+]

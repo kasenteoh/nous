@@ -22,7 +22,11 @@ from selectolax.parser import HTMLParser
 
 from nous.sources.homepage import HomepageClient
 from nous.sources.vc_portfolios._json_island import find_balanced
-from nous.sources.vc_portfolios.base import PortfolioEntry
+from nous.sources.vc_portfolios.base import (
+    AdapterStructuralError,
+    PortfolioEntry,
+    ensure_entries,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -40,13 +44,15 @@ class FoundersFundAdapter:
         html = (await client.fetch(self.PORTFOLIO_URL)).content
         blob = find_balanced(html, self._ISLAND_RE)
         if blob is None:
-            raise RuntimeError(
+            raise AdapterStructuralError(
                 "founders_fund: window.__data object not found; DOM likely changed."
             )
         data = json.loads(blob)
         companies = data.get("companies") if isinstance(data, dict) else None
         if not isinstance(companies, list):
-            raise RuntimeError("founders_fund: window.__data.companies missing or wrong type")
+            raise AdapterStructuralError(
+                "founders_fund: window.__data.companies missing or wrong type"
+            )
 
         entries: list[PortfolioEntry] = []
         for company in companies:
@@ -69,7 +75,11 @@ class FoundersFundAdapter:
                     source_url=self.PORTFOLIO_URL,
                 )
             )
-        return entries
+        return ensure_entries(
+            entries,
+            self.firm,
+            context="window.__data.companies parsed but held no usable companies",
+        )
 
 
 def _strip_html(value: object) -> str | None:

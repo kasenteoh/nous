@@ -24,7 +24,7 @@ from typing import Any
 
 from nous.sources.homepage import HomepageClient
 from nous.sources.vc_portfolios._json_island import extract_balanced
-from nous.sources.vc_portfolios.base import PortfolioEntry
+from nous.sources.vc_portfolios.base import PortfolioEntry, ensure_entries
 
 logger = logging.getLogger(__name__)
 
@@ -60,12 +60,11 @@ class FelicisAdapter:
                     source_url=self.PORTFOLIO_URL,
                 )
             )
-        if not entries:
-            raise RuntimeError(
-                "felicis: no company objects found in the RSC payload; "
-                "the page structure likely changed."
-            )
-        return entries
+        return ensure_entries(
+            entries,
+            self.firm,
+            context="no company objects found in the RSC payload",
+        )
 
 
 def _decode_rsc_payload(html: str) -> str:

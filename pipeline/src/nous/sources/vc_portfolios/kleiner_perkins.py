@@ -17,7 +17,7 @@ import re
 from urllib.parse import urlparse
 
 from nous.sources.homepage import HomepageClient
-from nous.sources.vc_portfolios.base import PortfolioEntry
+from nous.sources.vc_portfolios.base import PortfolioEntry, ensure_entries
 
 _LOC_RE = re.compile(r"<loc>\s*([^<]+?)\s*</loc>", re.IGNORECASE)
 
@@ -48,12 +48,11 @@ class KleinerPerkinsAdapter:
                     source_url=self.PORTFOLIO_URL,
                 )
             )
-        if not entries:
-            raise RuntimeError(
-                "kleiner_perkins: no /company/<slug> URLs found in company-sitemap.xml; "
-                "the sitemap structure likely changed."
-            )
-        return entries
+        return ensure_entries(
+            entries,
+            self.firm,
+            context="no /company/<slug> URLs found in company-sitemap.xml",
+        )
 
 
 def _company_slug(loc: str) -> str | None:

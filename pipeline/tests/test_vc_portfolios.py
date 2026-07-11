@@ -15,7 +15,12 @@ import httpx
 import pytest
 
 from nous.sources.homepage import HomepageClient
-from nous.sources.vc_portfolios import ADAPTERS, FIRM_DISPLAY_NAMES, PortfolioEntry
+from nous.sources.vc_portfolios import (
+    ADAPTERS,
+    FIRM_DISPLAY_NAMES,
+    AdapterStructuralError,
+    PortfolioEntry,
+)
 
 FIXTURES = Path(__file__).parent / "fixtures" / "vc_portfolios"
 USER_AGENT = "nous-test test@example.com"
@@ -407,3 +412,77 @@ def test_yc_fixture_contains_pre_seed_and_non_pre_seed_entries() -> None:
     stages = {h.get("stage") for h in hits}
     assert "Pre-Seed" in stages, "YC fixture lacks a Pre-Seed entry"
     assert stages - {"Pre-Seed"}, "YC fixture lacks any non-Pre-Seed entries"
+
+
+# ---------------------------------------------------------------------------
+# Hard-fail contract: a well-formed page whose expected structure is missing
+# (the "site redesigned" case) must raise AdapterStructuralError — never
+# return [], which reads as "this firm has no companies" and rots silently.
+# ---------------------------------------------------------------------------
+
+
+# A perfectly valid HTML page that simply isn't the portfolio structure any
+# adapter expects — no JSON islands, no company cards, no sitemap <loc>s.
+_REDESIGNED_PAGE = b"""<!DOCTYPE html>
+<html><head><title>Portfolio</title></head>
+<body><main><h1>Our companies</h1><p>We back bold founders.</p></main></body>
+</html>
+"""
+
+
+@pytest.mark.parametrize("firm", sorted(set(ADAPTERS) - {"yc"}))
+async def test_adapter_raises_structural_error_on_redesigned_page(firm: str) -> None:
+    """Serving a structure-less page to any adapter must raise, not yield []."""
+    adapter = ADAPTERS[firm]
+    netloc = httpx.URL(adapter.PORTFOLIO_URL).host  # type: ignore[attr-defined]
+    routes = [
+        _Route(f"{netloc}/robots.txt", b"", status=404),
+        # Catch-all for the host: portfolio page, sitemap, category pages —
+        # every URL the adapter tries gets the redesigned page.
+        _Route(netloc, _REDESIGNED_PAGE),
+    ]
+    async with HomepageClient(
+        user_agent=USER_AGENT, requests_per_second_per_domain=1000.0
+    ) as client:
+        _inject_transport(client, _MockTransport(routes))
+        with pytest.raises(AdapterStructuralError):
+            await adapter.fetch(client)
+
+
+async def test_yc_raises_structural_error_when_algolia_opts_missing() -> None:
+    """YC page without window.AlgoliaOpts is a structural miss."""
+    routes = [
+        _Route("ycombinator.com/robots.txt", b"", status=404),
+        _Route("ycombinator.com/companies", _REDESIGNED_PAGE),
+    ]
+    adapter = ADAPTERS["yc"]
+    async with HomepageClient(user_agent=USER_AGENT) as client:
+        _inject_transport(client, _MockTransport(routes))
+        with pytest.raises(AdapterStructuralError):
+            await adapter.fetch(client)
+
+
+async def test_yc_raises_structural_error_on_well_formed_empty_results() -> None:
+    """A well-formed but empty Algolia page ({"hits": []}) still hard-fails.
+
+    YC's directory lists thousands of companies, so zero usable entries across
+    all pages always signals drift (index renamed, params changed, stage filter
+    swallowing everything) — the one adapter where "empty but well-formed" can
+    physically occur must still trip the contract.
+    """
+    empty_page = json.dumps({"results": [{"hits": [], "nbPages": 1}]}).encode()
+    routes = [
+        _Route("ycombinator.com/robots.txt", b"", status=404),
+        _Route("ycombinator.com/companies", _YC_PORTFOLIO_HTML.encode("utf-8")),
+        _Route(
+            "algolia.net",
+            empty_page,
+            content_type="application/json",
+            method="POST",
+        ),
+    ]
+    adapter = ADAPTERS["yc"]
+    async with HomepageClient(user_agent=USER_AGENT) as client:
+        _inject_transport(client, _MockTransport(routes))
+        with pytest.raises(AdapterStructuralError):
+            await adapter.fetch(client)
