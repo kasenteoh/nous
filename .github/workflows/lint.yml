@@ -90,6 +90,11 @@ jobs:
       - name: Lint
         run: npm run lint
 
+      # Vitest unit/component suite (jsdom). Needs no Supabase secrets — the
+      # query layer is tested against a mocked client.
+      - name: Test
+        run: npm run test
+
       - name: Build (also typechecks)
         # The canary values below are FAKE (this job has no real secrets — see
         # the smoke-test comment). They exist so the bundle-safety step can
