@@ -47,6 +47,9 @@ from nous.llm.client import (
     LLMRateLimitError,
     complete_json,
 )
+from nous.llm.prompts.hq_country import (
+    PROMPT_VERSION as HQ_COUNTRY_PROMPT_VERSION,
+)
 from nous.llm.prompts.hq_country import HqCountryJudgment, build_prompt
 from nous.sources.homepage import FetchResult, RobotsBlockedError
 from nous.util.ssrf import BlockedAddressError
@@ -181,6 +184,10 @@ def _apply_judgment(
         summary.excluded_non_us += 1
         if not dry_run:
             company.hq_country = cc
+            # Provenance stamp: this hq_country came from the hq_country
+            # prompt. Stamped only when content is written — a left-unknown
+            # attempt is recorded by hq_country_checked_at alone.
+            company.hq_country_prompt_version = HQ_COUNTRY_PROMPT_VERSION
             company.exclusion_reason = "non_us"
             company.exclusion_detail = f'HQ {cc} from {source_url}: "{quote}"'
             company.excluded_at = now
@@ -191,6 +198,7 @@ def _apply_judgment(
         summary.set_us += 1
         if not dry_run:
             company.hq_country = "US"
+            company.hq_country_prompt_version = HQ_COUNTRY_PROMPT_VERSION
     else:
         summary.left_unknown += 1
 

@@ -60,6 +60,9 @@ from nous.llm.client import (
     complete_json,
 )
 from nous.llm.prompts.funding_extraction import (
+    PROMPT_VERSION as FUNDING_PROMPT_VERSION,
+)
+from nous.llm.prompts.funding_extraction import (
     FundingExtraction,
     build_prompt,
     build_website_prompt,
@@ -299,6 +302,11 @@ def _apply_status_event(
     if company.status == "active":
         company.status = extraction.status_event
         company.status_source_url = source_url
+        # Provenance stamp: the status now on this row came from THIS prompt
+        # revision. Also refreshed on a source-URL backfill below — that path
+        # re-confirms the status via the same prompt, so a bad revision's
+        # false confirmations are found by the same version query.
+        company.funding_prompt_version = FUNDING_PROMPT_VERSION
         logger.info(
             "Company status applied: %r -> '%s' (source: %s)",
             company.name,
@@ -313,6 +321,7 @@ def _apply_status_event(
         and source_url is not None
     ):
         company.status_source_url = source_url
+        company.funding_prompt_version = FUNDING_PROMPT_VERSION
         logger.info(
             "Company status source backfilled: %r stays '%s' (source: %s)",
             company.name,
@@ -369,6 +378,9 @@ def _apply_total_raised(
     company.total_raised_usd = extraction.total_raised_usd
     company.total_raised_source_url = source_url
     company.total_raised_as_of = as_of
+    # Provenance stamp: the stated total now on this row came from THIS
+    # prompt revision (shared with the status fields — same prompt family).
+    company.funding_prompt_version = FUNDING_PROMPT_VERSION
     logger.info(
         "Company total raised recorded: %r -> %s USD as of %s (source: %s)",
         company.name,

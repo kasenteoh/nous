@@ -48,6 +48,9 @@ from nous.llm.client import (
     LLMRateLimitError,
     complete_json,
 )
+from nous.llm.prompts.company_eligibility import (
+    PROMPT_VERSION as ELIGIBILITY_PROMPT_VERSION,
+)
 from nous.llm.prompts.company_eligibility import EligibilityJudgment, build_prompt
 from nous.pipeline.enrich_companies import _infer_country_from_url
 from nous.util.text import extract_visible_text, truncate_to_chars
@@ -187,6 +190,10 @@ async def _judge_one_company(
 
     now = datetime.now(tz=UTC)
     company.eligibility_checked_at = now
+    # Provenance stamp: this judgment came from the company_eligibility prompt
+    # (the enrich path stamps the description prompt's version instead).
+    # Overwritten on re-judgment along with the data.
+    company.eligibility_prompt_version = ELIGIBILITY_PROMPT_VERSION
     if judgment.founded_year and not company.year_incorporated:
         company.year_incorporated = judgment.founded_year
     # Country resolution — mirrors the enrich-companies three-tier logic:

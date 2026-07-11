@@ -27,6 +27,9 @@ from nous.db.models import (
     RawPage,
 )
 from nous.llm.prompts.company_description import PersonExtraction
+from nous.llm.prompts.funding_extraction import (
+    PROMPT_VERSION as FUNDING_PROMPT_VERSION,
+)
 from nous.llm.prompts.funding_extraction import FundingExtraction
 from nous.util.investor_name import (
     canonicalize_investor_name,
@@ -358,6 +361,9 @@ def _merge_extraction_into_round(
       downgrade.
     - primary_news_url: untouched — first-write-wins (the earliest attribution
       is the most stable reference).
+    - prompt_version: last-writer-wins — the row now reflects (at least partly)
+      THIS extraction, so the stamp is refreshed to the current
+      funding_extraction.PROMPT_VERSION along with the data.
 
     The amount-match path can pair a null-typed survivor with a typed extraction
     (or vice versa), so round_type is upgraded here rather than only gap-filled
@@ -379,6 +385,7 @@ def _merge_extraction_into_round(
     if _is_more_confident(extraction.confidence, existing.extraction_confidence):
         existing.extraction_confidence = extraction.confidence
     # primary_news_url: first-write-wins; do not overwrite.
+    existing.prompt_version = FUNDING_PROMPT_VERSION
 
 
 async def refresh_funding_round_count(
@@ -512,6 +519,7 @@ async def reconcile_funding_round(
             announced_date=None,
             primary_news_url=primary_news_url,
             extraction_confidence=extraction.confidence,
+            prompt_version=FUNDING_PROMPT_VERSION,
         )
         session.add(new_round)
         await session.flush()
@@ -573,6 +581,7 @@ async def reconcile_funding_round(
         announced_date=extraction.announced_date,
         primary_news_url=primary_news_url,
         extraction_confidence=extraction.confidence,
+        prompt_version=FUNDING_PROMPT_VERSION,
     )
     session.add(new_round)
     await session.flush()
@@ -759,6 +768,13 @@ _MERGE_FILL_COLUMNS: tuple[str, ...] = (
     "year_incorporated",
     "last_enriched_at",
     "last_enriched_payload",
+    # Prompt-provenance stamps travel with their content columns: the survivor
+    # takes the loser's stamp only when its own is NULL, mirroring how the
+    # enrichment fields / hq_country above gap-fill. eligibility_ and
+    # funding_prompt_version are deliberately absent — their content columns
+    # (exclusion_*, status, total_raised_*) do not gap-fill on merge either.
+    "enrichment_prompt_version",
+    "hq_country_prompt_version",
     "website_resolved_at",
 )
 
