@@ -59,7 +59,9 @@ _CALL_DEADLINE_SECONDS: float = 180.0
 # Shared ceiling for prompt input text across all LLM-using stages.
 # Stages that deliberately use a smaller limit (e.g. TechCrunch headline
 # articles ~6k) keep their own local constant and note it is intentionally
-# below this shared ceiling.
+# below this shared ceiling. One deliberate exception ABOVE it: the
+# dedicated long-description call (MAX_DESCRIPTION_INPUT_CHARS = 48k in
+# nous.llm.prompts.company_description_long) — see that module's rationale.
 MAX_PROMPT_INPUT_CHARS: int = 32_000
 
 # DeepSeek pricing constants (USD per million tokens, as of 2026).

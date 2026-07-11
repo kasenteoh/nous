@@ -254,17 +254,26 @@ class Company(Base):
     # before versioning existed (or never LLM-touched) — itself a useful
     # cohort. Re-runs overwrite the stamp along with the data. Not indexed:
     # only rare ad-hoc re-run queries filter on them, never a pipeline stage
-    # or web query.
+    # or web query (--redescribe-outdated scans it, but that is a bounded
+    # backlog drain, not a hot path).
     #
-    # enrichment: description/tags/category/people/hq fields written by
-    # enrich-companies from the company_description prompt.
+    # enrichment: since the W-F judge/describe split, this carries the
+    # company_description_long prompt's version and means "description_long
+    # state is current under this describe-prompt revision" — stamped by
+    # enrich-companies on describe success, deliberate model-null, or a
+    # deliberate too-thin skip (NOT on describe errors or excluded rows), and
+    # by --redescribe-outdated as it drains the backlog. The judge prompt's
+    # short-description/tags/category/people/hq outputs are traceable via
+    # eligibility_prompt_version, which the enrich path stamps in the same
+    # transaction. Rows stamped <= 2026-07-10.1 predate the split (the old
+    # single-prompt version).
     enrichment_prompt_version: Mapped[str | None] = mapped_column(
         Text, nullable=True
     )
     # eligibility: the is-startup judgment fields (exclusion_reason et al.),
     # stamped with the version of whichever prompt made the CURRENT judgment —
-    # company_description on the enrich path, company_eligibility on the
-    # judge-eligibility backfill path.
+    # company_description (the judge) on the enrich path, company_eligibility
+    # on the judge-eligibility backfill path.
     eligibility_prompt_version: Mapped[str | None] = mapped_column(
         Text, nullable=True
     )
