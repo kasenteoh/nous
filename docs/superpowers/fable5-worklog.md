@@ -194,3 +194,55 @@ inherited from the prompt, not a claim about which model wrote the code.
   excluded. Batch 2 dispatched.
 - Batches repeat until each lever reports an empty selection, per the
   runbook.
+
+## PR #145 — W-F: richer company descriptions (merged 2026-07-11)
+
+- Judge/describe prompt split: new `company_description_long` whose entire
+  job is the profile — seven source-gated dimensions, ~350–600-word /
+  4–7-paragraph depth floor on rich input, grounding rules that outrank
+  style (never pad, never invent, null over filler). Judge prompt keeps
+  classification/people/HQ/short-description.
+- Two-call enrich flow (judge 32k input; describe 48k, only for kept
+  companies with ≥700 chars of text — thin sites get an honest null instead
+  of filler). `--redescribe-outdated` regenerates only description_long for
+  stale-stamped rows, oldest-version-first, riding the standing cron (no new
+  workflow input). Subpages 3→5.
+- Cost flagged: ≤2 calls/company (~$1–2/1000 realistic); full ~2.6k backlog
+  re-description ≈ $4 realistic / $11 worst-case, one-time.
+- Verified on prod after merge: AppsFlyer ~900 grounded words (rich site);
+  Cognition an honest 3-paragraph thin-site profile that says so plainly.
+
+## PRs #146–#149 — W-F hardening + the red-main incident (2026-07-11)
+
+- **#146**: the 13:15/15:54 crons were killed at the 30-min job backstop
+  (W-F's 25-min enrich budget no longer fit beside news/funding) — raised to
+  45 min.
+- **#147**: first live re-recording exposed that the golden "rich" inputs
+  (~250 words each) couldn't honestly support the depth floor (live output
+  tracked input length ~1:1). All 12 rich inputs expanded to ~1,500-word
+  multi-page site text; grounding proxy's initialism artifact fixed (real
+  fabrications still penalized).
+- **#148**: live re-record against the rich inputs: `rich_word_mean` 242 →
+  **480**, grounding_mean 0.970; floors anchored to live behavior via
+  `--update-baseline`.
+- **#149**: repaired a real W-F bug CI had been flagging: the describe
+  prompt's version started at `2026-07-10.1`, colliding with the pre-split
+  cohort's stamp, so `--redescribe-outdated` would have silently skipped
+  every row the old prompt enriched. Bumped to `2026-07-11.1`.
+- **Incident (owned by the orchestrator)**: main was red from #145's merge
+  (~08:54) to #149's (~22:15) because the DB-gated
+  `test_redescribe_selection_boundaries` failure was masked by
+  `gh pr checks | grep | tail` pipelines swallowing exit codes — #145–#148
+  merged without a verified-green pipeline job, violating the series' own
+  first rule. Prod impact nil (the drain ran on NULL-stamp selection; live
+  pages verified correct). Corrective practice: every merge now verifies the
+  full `statusCheckRollup` JSON explicitly; no grep/tail between the check
+  and the decision.
+
+## Prod operations log (2026-07-11, continued)
+
+- Non-US drain resumed post-verification: batch 3 (limit 100) applied 7 more
+  sourced exclusions (Atlas/NO, Audiomob/GB, Beacon/GB, Behavox/GB, Bird/NL,
+  Blockchain/AE, Boards/IL). Three-stage drain loop running: infer →
+  re-judge → description re-enrichment (90/run), each to empty selection,
+  with the 3-hourly cron as fallback drain.
