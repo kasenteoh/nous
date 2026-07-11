@@ -19,47 +19,16 @@ from urllib.parse import parse_qs, unquote, urlparse
 import httpx
 from selectolax.parser import HTMLParser
 
+from nous.sources.reject_hosts import is_aggregator_host
 from nous.util.ssrf import BlockedAddressError
 
 logger = logging.getLogger(__name__)
 
 DDG_HTML_URL = "https://html.duckduckgo.com/html/"
 
-# Domains to skip when picking a candidate from search results. These are
-# aggregators / social profiles / news sites that mention companies but
-# aren't the company's own homepage.
-AGGREGATOR_DOMAINS: frozenset[str] = frozenset(
-    {
-        "sec.gov",
-        "linkedin.com",
-        "crunchbase.com",
-        "bloomberg.com",
-        "pitchbook.com",
-        "tracxn.com",
-        "cbinsights.com",
-        "owler.com",
-        "zoominfo.com",
-        "facebook.com",
-        "twitter.com",
-        "x.com",
-        "instagram.com",
-        "youtube.com",
-        "wikipedia.org",
-        "reddit.com",
-        "ycombinator.com",  # YC company directory, not the company itself
-        "techcrunch.com",
-        "forbes.com",
-        "businessinsider.com",
-        "reuters.com",
-        "axios.com",
-        "fortune.com",
-        "wired.com",
-        "theinformation.com",
-        "medium.com",  # personal blogs ≠ company sites
-        "substack.com",
-        "duckduckgo.com",  # avoid recursive results
-    }
-)
+# The domains-to-skip list used to live here as AGGREGATOR_DOMAINS and drifted
+# against reject_hosts.AGGREGATOR_HOSTS. There is now exactly one blocklist —
+# nous.sources.reject_hosts — and is_aggregator() below delegates to it.
 
 
 class DuckDuckGoCaptchaError(Exception):
@@ -207,20 +176,11 @@ def _extract_result_urls(html: str, *, limit: int) -> Iterable[str]:
 
 
 def is_aggregator(url: str) -> bool:
-    """Return True if ``url``'s host is in the aggregator blocklist.
+    """Return True if ``url``'s host is in the shared aggregator blocklist.
 
     Matches the host and any subdomain (e.g. ``linkedin.com`` matches
-    ``www.linkedin.com`` and ``foo.linkedin.com``).
+    ``www.linkedin.com`` and ``foo.linkedin.com``). Host-only — the caller
+    pairs this with reject_hosts.is_aggregator_url when path-pattern
+    rejection is also wanted.
     """
-    host = urlparse(url).netloc.lower()
-    if host.startswith("www."):
-        host = host[4:]
-    if host in AGGREGATOR_DOMAINS:
-        return True
-    # Subdomain match: foo.linkedin.com → check "linkedin.com" etc.
-    parts = host.split(".")
-    for i in range(len(parts) - 1):
-        candidate = ".".join(parts[i:])
-        if candidate in AGGREGATOR_DOMAINS:
-            return True
-    return False
+    return is_aggregator_host(urlparse(url).netloc)
