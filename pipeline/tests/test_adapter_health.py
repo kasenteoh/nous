@@ -17,14 +17,19 @@ import pytest
 from nous.pipeline.adapter_health import (
     ADAPTER_FLOORS,
     DEFAULT_GLOBAL_FLOOR,
+    DEFAULT_NEWS_FLOOR,
+    NEWS_FEEDS,
+    NEWS_PROBE_LOOKBACK_DAYS,
     AdapterHealth,
     AdapterHealthReport,
     build_summary,
     emit_adapter_health_annotations,
     floor_for,
+    news_floor_for,
     run_adapter_health,
 )
 from nous.sources.homepage import HomepageClient
+from nous.sources.news import NewsArticleResult, NewsClient
 from nous.sources.vc_portfolios import PortfolioEntry
 
 # ---------------------------------------------------------------------------
@@ -309,3 +314,128 @@ def test_build_summary_counts_and_failures() -> None:
     assert set(summary.below_floor) == {"low", "crash"}
     # Must be JSON-serializable for the pipeline_runs.summary jsonb column.
     assert "below_floor" in summary.model_dump(mode="json")
+
+
+# ---------------------------------------------------------------------------
+# News-feed probing — the broad funding feeds get the same canary treatment
+# ---------------------------------------------------------------------------
+
+
+class StubNewsClient:
+    """No-op NewsClient stand-in; the fake fetchers ignore it entirely."""
+
+    async def __aenter__(self) -> StubNewsClient:
+        return self
+
+    async def __aexit__(self, *args: object) -> None:
+        return None
+
+
+def _stub_news_client() -> NewsClient:
+    return StubNewsClient()  # type: ignore[return-value]
+
+
+def _feed_result(i: int) -> NewsArticleResult:
+    return NewsArticleResult(
+        url=f"https://feed.example.com/item-{i}",
+        title=f"Startup {i} raises ${i}M",
+        source="feed.example.com",
+        published_date=None,
+        raw_content="snippet",
+    )
+
+
+def test_news_floor_for_defaults_to_news_floor() -> None:
+    assert news_floor_for("totally-unknown-feed") == DEFAULT_NEWS_FLOOR
+
+
+def test_news_feeds_registry_matches_broad_sweep_sources() -> None:
+    """Every ingest-news broad feed is canary-covered, keyed by its
+    discovered_via slug."""
+    assert set(NEWS_FEEDS) == {
+        "techcrunch",
+        "siliconangle",
+        "prnewswire",
+        "crunchbase_news",
+        "venturebeat",
+        "geekwire",
+    }
+
+
+async def test_news_feeds_probed_and_classified() -> None:
+    """Feeds are reported under news:<slug>: >0 healthy, 0 unhealthy,
+    raise isolated + recorded."""
+    lookbacks: list[int] = []
+
+    async def _ok(client: NewsClient, *, lookback_days: int) -> list[NewsArticleResult]:
+        lookbacks.append(lookback_days)
+        return [_feed_result(i) for i in range(3)]
+
+    async def _empty(
+        client: NewsClient, *, lookback_days: int
+    ) -> list[NewsArticleResult]:
+        return []
+
+    async def _boom(
+        client: NewsClient, *, lookback_days: int
+    ) -> list[NewsArticleResult]:
+        raise RuntimeError("simulated feed outage")
+
+    report = await run_adapter_health(
+        _stub_client(),
+        adapters={},
+        news_client=_stub_news_client(),
+        news_feeds={"okfeed": _ok, "deadfeed": _empty, "boomfeed": _boom},
+    )
+
+    by_key = {a.firm: a for a in report.adapters}
+    assert set(by_key) == {"news:okfeed", "news:deadfeed", "news:boomfeed"}
+
+    assert by_key["news:okfeed"].healthy is True
+    assert by_key["news:okfeed"].count == 3
+    assert by_key["news:okfeed"].floor == DEFAULT_NEWS_FLOOR
+
+    # Zero entries sits AT the floor (0) — not healthy: an empty feed is the
+    # collapse signal the fetchers produce for dead URLs / robots changes.
+    assert by_key["news:deadfeed"].healthy is False
+    assert by_key["news:deadfeed"].error is None
+
+    assert by_key["news:boomfeed"].healthy is False
+    assert by_key["news:boomfeed"].error is not None
+    assert "simulated feed outage" in by_key["news:boomfeed"].error
+
+    # Probes use the wide canary lookback, not the standing ingest window.
+    assert lookbacks == [NEWS_PROBE_LOOKBACK_DAYS]
+
+
+async def test_news_feeds_skipped_without_news_client() -> None:
+    """No news_client (the default) means a VC-only sweep — existing callers
+    and tests see identical behavior."""
+
+    async def _ok(client: NewsClient, *, lookback_days: int) -> list[NewsArticleResult]:
+        raise AssertionError("feed fetcher must not run without a news client")
+
+    report = await run_adapter_health(
+        _stub_client(),
+        adapters={"acme": FakeAdapter(firm="acme", count=20)},
+        news_feeds={"okfeed": _ok},
+    )
+    assert [a.firm for a in report.adapters] == ["acme"]
+
+
+async def test_mixed_sweep_reports_firms_and_feeds_together() -> None:
+    """Firms and feeds land in one report/summary with disjoint keys."""
+
+    async def _ok(client: NewsClient, *, lookback_days: int) -> list[NewsArticleResult]:
+        return [_feed_result(1)]
+
+    report = await run_adapter_health(
+        _stub_client(),
+        adapters={"acme": FakeAdapter(firm="acme", count=20)},
+        news_client=_stub_news_client(),
+        news_feeds={"acme": _ok},  # same bare slug as the firm — must not collide
+    )
+    summary = build_summary(report)
+    assert summary.counts == {"acme": 20, "news:acme": 1}
+    assert summary.adapters_checked == 2
+    assert summary.adapters_unhealthy == 0

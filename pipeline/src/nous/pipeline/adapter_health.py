@@ -27,6 +27,20 @@ below each firm's observed steady-state size — the goal is to catch a *collaps
 (a redesign dropping a 600-company list to single digits), not to police
 week-to-week churn.
 
+News feeds
+----------
+The six broad funding-news feeds (TechCrunch venture tag, SiliconANGLE,
+PR Newswire VC, Crunchbase News, VentureBeat, GeekWire funding tag) feed the
+same auto-create path via ingest-news and die just as silently — a feed URL
+that starts 404ing or a robots change turns into a permanent ``[]`` inside
+the fetcher.  The sweep therefore also probes every :data:`NEWS_FEEDS` entry
+through a live :class:`~nous.sources.news.NewsClient` and reports it under a
+``news:<slug>`` key.  Feeds get :data:`DEFAULT_NEWS_FLOOR` (0 — healthy means
+*any* entry parsed) because RSS windows are shallow (VentureBeat serves ~7
+items) and keyword filtering legitimately thins slow weeks; the probe uses a
+:data:`NEWS_PROBE_LOOKBACK_DAYS`-day window to make an all-items-outside-
+lookback false positive implausible.
+
 This stage is **read-only**: it performs network fetches and writes exactly one
 ``pipeline_runs`` audit row, nothing else.  It is **resilient**: each adapter is
 isolated, so one raising adapter is recorded as a failed/zero-count entry and
@@ -44,15 +58,56 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Awaitable
 from dataclasses import dataclass, field
+from typing import Protocol
 
 from pydantic import BaseModel
 
 from nous.observability import write_step_summary
+from nous.sources.crunchbase_news import fetch_crunchbase_news_funding_articles
+from nous.sources.geekwire import fetch_geekwire_funding_articles
 from nous.sources.homepage import HomepageClient
+from nous.sources.news import NewsArticleResult, NewsClient
+from nous.sources.prnewswire import fetch_prnewswire_funding_articles
+from nous.sources.siliconangle import fetch_siliconangle_funding_articles
+from nous.sources.techcrunch import fetch_techcrunch_funding_articles
 from nous.sources.vc_portfolios import ADAPTERS, PortfolioAdapter
+from nous.sources.venturebeat import fetch_venturebeat_funding_articles
 
 logger = logging.getLogger(__name__)
+
+
+class NewsFeedFetcher(Protocol):
+    """Signature shared by the ``fetch_*_funding_articles`` functions."""
+
+    def __call__(
+        self, client: NewsClient, *, lookback_days: int
+    ) -> Awaitable[list[NewsArticleResult]]: ...
+
+
+# Broad funding-news feeds probed by the sweep, keyed by the same slug used
+# for ``companies.discovered_via``. Reported as ``news:<slug>`` so firm and
+# feed keys can never collide in the summary maps.
+NEWS_FEEDS: dict[str, NewsFeedFetcher] = {
+    "techcrunch": fetch_techcrunch_funding_articles,
+    "siliconangle": fetch_siliconangle_funding_articles,
+    "prnewswire": fetch_prnewswire_funding_articles,
+    "crunchbase_news": fetch_crunchbase_news_funding_articles,
+    "venturebeat": fetch_venturebeat_funding_articles,
+    "geekwire": fetch_geekwire_funding_articles,
+}
+
+# Feed floor: healthy means *any* entry parsed (count > 0). RSS windows are
+# shallow and keyword-filtered, so a count floor above zero would flap on slow
+# news weeks; zero entries over NEWS_PROBE_LOOKBACK_DAYS is the collapse
+# signal (dead URL, robots change, feed format drift — the fetchers map all
+# of those to []).
+DEFAULT_NEWS_FLOOR = 0
+
+# Wide probe window so "every item happens to be older than the standing
+# 14-day ingest lookback" cannot trip the canary on its own.
+NEWS_PROBE_LOOKBACK_DAYS = 30
 
 # Global default floor: an adapter yielding this many entries or fewer is
 # treated as a collapse.  10 is low enough to never false-positive on a real
@@ -93,6 +148,16 @@ def floor_for(firm: str, *, global_floor: int = DEFAULT_GLOBAL_FLOOR) -> int:
     *global_floor* applies.  Pure + side-effect-free for trivial unit testing.
     """
     return ADAPTER_FLOORS.get(firm, global_floor)
+
+
+def news_floor_for(slug: str) -> int:
+    """Return the effective entry floor for a news feed *slug*.
+
+    An ``ADAPTER_FLOORS`` entry keyed ``news:<slug>`` wins (none are set
+    today — feeds share :data:`DEFAULT_NEWS_FLOOR`); the prefixed key keeps
+    feed overrides from ever colliding with a firm slug.
+    """
+    return ADAPTER_FLOORS.get(f"news:{slug}", DEFAULT_NEWS_FLOOR)
 
 
 @dataclass
@@ -185,13 +250,48 @@ async def _probe_adapter(
     return health
 
 
+async def _probe_news_feed(
+    slug: str,
+    fetcher: NewsFeedFetcher,
+    client: NewsClient,
+) -> AdapterHealth:
+    """Run one news-feed fetcher and classify it against its floor.
+
+    The fetchers already map transport failures (robots block, HTTP error,
+    network error) to ``[]``, so a dead feed usually shows up as a zero count
+    rather than an error; the try/except still isolates anything unexpected
+    (parser blow-up, event-loop cancellation) the same way ``_probe_adapter``
+    does.
+    """
+    key = f"news:{slug}"
+    floor = news_floor_for(slug)
+    try:
+        results = await fetcher(client, lookback_days=NEWS_PROBE_LOOKBACK_DAYS)
+    except Exception as exc:  # noqa: BLE001 — per-feed isolation is the point
+        logger.exception("adapter-health: news feed %s raised during fetch", slug)
+        return AdapterHealth(firm=key, count=0, floor=floor, error=repr(exc))
+
+    count = len(results)
+    health = AdapterHealth(firm=key, count=count, floor=floor)
+    logger.info(
+        "adapter-health: feed=%s count=%d floor=%d healthy=%s",
+        slug,
+        count,
+        floor,
+        health.healthy,
+    )
+    return health
+
+
 async def run_adapter_health(
     client: HomepageClient,
     *,
     adapters: dict[str, PortfolioAdapter] | None = None,
     global_floor: int = DEFAULT_GLOBAL_FLOOR,
+    news_client: NewsClient | None = None,
+    news_feeds: dict[str, NewsFeedFetcher] | None = None,
 ) -> AdapterHealthReport:
-    """Probe every adapter and return an :class:`AdapterHealthReport`.
+    """Probe every adapter (and news feed) and return an :class:`AdapterHealthReport`.
 
     Args:
         client: An entered :class:`HomepageClient` the adapters fetch through.
@@ -200,6 +300,11 @@ async def run_adapter_health(
             can pass fakes without monkeypatching.
         global_floor: Floor applied to any firm without an
             :data:`ADAPTER_FLOORS` override.
+        news_client: An entered :class:`NewsClient` for the news-feed probes.
+            ``None`` (the default) skips the feed sweep entirely — VC-only
+            callers and existing tests are unaffected.
+        news_feeds: Feed registry to probe when ``news_client`` is given;
+            defaults to :data:`NEWS_FEEDS`.  Results are keyed ``news:<slug>``.
 
     Adapters are probed sequentially.  Each adapter already throttles its own
     HTTP (the shared per-domain 1 req/s budget in :class:`HomepageClient`), and
@@ -214,6 +319,12 @@ async def run_adapter_health(
             firm, registry[firm], client, global_floor=global_floor
         )
         report.adapters.append(health)
+    if news_client is not None:
+        feed_registry = news_feeds if news_feeds is not None else NEWS_FEEDS
+        for slug in sorted(feed_registry):
+            report.adapters.append(
+                await _probe_news_feed(slug, feed_registry[slug], news_client)
+            )
     return report
 
 
@@ -319,11 +430,19 @@ async def adapter_health_main(
     from nous.observability import record_pipeline_run
 
     started = datetime.now(UTC)
-    async with HomepageClient(
-        user_agent,
-        requests_per_second_per_domain=1.0,
-    ) as client:
-        report = await run_adapter_health(client, global_floor=global_floor)
+    async with (
+        HomepageClient(
+            user_agent,
+            requests_per_second_per_domain=1.0,
+        ) as client,
+        NewsClient(
+            user_agent,
+            requests_per_second_per_domain=1.0,
+        ) as news_client,
+    ):
+        report = await run_adapter_health(
+            client, global_floor=global_floor, news_client=news_client
+        )
 
     summary = build_summary(report)
     # rows_written counts healthy adapters; with flag_empty, an all-unhealthy
