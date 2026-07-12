@@ -43,7 +43,7 @@ Web (run from `web/`):
 - `npm run build` — production build (also typechecks)
 - `npm run lint` — lint
 
-Before considering any task complete: run `ruff check`, `mypy src`, and `pytest` in `pipeline/`, plus `npm run build` in `web/`. All must pass.
+Before considering any task complete: run `ruff check`, `mypy src`, and `pytest` in `pipeline/`, plus `npm run lint`, `npm run test`, and `npm run build` in `web/`. All must pass. DB-gated pipeline tests skip without `DATABASE_URL` (~500 skips is the healthy no-DB baseline) — they run in CI's Postgres service, so a green local run does NOT prove them; check the PR's full check rollup before merging.
 
 ## Conventions
 
@@ -73,6 +73,14 @@ Before considering any task complete: run `ruff check`, `mypy src`, and `pytest`
 - All LLM calls go through `pipeline/src/nous/llm/client.py`. Never import a provider SDK elsewhere.
 - Every LLM response is validated against a Pydantic model. Retry once on parse failure, then surface the error.
 - Prompts must instruct the model to return null or empty rather than fabricate. Unknown values stay unknown.
+- Every prompt that persists data carries a `PROMPT_VERSION` constant (scheme `YYYY-MM-DD.N`). Bump it on ANY semantic change, and check what the bump re-selects (`--redescribe-outdated` keys on the long-description prompt's version).
+- Prompt edits are gated by the golden set (`pipeline/tests/golden/`, `uv run nous eval-prompts`): CI replays committed recordings against metric floors; re-record live via the `eval-record` workflow (the DeepSeek key exists only in Actions) and review the delta table before committing recordings.
+
+### Embeddings
+
+- fastembed lives in the optional `embeddings` dependency group — `uv sync --group embeddings` where needed (pipeline.yml/discovery.yml do this); plain `uv sync` stays light.
+- CI's Postgres service image is `pgvector/pgvector:pg15` (migration 0033 CREATEs the `vector` extension). Local DB-gated runs need the same image.
+- Query-side embedding on the web (`web/lib/embed-query.ts`) runs the SAME model with CLS pooling — pooling and model parity with stored vectors are load-bearing; never change one side alone.
 
 ## Non-negotiable rules
 

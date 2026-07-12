@@ -13,20 +13,30 @@ technical design, and [CLAUDE.md](CLAUDE.md) for working conventions in this rep
 
 ## What the site offers
 
-- **Readable company pages** — an LLM-written short and long description, key
-  facts (total raised, latest valuation), leadership, full funding history with
-  sourced rounds and investors, competitors, related and co-invested companies,
-  recent news, and a consolidated list of every source cited on the page.
-- **Browse, search & filter** — full-text search plus filters for industry,
-  funding stage, total raised, founding year, headcount, recency, and discovery
-  source; sort by name, recency, raise size, most-recently-funded, or headcount.
+- **Readable company pages** — an LLM-written short description plus a
+  long-form analyst profile (problem, product, users, business model, market
+  context — grounded in the company's own site, never padded), key facts
+  (total raised, latest valuation), leadership, full funding history with
+  sourced rounds and investors, competitors, embedding-based similar
+  companies, related and co-invested companies, recent news, and a
+  consolidated list of every source cited on the page.
+- **Browse, search & filter** — full-text search blended with **semantic
+  search** (an on-server sentence-embedding model, so "AI for logistics"
+  finds companies that never use those words) plus filters for industry,
+  funding stage, total raised, founding year, headcount, recency, and
+  discovery source; sort by name, recency, raise size, most-recently-funded,
+  or headcount.
 - **Investor directory** — every VC and investor ranked by portfolio size, with
   round history and "frequently co-invests with" signals.
 - **Power-user tools** — side-by-side compare of 2–4 companies, a browser-local
   watchlist and saved searches (no account needed), and CSV export of any
   filtered view.
 - **Discovery surfaces** — a daily-rotating spotlight, a "new this week" feed,
-  and faceted tag/location pages.
+  faceted tag/location pages, and **market themes**: embedding clusters of
+  each industry, LLM-named and ranked by trailing funding growth
+  (`/themes`).
+- **Durable URLs** — companies merged by dedup leave a permanent redirect
+  behind, so inbound links never rot.
 
 Every fact rendered on a company page has a recorded source, and the model is
 instructed to leave a field blank rather than guess — unknown values stay unknown.
@@ -68,13 +78,15 @@ uv run nous dedup-companies
 
 Enrichment uses **DeepSeek** (`deepseek-chat`, OpenAI-compatible API), a paid
 service — set `DEEPSEEK_API_KEY`. It replaced Gemini, whose free tier was too low
-for bulk enrichment (see `nous-technical-spec.md` §3). Each company costs roughly
-one LLM call; the pipeline bounds spend with small per-run `--limit`s.
+for bulk enrichment (see `nous-technical-spec.md` §3). Each company costs up to
+two LLM calls (a judge/classify pass, then a dedicated long-description pass
+for catalog-worthy companies); the pipeline bounds spend with small per-run
+`--limit`s.
 
 A local Postgres 15 in Docker is the easiest way to develop without touching Supabase:
 
 ```sh
-docker run --rm -d --name nous-pg -e POSTGRES_PASSWORD=postgres -p 5432:5432 postgres:15
+docker run --rm -d --name nous-pg -e POSTGRES_PASSWORD=postgres -p 5432:5432 pgvector/pgvector:pg15
 ```
 
 ### Web (Next.js 16)
@@ -102,7 +114,8 @@ re-running one never duplicates or corrupts data. Invoke any of them with
 | Stage | What it does |
 |---|---|
 | `refresh-vc-portfolios` | Scrape the public portfolio pages of 13 VC firms (Y Combinator, a16z, Sequoia, Lightspeed, Founders Fund, Greylock, Khosla, Bessemer, Accel, Index Ventures, Kleiner Perkins, General Catalyst, Felicis); create companies and record the discovering firm as a company-level investor. |
-| `ingest-news` | Per-company Google News RSS plus a broad sweep of TechCrunch, SiliconANGLE, PR Newswire, and Crunchbase News; auto-create newly funded companies found in the sweep. |
+| `ingest-news` | Per-company Google News RSS plus a broad sweep of TechCrunch, SiliconANGLE, PR Newswire, Crunchbase News, GeekWire, and VentureBeat; auto-create newly funded companies found in the sweep. |
+| `discover-github-trending` | Map GitHub's trending page to company candidates, LLM-gated (personal projects, foundations, and big-tech sponsors rejected; null on uncertainty). Weekly. |
 | `resolve-homepages` | Find each company's website (TLD probing, then DuckDuckGo fallback), validated against parked/aggregator pages. |
 | `scrape-homepages` | Fetch the homepage plus a few about/product/team pages and cache their extracted visible text (headless Chromium fallback for JS-heavy sites). |
 
@@ -110,7 +123,7 @@ re-running one never duplicates or corrupts data. Invoke any of them with
 
 | Stage | What it does |
 |---|---|
-| `enrich-companies` | Short/long description, category, tags, people/leadership, HQ city/state, founding year (null when unknown). |
+| `enrich-companies` | Two LLM calls per company: a judge pass (short description, category, tags, people, HQ, founding year — null when unknown) and a dedicated long-form profile pass with a depth floor and a never-invent guard; `--redescribe-outdated` regenerates profiles written by older prompt revisions. |
 | `judge-eligibility` | Decide whether a company is a US software startup; soft-exclude non-US / not-a-startup rows. |
 | `extract-funding` | Parse funding rounds, amounts, valuations, and investors from news articles. |
 | `extract-funding-website` | Gap-fill funding from a company's own site when news coverage found none. |
@@ -125,7 +138,9 @@ re-running one never duplicates or corrupts data. Invoke any of them with
 | `derive-relationships` | Rebuild the company relationship graph (competitor edges + same-industry "similar" edges). No LLM. |
 | `dedup-companies` | Merge duplicate companies: auto-merge on a shared website domain, LLM `company-match` adjudicator for fuzzy matches (high-confidence only). |
 | `dedup-investors` | Merge duplicate investors by canonical name; classify known firms as institutional. |
-| `normalize-taxonomy` | Canonicalize free-text `industry_group` / `primary_category` values. No LLM. |
+| `normalize-taxonomy` | Canonicalize free-text `industry_group` / `primary_category` / `tags` values. No LLM. |
+| `embed-companies` | 384-dim sentence embeddings over name + descriptions (fastembed, CPU, $0); powers similar-companies, semantic search, and themes. |
+| `compute-themes` | Cluster each industry's embeddings, name clusters with the LLM (incoherent clusters dropped, never invented), rank by trailing funding growth. Monthly via a TTL gate. |
 
 **Maintenance & observability**
 
@@ -134,12 +149,13 @@ re-running one never duplicates or corrupts data. Invoke any of them with
 | `repair-catalog`, `repair-wrong-websites`, `repair-duplicate-rounds` | Idempotent self-healing passes for known data-quality issues (bad scraped websites, parked-domain enrichments, duplicate rounds). |
 | `refresh-latest-round`, `refresh-investor-counts` | Recompute the denormalized latest-round and investor portfolio-count columns. |
 | `snapshot-companies` | Weekly per-company snapshot (headcount + trailing-30-day news count) for momentum signals. |
-| `db-stats`, `pipeline-health` | Report DB size against the free-tier cap; flag stages whose latest run was empty or errored. |
+| `db-stats`, `pipeline-health`, `adapter-health` | Report DB size against the free-tier cap; flag stages whose latest run was empty or errored; canary every discovery adapter/feed against per-source floors. |
+| `eval-prompts` | Golden-set gate for every persisting LLM prompt: offline metric floors in CI, live re-record mode via the eval-record workflow. |
 | `exclude-company` / `unexclude-company` | Manually exclude (or re-include) a company from the catalog by slug. |
 
 ## How it runs
 
-Three GitHub Actions workflows, all serialized through a shared `concurrency`
+Five GitHub Actions workflows; the DB-writing ones are serialized through a shared `concurrency`
 group so they never write the `companies` table at the same time:
 
 - **`pipeline.yml`** (every 3 hours, 8×/day) — the funding-news + enrichment loop:
@@ -155,6 +171,11 @@ group so they never write the `companies` table at the same time:
   `derive-relationships` → `estimate-employees` → `snapshot-companies`.
 - **`backfill-discovery.yml`** (manual, `workflow_dispatch`) — a one-shot seed:
   `refresh-vc-portfolios` + `ingest-news` over a wider lookback.
+- **`ops.yml`** (manual) — bounded prod operations: `exclude-company` /
+  `unexclude-company` by slug (Actions is the only environment holding
+  `DATABASE_URL`).
+- **`eval-record.yml`** (manual) — re-record the LLM golden set against live
+  DeepSeek and push a reviewable recordings branch.
 
 `lint.yml` runs on every push and PR: `ruff`, `mypy`, `alembic upgrade head`, and
 `pytest` for the pipeline; `lint`, `build`, a client-bundle secret scan
