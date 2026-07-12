@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "prebuild": "node scripts/download-model.mjs && node scripts/prune-onnx-platforms.mjs",
+    "prebuild": "node scripts/download-model.mjs",
     "build": "next build --webpack",
     "start": "next start",
     "lint": "eslint",
