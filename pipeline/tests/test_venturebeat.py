@@ -182,6 +182,34 @@ async def test_venturebeat_lede_filter_and_truncation() -> None:
     )
 
 
+async def test_venturebeat_rejects_embedded_keyword_substrings() -> None:
+    """Regression for the W-D live false positive: an LLM-evals piece survived
+    a funding-free window because "e**valuation**s" substring-matched
+    "valuation". The lede gate must require whole-word keyword hits."""
+    rss = """<?xml version="1.0" encoding="UTF-8"?>
+    <rss version="2.0"><channel>
+      <title>VentureBeat</title>
+      <item>
+        <title>Why LLM evaluations fail in production</title>
+        <link>https://venturebeat.com/llm-evaluations-fail</link>
+        <pubDate>Sat, 13 Jun 2026 12:00:00 +0000</pubDate>
+        <description>Enterprises struggle with model evaluations. Teams
+        praised new benchmark suites, but the sandbox encloses only part of
+        the problem.</description>
+      </item>
+    </channel></rss>
+    """
+    client = NewsClient(user_agent=USER_AGENT)
+    async with client:
+        _inject(client, _MockTransport(_routes(feed_body=rss)))
+        results = await fetch_venturebeat_funding_articles(client, lookback_days=-1)
+
+    assert results == [], (
+        "embedded keyword substrings (evaluations/praised/encloses) must not "
+        "pass the funding gate"
+    )
+
+
 # ---------------------------------------------------------------------------
 # Error handling: robots block / HTTP error / network failure => []
 # ---------------------------------------------------------------------------

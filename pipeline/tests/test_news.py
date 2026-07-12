@@ -148,6 +148,47 @@ def test_matches_funding_keyword_negative() -> None:
     assert not _matches_funding_keyword("CEO interview about market trends")
 
 
+def test_matches_funding_keyword_rejects_embedded_substrings() -> None:
+    """Keywords must match whole words only — the W-D live false-positive class.
+
+    VentureBeat's only surviving item in a funding-free window was an LLM-evals
+    piece kept because "e**valuation**s" substring-matched "valuation". Pin
+    every keyword whose substring form appears inside a common English word.
+    """
+    # The observed live false positive: "evaluations" ⊃ "valuation".
+    assert not _matches_funding_keyword("Why LLM evaluations fail in production")
+    assert not _matches_funding_keyword("New model evaluation benchmarks released")
+    # "praised" / "appraises" ⊃ "raised" / "raises".
+    assert not _matches_funding_keyword("Critics praised the new agent framework")
+    assert not _matches_funding_keyword("This tool appraises enterprise codebases")
+    # "encloses" / "discloses" ⊃ "closes".
+    assert not _matches_funding_keyword("The sandbox encloses untrusted code")
+    assert not _matches_funding_keyword("Vendor discloses breach details")
+    # "misled by" ⊃ "led by".
+    assert not _matches_funding_keyword("Users misled by dark patterns")
+    # "seedling" ⊃ "seed"; "reseeding" ⊃ "seed".
+    assert not _matches_funding_keyword("A seedling program for open source")
+    assert not _matches_funding_keyword("Reseeding the cache after deploys")
+    # "series a" must not fire inside "series analysis" ("a" is a prefix of
+    # "analysis", not a whole word).
+    assert not _matches_funding_keyword("A time series analysis toolkit")
+
+
+def test_matches_funding_keyword_whole_words_and_phrases() -> None:
+    """True positives survive the word-boundary tightening."""
+    assert _matches_funding_keyword("Acme raises $10M seed round")
+    assert _matches_funding_keyword("Acme raised $10M")
+    assert _matches_funding_keyword("Acme lands Series A extension")
+    assert _matches_funding_keyword("Round led by Sequoia")
+    assert _matches_funding_keyword("Acme closes $50M at a $2B valuation")
+    # Punctuation adjacent to a keyword is still a word boundary.
+    assert _matches_funding_keyword("Funding: the year in enterprise AI")
+    assert _matches_funding_keyword("Acme's seed, explained")
+    # Multi-word keywords tolerate hyphenation and line wraps.
+    assert _matches_funding_keyword("Acme's Series-A round")
+    assert _matches_funding_keyword("a round led\nby Sequoia")
+
+
 def test_funding_keywords_includes_basics() -> None:
     # Sanity guard against accidental list edits dropping core signals.
     for required in ("raised", "funding", "valuation", "series a"):
