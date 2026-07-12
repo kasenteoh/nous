@@ -46,3 +46,7 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# build-time query-embedding model bundle (scripts/download-model.mjs) — ~34MB
+# of pinned model weights, re-downloadable deterministically; never committed
+/models/

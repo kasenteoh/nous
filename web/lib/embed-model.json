@@ -1,0 +1,7 @@
+{
+  "comment": "Single source of truth for the query-embedding model pin, shared by lib/embed-query.ts (runtime) and scripts/download-model.mjs (build-time bundling). modelId/dims MUST stay in lockstep with the pipeline's fastembed model (BAAI/bge-small-en-v1.5, 384-dim, migration 0033) — Xenova/* is the same weights converted to ONNX for transformers.js. revision is the HF repo commit sha so builds are reproducible and the runtime can never silently pick up re-uploaded weights that drift from the stored document vectors. dtype q8 selects the ~34MB int8-quantized variant (spike-verified: cosine 0.9974 parity with the fastembed fp32 vectors).",
+  "modelId": "Xenova/bge-small-en-v1.5",
+  "revision": "ea104dacec62c0de699686887e3f920caeb4f3e3",
+  "dtype": "q8",
+  "dims": 384
+}
