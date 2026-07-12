@@ -44,6 +44,19 @@ async def test_every_model_table_appears_with_bytes_gt_zero(
         assert table.bytes > 0, f"Expected bytes > 0 for table '{table.name}'"
 
 
+async def test_husk_cohort_counts_are_coherent(db: object) -> None:
+    """The website-less-husk cohort counts run and nest correctly (funded and
+    drain-unblockable are both subsets of the shown-null total)."""
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    assert isinstance(db, AsyncSession)
+    summary = await run_db_stats(db, cap_mb=500, warn_pct=80)
+
+    assert summary.website_null_shown >= 0
+    assert 0 <= summary.website_null_shown_funded <= summary.website_null_shown
+    assert 0 <= summary.drain_unblocks <= summary.website_null_shown
+
+
 async def test_warn_flips_with_tiny_cap(db: object) -> None:
     """Setting cap_mb=1 forces warn=True; a normal 500 MB cap leaves warn=False."""
     from sqlalchemy.ext.asyncio import AsyncSession
