@@ -373,3 +373,55 @@ inherited from the prompt, not a claim about which model wrote the code.
 - `docs/superpowers/HANDOFF.md` written for the next agent: working
   agreement, environment gotchas, autonomous processes, open items,
   architecture pointers.
+
+# Opus 4.8 pickup — 2026-07-12
+
+## Wave 3 activation check + the frozen-prod incident (PR #157)
+
+- **Finding:** the Wave 3 activation check found semantic search was NOT
+  live — and the root cause was that **prod had been frozen at `56975a8`
+  (pre-E-2) since E-2 merged**: every Vercel deploy from #155 onward failed
+  because the `/companies` serverless function bundles the embedder's onnx
+  runtime and hit **415MB > Vercel's 250MB** function limit. E-1
+  (similar-companies) and E-3 (`/themes` route) were live because they
+  deployed before the break. The E-2 spike's "58–92MB" was a LOCAL tracing
+  estimate never validated against a real Vercel deploy — that gap was the
+  whole incident. (Detected via `gh api …/commits/<sha>/status` context
+  "Vercel"; build logs read through the user's Vercel dashboard.)
+- **Why unfixable from the repo (proven across 8 preview builds):** Vercel's
+  builder copies the whole `serverExternalPackages` dirs and **ignores
+  `outputFileTracingExcludes`**. Locally a webpack build honors the excludes
+  (92MB); on Vercel it's ~406–415MB regardless of glob form, bundler, build
+  cache, or physically deleting the unused binaries from node_modules.
+- **Fix, two parts:**
+  1. **PR #157** — `next build --webpack` (Turbopack, Vercel's default,
+     bundles the onnx assets into the function AND ignores
+     `outputFileTracing*`; webpack honors it and, load-bearingly, keeps the
+     query-embedding model in the function so semantic works at runtime) +
+     depth-independent `**/…` tracing globs (Next's tracing root is the
+     project dir locally, the repo root on Vercel).
+  2. **`VERCEL_SUPPORT_LARGE_FUNCTIONS=1`** set in the Vercel project env
+     (Production + Preview) — Vercel still ships ~406MB (excludes ignored),
+     and this raises the limit. Unused platform binaries are never dlopen'd
+     at runtime, so cold-start impact is modest. **This is now a required
+     project setting; a fresh Vercel project must set it or deploys fail.**
+- **Verified:** preview + production deploys green; semantic search live on
+  `nous-umber.vercel.app` — `/companies?q=ai+for+logistics` returns 30
+  results with the "includes semantic matches" disclosure (was 0 while
+  frozen). similar-companies still live; main CI green (secrets/pipeline/web).
+- Dead ends removed from the PR before merge: an `/api/health/embed`
+  observability endpoint (route handlers aren't trimmed by
+  `outputFileTracing*`, so it added its own 425MB function) and a
+  build-time node_modules prune (ran on Vercel, reclaimed 283MB, but the
+  function size never moved — Vercel doesn't build the function from the
+  pruned tree).
+
+## Remaining Wave 3 items
+
+- **`/themes`** — route live but empty; first-ever compute is TTL-gated to
+  the weekly discovery cron (Mondays 02:00 UTC; next: 2026-07-13). Not
+  broken, just not due yet.
+- **Perplexity husk** — still description-less on prod (generic fallback
+  meta, zero prose paragraphs vs Anthropic's 27). The H-1 rescue target has
+  no profile yet; open follow-up (honest-null thin-SPA vs rescue-not-cycled
+  — needs a look, lower priority than the deploy freeze was).
