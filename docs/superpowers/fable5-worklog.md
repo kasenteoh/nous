@@ -337,3 +337,18 @@ inherited from the prompt, not a claim about which model wrote the code.
   keeps one pending run per concurrency group), starving the scheduled
   scrape/enrich for hours — which is why the H-1 husk rescue hadn't landed on
   the live site. v4 waits for an empty queue before every dispatch.
+
+## PR #155 — E-2: semantic search (merged 2026-07-12)
+
+- Migration 0035 `semantic_companies` RPC; server-only transformers.js query
+  embedder (exact stored model, CLS pooling, revision-pinned, 4s timeout,
+  null → graceful lexical fallback); model bundled at build via a fail-soft
+  prebuild script with the linux-x64 onnx binary traced explicitly.
+- /companies hybrid blend: lexical first, semantic extras appended with
+  honest totals + disclosure; gated to page 1, default sort, and no active
+  column filters (extras under a filter would violate it). Independent
+  code-review pass on the branch: zero findings.
+- **Wave 3 complete** (E-1 #153, E-3 #154, E-2 #155). Semantic behavior
+  activates in prod as the next pipeline crons apply migrations 0033–0035
+  and drain the embed backlog (~1–2 days at 200/run × 8/day); until then
+  every new surface degrades to its pre-Wave-3 behavior by construction.
