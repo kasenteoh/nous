@@ -293,3 +293,47 @@ inherited from the prompt, not a claim about which model wrote the code.
 - Re-description: ~670 profiles rewritten by the drain loop so far (batches
   of ~80–90 writes each) on top of cron contributions; v3 continues to the
   two-consecutive-zero stop.
+
+## PR #153 — E-1: pgvector embeddings + similar companies (merged 2026-07-12)
+
+- Migration 0033: `vector` extension (CI service image → pgvector/pgvector:pg15),
+  `embedding vector(384)` + `embedded_at` + `embedding_text_hash`, and the
+  `similar_companies` RPC (cosine, SQL-side exclusion filtering). No vector
+  index at ~3k rows — revisit threshold documented and schema-pinned.
+- `embed-companies` stage: fastembed bge-small-en-v1.5 (optional `embeddings`
+  dependency group), SQL hash-diff selection, wired after enrich (200/run,
+  $0 LLM). Model dir Actions-cached.
+- Web: similar-companies replaces the heuristic `similar` edges when
+  embeddings exist (heuristic fallback kept), with per-card similarity
+  provenance. Verified by the subagent against a real pgvector container
+  (1378 DB-gated tests + a live-model ranking smoke).
+
+## PR #154 — E-3: themes (merged 2026-07-12)
+
+- Migration 0034: `themes` (centroid vector, funding recent/prior/growth,
+  prompt_version) + `company_themes`. `compute-themes`: per-industry KMeans
+  (deterministic; HDBSCAN rejected — noise-labels small industries), DeepSeek
+  cluster naming (null-over-fabricate: incoherent clusters dropped),
+  replace-per-industry with ≥0.9-cosine centroid matching for slug stability
+  (re-run with unchanged embeddings = zero LLM calls), 25-day TTL gate inside
+  the stage riding weekly discovery.yml ⇒ monthly cadence. ≤$0.05/run.
+- Web: /themes ranked by funding growth + /themes/[slug] (similarity-ordered
+  members, server-rendered SVG funding-by-quarter, new entrants), sitemap
+  ≥3-member threshold, Themes in nav. First real compute lands once the
+  embed backlog drains.
+
+## E-2 spike (no PR — evidence branch fable5/semantic-search-spike)
+
+- Verdict GO: transformers.js runs the exact stored model in a Next 16 route
+  handler on Vercel Hobby — cosine parity 0.9974 with fastembed vectors
+  (CLS pooling is load-bearing), 2–3ms warm, ~58–92MB of the 250MB function
+  budget (onnxruntime's native binary needs outputFileTracingIncludes).
+  Supabase Edge rejected (gte-small ≠ bge space); Cloudflare Workers AI
+  documented as plan-B (requires pooling:"cls"). Build in flight as 0035.
+
+## Prod operations log (2026-07-12)
+
+- Drain v3 → v4: v3's dispatch cadence was displacing pending crons (GitHub
+  keeps one pending run per concurrency group), starving the scheduled
+  scrape/enrich for hours — which is why the H-1 husk rescue hadn't landed on
+  the live site. v4 waits for an empty queue before every dispatch.
