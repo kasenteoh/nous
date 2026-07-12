@@ -1,15 +1,16 @@
 import type { NextConfig } from "next";
 
-// Any route that imports lib/embed-query.ts (transformers.js → onnxruntime-node)
-// pulls a native .node addon that cannot be webpack-bundled, plus onnxruntime's
-// ~211MB of per-platform binaries and onnxruntime-web's ~130MB of browser wasm.
-// Left untrimmed, each such function blows Vercel's 250MB uncompressed limit
-// (this froze prod after E-2 — see the fable5 worklog). Every embedder route
-// needs the SAME trace shaping, so the rules live here once and apply per route.
-// NB: the build MUST run under webpack (`next build --webpack`) — Turbopack
-// bundles the onnx assets into the function and ignores these
-// outputFileTracing* rules entirely, which reintroduces the 415MB blowup.
-const EMBEDDER_ROUTES = ["/companies", "/api/health/embed"] as const;
+// /companies imports lib/embed-query.ts (transformers.js → onnxruntime-node),
+// which pulls a native .node addon that cannot be webpack-bundled, plus
+// onnxruntime's ~211MB of per-platform binaries and onnxruntime-web's ~130MB of
+// browser wasm. Left untrimmed the function blows Vercel's 250MB uncompressed
+// limit (this froze prod after E-2 — see the fable5 worklog). The rules live
+// here once so a second embedder route (should one be added) can reuse them.
+// NB: outputFileTracing* only shapes PAGE routes reliably (a route handler that
+// imports the embedder is NOT trimmed by these keys), and the build MUST run
+// under webpack (`next build --webpack`) — Turbopack bundles the onnx assets
+// into the function and ignores these rules entirely, reintroducing the blowup.
+const EMBEDDER_ROUTES = ["/companies"] as const;
 
 // Trace only the linux-x64 onnxruntime binary Vercel actually runs (34MB);
 // darwin/win32/linux-arm64 (~177MB) and onnxruntime-web (~130MB, browser-only)
