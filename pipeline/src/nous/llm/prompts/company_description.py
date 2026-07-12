@@ -24,9 +24,16 @@ from nous.util.industry import CANONICAL_INDUSTRIES
 # eligibility_prompt_version). Scheme: "<date>.<same-day-counter>".
 # Bump on ANY semantic change to the template, schema, or validators — even a
 # wording tweak — so data from a bad revision can be found and re-run.
-# .2: description_long moved out to the dedicated company_description_long
-# prompt (W-F); this prompt now judges + writes description_short only.
-PROMPT_VERSION: str = "2026-07-10.2"
+# 2026-07-10.2: description_long moved out to the dedicated
+# company_description_long prompt (W-F); this prompt now judges + writes
+# description_short only.
+# 2026-07-11.1: tags instruction tightened (H-2): 3–6 tags, prefer established
+# generic tags (examples listed), steering the open vocabulary toward the
+# canonical map in util/tags.py. Note: eligibility_prompt_version is a pure
+# provenance stamp — no selection query compares it to this constant, so the
+# bump re-selects no cohort for a judge re-run (the redescribe cohort keys on
+# enrichment_prompt_version from company_description_long, not this).
+PROMPT_VERSION: str = "2026-07-11.1"
 
 # Singular C-suite titles — at most one person can credibly hold each. When a
 # page's testimonials / customer logos get mis-read as leadership, the model
@@ -61,7 +68,10 @@ class CompanyDescription(BaseModel):
     )
     tags: list[str] = Field(
         default_factory=list,
-        description="Lowercase, hyphenated tags (max ~8).",
+        description=(
+            "3–6 lowercase, hyphenated tags. Prefer established generic tags "
+            "over invented compounds."
+        ),
     )
     people: list[PersonExtraction] = Field(
         default_factory=list,
@@ -186,7 +196,14 @@ Rules:
 - `primary_category` should be a common bucket like "developer tools",
   "fintech", "AI infrastructure", "vertical SaaS", "consumer", "biotech tooling".
   Don't invent obscure categories.
-- `tags`: up to 8 lowercase, hyphenated technical/category tags.
+- `tags`: 3–6 lowercase, hyphenated technical/category tags (fewer — or none —
+  when the page is too thin to support them). STRONGLY prefer established,
+  generic tags over invented compound ones — pick the broad tag a reader would
+  browse by, not a bespoke phrase. Established examples: ai, ml, devtools,
+  api, saas, open-source, ci-cd, devops, observability, security, fintech,
+  payments, healthcare, logistics, marketplace, analytics. Write "ci-cd", not
+  "ci-observability"; "payments", not "payment-routing"; "marketplace", not
+  "wholesale-marketplace". Only coin a new tag when no established one fits.
 - `people`: list ONLY the company's own founders and senior leadership (CEO,
   CTO, and other C-level or founder roles) that the site actually names —
   typically from an about/team/leadership page. Use the role exactly as stated.
