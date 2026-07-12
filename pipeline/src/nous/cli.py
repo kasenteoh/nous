@@ -1863,6 +1863,45 @@ def unexclude_company(slug: str) -> None:
     asyncio.run(_run())
 
 
+@cli.command("reresolve-company")
+@click.argument("slug")
+@click.option(
+    "--set-url",
+    type=str,
+    default=None,
+    help="Bypass resolution and hard-set this homepage URL (Cloudflare fallback).",
+)
+def reresolve_company(slug: str, set_url: str | None) -> None:
+    """Re-resolve (or --set-url) one company's homepage and persist it.
+
+    Unsticks companies left website-less by pre-curl_cffi resolution (e.g.
+    Perplexity). Example: reresolve-company perplexity
+    """
+    import asyncio
+
+    from nous.config import Settings
+    from nous.db.session import AsyncSessionLocal
+    from nous.pipeline.reresolve_company import run_reresolve_company
+    from nous.sources.homepage import HomepageClient
+
+    settings = Settings()
+
+    async def _run() -> None:
+        async with (
+            HomepageClient(
+                settings.SEC_USER_AGENT,
+                requests_per_second_per_domain=1.0,
+            ) as client,
+            AsyncSessionLocal() as session,
+        ):
+            result = await run_reresolve_company(
+                session, client, slug=slug, set_url=set_url
+            )
+            click.echo(result.model_dump_json(indent=2))
+
+    asyncio.run(_run())
+
+
 @cli.command("inspect-company")
 @click.argument("slug")
 def inspect_company(slug: str) -> None:

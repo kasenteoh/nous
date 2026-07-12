@@ -24,9 +24,14 @@ on:
           - exclude-company
           - unexclude-company
           - inspect-company
+          - reresolve-company
       slug:
         description: "Company slug to operate on."
         required: true
+        type: string
+      set_url:
+        description: "reresolve-company only: hard-set this homepage URL (Cloudflare fallback) instead of resolving."
+        required: false
         type: string
       reason:
         description: "exclude-company only: recorded exclusion reason."
@@ -79,6 +84,7 @@ jobs:
           OP_SLUG: ${{ inputs.slug }}
           OP_REASON: ${{ inputs.reason }}
           OP_DETAIL: ${{ inputs.detail }}
+          OP_SET_URL: ${{ inputs.set_url }}
         # Inputs pass through env vars (never string-interpolated into the
         # script) and the command itself is a choice allowlist.
         run: |
@@ -90,6 +96,12 @@ jobs:
             fi
           elif [ "$OP_COMMAND" = "inspect-company" ]; then
             { echo '```json'; uv run nous inspect-company "$OP_SLUG"; echo '```'; } | tee "$GITHUB_STEP_SUMMARY"
+          elif [ "$OP_COMMAND" = "reresolve-company" ]; then
+            if [ -n "$OP_SET_URL" ]; then
+              { echo '```json'; uv run nous reresolve-company "$OP_SLUG" --set-url "$OP_SET_URL"; echo '```'; } | tee "$GITHUB_STEP_SUMMARY"
+            else
+              { echo '```json'; uv run nous reresolve-company "$OP_SLUG"; echo '```'; } | tee "$GITHUB_STEP_SUMMARY"
+            fi
           else
             uv run nous unexclude-company "$OP_SLUG" | tee "$GITHUB_STEP_SUMMARY"
           fi
