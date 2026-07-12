@@ -65,6 +65,9 @@ jobs:
         working-directory: pipeline
     env:
       DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      # reresolve-company builds a HomepageClient, which requires a contact-email
+      # User-Agent (empty → ValueError). Harmless for the DB-only commands.
+      SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}
     steps:
       - uses: actions/checkout@v4
 
@@ -86,8 +89,11 @@ jobs:
           OP_DETAIL: ${{ inputs.detail }}
           OP_SET_URL: ${{ inputs.set_url }}
         # Inputs pass through env vars (never string-interpolated into the
-        # script) and the command itself is a choice allowlist.
+        # script) and the command itself is a choice allowlist. pipefail so a
+        # failing `uv run` surfaces as a failed step instead of being masked by
+        # the trailing `tee`/`echo`.
         run: |
+          set -o pipefail
           if [ "$OP_COMMAND" = "exclude-company" ]; then
             if [ -n "$OP_DETAIL" ]; then
               uv run nous exclude-company "$OP_SLUG" --reason "$OP_REASON" --detail "$OP_DETAIL" | tee "$GITHUB_STEP_SUMMARY"
@@ -95,12 +101,17 @@ jobs:
               uv run nous exclude-company "$OP_SLUG" --reason "$OP_REASON" | tee "$GITHUB_STEP_SUMMARY"
             fi
           elif [ "$OP_COMMAND" = "inspect-company" ]; then
-            { echo '```json'; uv run nous inspect-company "$OP_SLUG"; echo '```'; } | tee "$GITHUB_STEP_SUMMARY"
+            # `uv run` heads the pipe so pipefail catches its failure; the block
+            # only wraps stdout in a ```json fence for the step summary.
+            uv run nous inspect-company "$OP_SLUG" \
+              | { echo '```json'; cat; echo '```'; } | tee "$GITHUB_STEP_SUMMARY"
           elif [ "$OP_COMMAND" = "reresolve-company" ]; then
             if [ -n "$OP_SET_URL" ]; then
-              { echo '```json'; uv run nous reresolve-company "$OP_SLUG" --set-url "$OP_SET_URL"; echo '```'; } | tee "$GITHUB_STEP_SUMMARY"
+              uv run nous reresolve-company "$OP_SLUG" --set-url "$OP_SET_URL" \
+                | { echo '```json'; cat; echo '```'; } | tee "$GITHUB_STEP_SUMMARY"
             else
-              { echo '```json'; uv run nous reresolve-company "$OP_SLUG"; echo '```'; } | tee "$GITHUB_STEP_SUMMARY"
+              uv run nous reresolve-company "$OP_SLUG" \
+                | { echo '```json'; cat; echo '```'; } | tee "$GITHUB_STEP_SUMMARY"
             fi
           else
             uv run nous unexclude-company "$OP_SLUG" | tee "$GITHUB_STEP_SUMMARY"
