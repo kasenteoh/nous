@@ -34,6 +34,7 @@ import type {
   NewsArticleRow,
   PersonRow,
   RelatedCompany,
+  SimilarCompany,
 } from "@/lib/types";
 
 /**
@@ -1362,6 +1363,68 @@ export async function getRelatedCompanies(
         industryGroup: c.industry_group ?? null,
         score: row.score != null ? Number(row.score) : 0,
         evidence: row.evidence ?? null,
+      },
+    ];
+  });
+}
+
+// Cap on embedding-based similar companies. Matches the 2-column card grid
+// (3 rows) and the similar_companies() default; passed explicitly so the SQL
+// default and the UI cap can't drift apart silently.
+const SIMILAR_COMPANIES_LIMIT = 6;
+
+// Shape returned by the similar_companies() Postgres function (migration
+// 0033). Narrowed rather than `any`, same as the nested-select joins.
+interface SimilarCompanyRpcRow {
+  id: string | null;
+  slug: string | null;
+  name: string | null;
+  logo_url: string | null;
+  description_short: string | null;
+  industry_group: string | null;
+  similarity: number | null;
+}
+
+/**
+ * Embedding-based similar companies for /c/[slug]: nearest neighbors by
+ * cosine similarity over the pipeline-computed description embeddings
+ * (companies.embedding, migration 0033).
+ *
+ * PostgREST cannot ORDER BY a vector distance through filter params, so the
+ * ranking lives in the `similar_companies` SQL function and this helper calls
+ * it via `.rpc()`. The function returns zero rows when the company has no
+ * embedding yet (the section then falls back to the heuristic graph edges —
+ * never fabricates) and already excludes the anchor company, excluded
+ * companies, and unembedded rows; the slug/name guard here is the same
+ * defense-in-depth used by getRelatedCompanies. Returns [] on missing env or
+ * error, like every other helper in this file.
+ */
+export async function getSimilarCompanies(
+  companyId: string,
+): Promise<SimilarCompany[]> {
+  const supabase = supabaseOrNull("getSimilarCompanies");
+  if (!supabase) return [];
+
+  const { data, error } = await supabase.rpc("similar_companies", {
+    company_id: companyId,
+    match_count: SIMILAR_COMPANIES_LIMIT,
+  });
+
+  if (error) {
+    console.error("[getSimilarCompanies] rpc failed:", error.message);
+    return [];
+  }
+
+  return ((data ?? []) as SimilarCompanyRpcRow[]).flatMap((row) => {
+    if (!row.slug || !row.name) return [];
+    return [
+      {
+        slug: row.slug,
+        name: row.name,
+        logoUrl: row.logo_url ?? null,
+        descriptionShort: row.description_short ?? null,
+        industryGroup: row.industry_group ?? null,
+        similarity: row.similarity != null ? Number(row.similarity) : 0,
       },
     ];
   });

@@ -6,6 +6,7 @@ import {
   getCompanyBySlug,
   getInvestorNameToSlugMap,
   getRelatedCompanies,
+  getSimilarCompanies,
 } from "@/lib/queries";
 import type { CompanyDetail, CompanyRow } from "@/lib/types";
 
@@ -17,6 +18,7 @@ vi.mock("@/lib/queries", () => ({
   getCompanyBySlug: vi.fn(),
   getInvestorNameToSlugMap: vi.fn(),
   getRelatedCompanies: vi.fn(),
+  getSimilarCompanies: vi.fn(),
 }));
 
 function huskCompany(overrides: Partial<CompanyRow> = {}): CompanyRow {
@@ -73,6 +75,7 @@ async function renderCompanyPage(): Promise<void> {
 beforeEach(() => {
   vi.mocked(getInvestorNameToSlugMap).mockResolvedValue({});
   vi.mocked(getRelatedCompanies).mockResolvedValue([]);
+  vi.mocked(getSimilarCompanies).mockResolvedValue([]);
   vi.mocked(getAlsoBackedBy).mockResolvedValue([]);
 });
 

@@ -32,7 +32,11 @@ jobs:
         working-directory: pipeline
     services:
       postgres:
-        image: postgres:15
+        # pgvector/pgvector:pg15 = official postgres:15 plus the pgvector
+        # extension, which migration 0033 CREATEs (plain postgres:15 does not
+        # ship it, so `alembic upgrade head` would fail). Same Postgres major
+        # as Supabase prod.
+        image: pgvector/pgvector:pg15
         env:
           POSTGRES_PASSWORD: postgres
           POSTGRES_DB: postgres

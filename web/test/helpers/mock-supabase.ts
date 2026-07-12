@@ -102,6 +102,10 @@ export class MockQueryBuilder implements PromiseLike<ResolvedResult> {
   single(...args: unknown[]): this {
     return this.chain("single", args);
   }
+  /** Records the client-level .rpc(fn, args) call that created this builder. */
+  rpc(...args: unknown[]): this {
+    return this.chain("rpc", args);
+  }
 
   /** True when a call to `method` was recorded whose leading args match. */
   has(method: string, ...args: unknown[]): boolean {
@@ -151,9 +155,20 @@ export function createMockSupabase(respond: Responder): MockSupabase {
     builders.push(b);
     return b;
   };
-  // Only `.from()` is exercised by lib/queries.ts; the cast confines the test
-  // double to the SupabaseClient surface the code under test actually uses.
-  const client = { from } as unknown as SupabaseClient;
+  // Postgres-function calls (supabase.rpc). The builder is keyed as
+  // "rpc:<function>" so buildersFor() can address it like a table, and the
+  // call itself (function name + args object) is recorded as an "rpc" call
+  // for `has("rpc", fn, args)` assertions. Like the real client, .rpc()
+  // returns a thenable filter builder.
+  const rpc = (fn: string, args?: unknown): MockQueryBuilder => {
+    const b = new MockQueryBuilder(`rpc:${fn}`, respond);
+    builders.push(b);
+    return b.rpc(fn, args);
+  };
+  // Only `.from()` and `.rpc()` are exercised by lib/queries.ts; the cast
+  // confines the test double to the SupabaseClient surface the code under
+  // test actually uses.
+  const client = { from, rpc } as unknown as SupabaseClient;
   return {
     client,
     builders,

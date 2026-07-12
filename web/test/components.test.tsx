@@ -3,12 +3,15 @@ import { describe, expect, it } from "vitest";
 import { Competitors } from "@/components/Competitors";
 import { FundingHistory } from "@/components/FundingHistory";
 import { Investors } from "@/components/Investors";
+import { RelatedCompanies } from "@/components/RelatedCompanies";
 import { Sources } from "@/components/Sources";
 import { StatusBadge } from "@/components/StatusBadge";
 import type {
   CompanyInvestorRow,
   CompetitorWithResolved,
   FundingRoundWithInvestors,
+  RelatedCompany,
+  SimilarCompany,
 } from "@/lib/types";
 
 // ─── Fixtures ─────────────────────────────────────────────────────────────────
@@ -417,5 +420,120 @@ describe("StatusBadge", () => {
     const link = screen.getByRole("link");
     expect(link).toHaveAttribute("href", "https://news.example/deal");
     expect(within(link).getByText("Acquired")).toBeInTheDocument();
+  });
+});
+
+// ─── RelatedCompanies ─────────────────────────────────────────────────────────
+
+function heuristicSimilar(
+  overrides: Partial<RelatedCompany> = {},
+): RelatedCompany {
+  fixtureSeq += 1;
+  return {
+    slug: `edge-co-${fixtureSeq}`,
+    name: `Edge Co ${fixtureSeq}`,
+    descriptionShort: "Heuristic-graph neighbor.",
+    status: "active",
+    industryGroup: "developer-tools",
+    score: 0.5,
+    evidence: "Both in developer-tools; 3 shared tags",
+    ...overrides,
+  };
+}
+
+function embeddingSimilar(
+  overrides: Partial<SimilarCompany> = {},
+): SimilarCompany {
+  fixtureSeq += 1;
+  return {
+    slug: `vec-co-${fixtureSeq}`,
+    name: `Vec Co ${fixtureSeq}`,
+    logoUrl: null,
+    descriptionShort: "Embedding neighbor.",
+    industryGroup: "data-infrastructure",
+    similarity: 0.87,
+    ...overrides,
+  };
+}
+
+describe("RelatedCompanies", () => {
+  it("renders nothing when every list is empty", () => {
+    const { container } = render(
+      <RelatedCompanies similar={[]} similarByDescription={[]} alsoBackedBy={[]} />,
+    );
+    expect(container).toBeEmptyDOMElement();
+  });
+
+  it("prefers embedding neighbors and captions each card with its similarity", () => {
+    const embedding = embeddingSimilar({
+      slug: "vector-co",
+      name: "Vector Co",
+      similarity: 0.87,
+    });
+    const heuristic = heuristicSimilar({ slug: "tag-co", name: "Tag Co" });
+    render(
+      <RelatedCompanies
+        similar={[heuristic]}
+        similarByDescription={[embedding]}
+        alsoBackedBy={[]}
+      />,
+    );
+
+    // The embedding card links to the company and discloses its derivation.
+    const link = screen.getByRole("link", { name: "Vector Co" });
+    expect(link).toHaveAttribute("href", "/c/vector-co");
+    expect(screen.getByText("87% description similarity")).toBeInTheDocument();
+
+    // The weaker heuristic edges are replaced, not blended — one list, one
+    // ranking principle at a time.
+    expect(screen.queryByText("Tag Co")).not.toBeInTheDocument();
+    expect(
+      screen.queryByText("Both in developer-tools; 3 shared tags"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("clamps the similarity caption to 99% (float rounding must not overclaim)", () => {
+    render(
+      <RelatedCompanies
+        similar={[]}
+        similarByDescription={[embeddingSimilar({ similarity: 0.9999 })]}
+        alsoBackedBy={[]}
+      />,
+    );
+    expect(screen.getByText("99% description similarity")).toBeInTheDocument();
+  });
+
+  it("falls back to heuristic edges (with their evidence caption) when no embedding neighbors exist", () => {
+    const heuristic = heuristicSimilar({ slug: "tag-co", name: "Tag Co" });
+    render(
+      <RelatedCompanies
+        similar={[heuristic]}
+        similarByDescription={[]}
+        alsoBackedBy={[]}
+      />,
+    );
+
+    const link = screen.getByRole("link", { name: "Tag Co" });
+    expect(link).toHaveAttribute("href", "/c/tag-co");
+    expect(
+      screen.getByText("Both in developer-tools; 3 shared tags"),
+    ).toBeInTheDocument();
+  });
+
+  it("renders the also-backed-by list alongside embedding neighbors", () => {
+    render(
+      <RelatedCompanies
+        similar={[]}
+        similarByDescription={[embeddingSimilar()]}
+        alsoBackedBy={[
+          { slug: "sibling-co", name: "Sibling Co", sharedInvestors: ["Seed Fund"] },
+        ]}
+      />,
+    );
+    expect(screen.getByRole("link", { name: "Sibling Co" })).toHaveAttribute(
+      "href",
+      "/c/sibling-co",
+    );
+    expect(screen.getByText("Also backed by Seed Fund")).toBeInTheDocument();
   });
 });

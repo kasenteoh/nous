@@ -19,6 +19,7 @@ import {
   getCompanyBySlug,
   getInvestorNameToSlugMap,
   getRelatedCompanies,
+  getSimilarCompanies,
 } from "@/lib/queries";
 import type { CompanyDetail, CompanyRow } from "@/lib/types";
 
@@ -29,6 +30,7 @@ vi.mock("@/lib/queries", () => ({
   getCompanyBySlug: vi.fn(),
   getInvestorNameToSlugMap: vi.fn(),
   getRelatedCompanies: vi.fn(),
+  getSimilarCompanies: vi.fn(),
 }));
 
 // Minimal live company for the zero-extra-queries case (husk-test fixture).
@@ -90,6 +92,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(getInvestorNameToSlugMap).mockResolvedValue({});
   vi.mocked(getRelatedCompanies).mockResolvedValue([]);
+  vi.mocked(getSimilarCompanies).mockResolvedValue([]);
   vi.mocked(getAlsoBackedBy).mockResolvedValue([]);
 });
 

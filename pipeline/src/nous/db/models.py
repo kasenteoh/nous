@@ -2,6 +2,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from uuid import UUID
 
+from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
     Boolean,
     CheckConstraint,
@@ -288,6 +289,24 @@ class Company(Base):
     funding_prompt_version: Mapped[str | None] = mapped_column(
         Text, nullable=True
     )
+
+    # Description embedding (migration 0033): 384-dim bge-small-en-v1.5 vector
+    # over name + description_short + description_long, written by the
+    # embed-companies stage ($0 LLM — fastembed on CPU). NULL = not embedded
+    # yet; the web renders no similar-companies section for such rows.
+    # embedding_text_hash is the idempotence key — sha256 of the exact text
+    # embedded — so re-runs skip rows whose descriptions haven't changed.
+    # Deliberately NO vector index at current scale (exact scan is ~ms at ~3k
+    # rows; see migration 0033 for the hnsw threshold), and the hash is
+    # unindexed (the selection compares it against a per-row computed value,
+    # not an indexable constant).
+    embedding: Mapped[list[float] | None] = mapped_column(
+        Vector(384), nullable=True
+    )
+    embedded_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    embedding_text_hash: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class RawPage(Base):

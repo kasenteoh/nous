@@ -189,7 +189,10 @@ jobs:
         uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39 # v3
 
       - name: Install pipeline dependencies
-        run: uv sync
+        # --group embeddings adds fastembed (onnxruntime CPU) for the
+        # embed-companies step below; it is an optional group so the default
+        # `uv sync` everywhere else (lint, discovery, local dev) stays light.
+        run: uv sync --group embeddings
 
       - name: Cache Playwright browsers
         uses: actions/cache@v4
@@ -207,6 +210,16 @@ jobs:
         # `--with-deps` would also install OS-level libs (libnss3 etc.) but
         # GitHub-hosted ubuntu-latest already ships them, so skip the apt step.
         run: uv run playwright install chromium
+
+      - name: Cache fastembed model
+        uses: actions/cache@v4
+        with:
+          # The embed-companies stage downloads bge-small-en-v1.5 (~130MB,
+          # ONNX) into EMBEDDING_CACHE_DIR on first use. The model files for a
+          # given name are immutable, so a fixed key never needs busting —
+          # only the first run after this lands pays the download.
+          path: ~/.cache/fastembed
+          key: fastembed-${{ runner.os }}-bge-small-en-v1.5
 
       - name: Apply migrations
         run: uv run alembic upgrade head
@@ -436,6 +449,21 @@ jobs:
           ENRICH_LIMIT="${{ inputs.enrich_limit }}"
           if [ -z "$ENRICH_LIMIT" ]; then ENRICH_LIMIT=30; fi
           uv run nous enrich-companies --limit "$ENRICH_LIMIT" --redescribe-outdated
+
+      - name: Embed companies
+        id: embed
+        # Wave 3 (E-1): 384-dim description embeddings via fastembed on CPU —
+        # $0 LLM cost, so no skip input and no dispatch knob (pipeline.yml is
+        # at the 25-input cap anyway). Runs right after enrich so freshly
+        # (re)described companies get vectors in the same run. Idempotent via
+        # embedding_text_hash: steady state selects only the ~enrich_limit
+        # rows enrich just touched (seconds); the fixed --limit 200 bounds the
+        # initial backlog drain, which completes in a few runs at 8 runs/day.
+        # Time: ~2-4 min worst case (cold model download + 200 texts on 2
+        # vCPUs); well inside the 45-min job backstop.
+        timeout-minutes: 10
+        continue-on-error: true
+        run: uv run nous embed-companies --limit 200
 
       - name: Enrich backfill (missing taxonomy)
         id: enrich_backfill
