@@ -35,6 +35,10 @@ import type {
   PersonRow,
   RelatedCompany,
   SimilarCompany,
+  ThemeDetail,
+  ThemeListRow,
+  ThemeMember,
+  ThemeRound,
 } from "@/lib/types";
 
 /**
@@ -2825,4 +2829,222 @@ export async function getCoInvestors(slug: string): Promise<CoInvestor[]> {
     const f = firmById.get(r.id);
     return f ? [{ slug: f.slug, name: f.name, sharedRounds: r.sharedRounds }] : [];
   });
+}
+
+// ─── Themes (Wave 3 E-3) ───────────────────────────────────────────────────────
+
+// Nested shape from the company_themes → companies embed. Same object-or-
+// single-element-array ambiguity PostgREST gives every embed; narrowed here.
+interface NestedThemeMemberCompany {
+  slug: string | null;
+  name: string | null;
+  hq_city: string | null;
+  hq_state: string | null;
+  industry_group: string | null;
+  description_short: string | null;
+  status: string | null;
+  logo_url: string | null;
+  created_at: string | null;
+  exclusion_reason?: string | null;
+}
+
+type CompanyThemeJoin = {
+  similarity: number | null;
+  companies: NestedThemeMemberCompany | NestedThemeMemberCompany[] | null;
+};
+
+// Raw `themes` row shape shared by the index + detail queries.
+interface ThemeRowRaw {
+  slug: string | null;
+  name: string | null;
+  industry_group: string | null;
+  description: string | null;
+  company_count: number | null;
+  funding_recent_usd: number | string | null;
+  funding_prior_usd: number | string | null;
+  funding_growth: number | string | null;
+  updated_at: string | null;
+}
+
+const THEME_COLUMNS =
+  "slug, name, industry_group, description, company_count, " +
+  "funding_recent_usd, funding_prior_usd, funding_growth, updated_at";
+
+function toThemeListRow(row: ThemeRowRaw): ThemeListRow | null {
+  if (!row.slug || !row.name || !row.industry_group) return null;
+  return {
+    slug: row.slug,
+    name: row.name,
+    industry_group: row.industry_group,
+    description: row.description ?? null,
+    company_count: row.company_count ?? 0,
+    funding_recent_usd: Number(row.funding_recent_usd ?? 0),
+    funding_prior_usd: Number(row.funding_prior_usd ?? 0),
+    funding_growth:
+      row.funding_growth != null ? Number(row.funding_growth) : null,
+    updated_at: row.updated_at ?? "",
+  };
+}
+
+/**
+ * Every theme, for the /themes index — ranked by trailing-2-quarter funding
+ * growth ("what's heating up"), NULLS LAST so themes with an undefined
+ * growth rate (zero prior-window funding) sort below any measured rate;
+ * ties break on recent funding, then name. The theme count is small (a few
+ * per industry) so no pagination. Returns [] on missing env, like every
+ * other helper here.
+ */
+export async function listThemes(): Promise<ThemeListRow[]> {
+  const supabase = supabaseOrNull("listThemes");
+  if (!supabase) return [];
+
+  const { data, error } = await supabase
+    .from("themes")
+    .select(THEME_COLUMNS)
+    .order("funding_growth", { ascending: false, nullsFirst: false })
+    .order("funding_recent_usd", { ascending: false })
+    .order("name", { ascending: true });
+
+  if (error) {
+    console.error("[listThemes] query failed:", error.message);
+    return [];
+  }
+
+  return ((data ?? []) as unknown as ThemeRowRaw[]).flatMap((row) => {
+    const theme = toThemeListRow(row);
+    return theme ? [theme] : [];
+  });
+}
+
+/**
+ * Everything /themes/[slug] renders: the theme row, its member companies
+ * (CompanyCard projection + similarity, ordered most-similar-first), and the
+ * members' funding rounds (the page derives the by-quarter chart from these
+ * stored, sourced rows — no new numbers are fabricated here).
+ *
+ * Excluded companies are dropped from the members (their /c/[slug] pages
+ * 404) AND from the round aggregation, so they never surface on the page in
+ * any form. Returns null for an unknown slug (→ 404) or missing env.
+ */
+export async function getThemeBySlug(slug: string): Promise<ThemeDetail | null> {
+  const supabase = supabaseOrNull("getThemeBySlug");
+  if (!supabase) return null;
+
+  const { data: themeRow, error: themeError } = await supabase
+    .from("themes")
+    .select(`id, ${THEME_COLUMNS}`)
+    .eq("slug", slug)
+    .single();
+
+  if (themeError || !themeRow) {
+    if (themeError?.code !== "PGRST116") {
+      console.error("[getThemeBySlug] theme query failed:", themeError?.message);
+    }
+    return null;
+  }
+  const theme = toThemeListRow(themeRow as unknown as ThemeRowRaw);
+  if (!theme) return null;
+  const themeId = (themeRow as unknown as { id: string | null }).id;
+
+  const { data: memberRows, error: membersError } = await supabase
+    .from("company_themes")
+    .select(
+      "similarity, companies(slug, name, hq_city, hq_state, industry_group, description_short, status, logo_url, created_at, exclusion_reason)",
+    )
+    .eq("theme_id", themeId)
+    .order("similarity", { ascending: false });
+
+  if (membersError) {
+    console.error(
+      "[getThemeBySlug] members query failed:",
+      membersError.message,
+    );
+    // The theme header is still a valid (if thin) page.
+    return { theme, members: [], rounds: [] };
+  }
+
+  const members: ThemeMember[] = [];
+  for (const row of (memberRows ?? []) as unknown as CompanyThemeJoin[]) {
+    const c = Array.isArray(row.companies) ? row.companies[0] : row.companies;
+    // Drop unresolved joins AND excluded companies — the latter 404 on
+    // /c/[slug] and must never surface here in any form.
+    if (!c?.slug || !c.name || c.exclusion_reason) continue;
+    members.push({
+      slug: c.slug,
+      name: c.name,
+      hq_city: c.hq_city ?? null,
+      hq_state: c.hq_state ?? null,
+      industry_group: c.industry_group ?? null,
+      description_short: c.description_short ?? null,
+      status: c.status ?? "active",
+      logo_url: c.logo_url ?? null,
+      similarity: row.similarity != null ? Number(row.similarity) : 0,
+      created_at: c.created_at ?? "",
+    });
+  }
+
+  // The members' funding rounds, for the by-quarter chart. Member ids are
+  // not part of the card projection, so resolve rounds via the slugs we
+  // already hold — one .in() over an indexed FK join stays cheap at theme
+  // sizes (≲ a few hundred members).
+  let rounds: ThemeRound[] = [];
+  if (members.length > 0) {
+    const { data: roundRows, error: roundsError } = await supabase
+      .from("funding_rounds")
+      .select("announced_date, amount_raised, companies!inner(slug)")
+      .in(
+        "companies.slug",
+        members.map((m) => m.slug),
+      );
+    if (roundsError) {
+      console.error(
+        "[getThemeBySlug] rounds query failed:",
+        roundsError.message,
+      );
+    } else {
+      rounds = ((roundRows ?? []) as {
+        announced_date: string | null;
+        amount_raised: number | string | null;
+      }[]).map((r) => ({
+        announced_date: r.announced_date ?? null,
+        amount_raised: r.amount_raised != null ? Number(r.amount_raised) : null,
+      }));
+    }
+  }
+
+  return { theme, members, rounds };
+}
+
+/**
+ * Minimum members a theme needs before /themes/<slug> earns a sitemap entry.
+ * Mirrors {@link MIN_ALTERNATIVES_COMPETITOR_COUNT} / MIN_TAG_COMPANY_COUNT:
+ * thin pages stay reachable (the index links every theme) but out of the
+ * sitemap. Reads the build-time `company_count` the pipeline stamped — a
+ * member excluded after the build may briefly overcount, exactly like a
+ * competitor row whose company was excluded still counts for alternatives.
+ */
+const MIN_THEME_MEMBER_COUNT = 3;
+
+/** Slugs (+ updated_at) of themes with ≥ {@link MIN_THEME_MEMBER_COUNT}
+ * members, for the sitemap. Returns [] on missing env or error so the
+ * sitemap still builds with its other entries. */
+export async function listAllThemeSlugs(): Promise<
+  { slug: string; updated_at: string | null }[]
+> {
+  const supabase = supabaseOrNull("listAllThemeSlugs");
+  if (!supabase) return [];
+
+  const { data, error } = await supabase
+    .from("themes")
+    .select("slug, updated_at")
+    .gte("company_count", MIN_THEME_MEMBER_COUNT)
+    .order("slug", { ascending: true });
+
+  if (error) {
+    console.error("[listAllThemeSlugs] query failed:", error.message);
+    return [];
+  }
+
+  return ((data ?? []) as { slug: string | null; updated_at: string | null }[])
+    .flatMap((row) => (row.slug ? [{ slug: row.slug, updated_at: row.updated_at }] : []));
 }

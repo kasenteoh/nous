@@ -414,3 +414,53 @@ export interface CoInvestor {
   name: string;
   sharedRounds: number;
 }
+
+// ─── Themes (Wave 3 E-3) ───────────────────────────────────────────────────────
+
+/**
+ * Row from the `themes` table (migration 0034) as the /themes surfaces read
+ * it. One row per named embedding cluster within an industry_group, written
+ * replace-style by the pipeline's compute-themes stage. The funding columns
+ * are build-time aggregates DERIVED from the member companies' stored
+ * funding_rounds (trailing 2 complete calendar quarters vs the 2 before);
+ * `funding_growth` is (recent − prior) / prior and NULL when prior is 0 —
+ * the UI derives a "new funding" label from the sums instead.
+ */
+export interface ThemeListRow {
+  slug: string;
+  name: string;
+  industry_group: string;
+  description: string | null;
+  company_count: number;
+  funding_recent_usd: number;
+  funding_prior_usd: number;
+  funding_growth: number | null;
+  updated_at: string;
+}
+
+/**
+ * A theme member for the /themes/[slug] card grid: the CompanyCard
+ * projection plus the membership's cosine similarity to the theme centroid
+ * (the grid order + per-card ranking disclosure) and the company's
+ * `created_at` (the "new entrants" list is the members most recently added
+ * to the catalog).
+ */
+export interface ThemeMember extends CompanyListRow {
+  similarity: number;
+  created_at: string;
+}
+
+/** A member company's funding round as the theme page charts it. */
+export interface ThemeRound {
+  announced_date: string | null; // ISO date or null (undated: not chartable)
+  amount_raised: number | null;
+}
+
+/** Everything /themes/[slug] renders, from {@link getThemeBySlug}. */
+export interface ThemeDetail {
+  theme: ThemeListRow;
+  /** Shown members only (excluded companies are dropped), similarity desc. */
+  members: ThemeMember[];
+  /** The members' funding rounds — the quarter chart derives from these. */
+  rounds: ThemeRound[];
+}

@@ -207,3 +207,23 @@ export function discoveredViaLabel(value: string): string {
     value.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase())
   );
 }
+
+/**
+ * Human label for a theme's trailing-2-quarter funding growth (Wave 3 E-3).
+ * `growth` is the stored (recent − prior) / prior ratio; it is NULL when the
+ * prior window had no funding, in which case the label derives from the two
+ * sums instead of fabricating an infinite rate:
+ * - growth 2.0        → "+200%"
+ * - growth -0.75      → "−75%"
+ * - null, recent > 0  → "new" (funding appeared from a zero base)
+ * - null, recent == 0 → "—"  (no dated funding in either window)
+ */
+export function formatGrowthLabel(
+  recentUsd: number,
+  growth: number | null,
+): string {
+  if (growth == null) return recentUsd > 0 ? "new" : "—";
+  const pct = Math.round(growth * 100);
+  // U+2212 minus sign for negatives, matching the site's typographic dashes.
+  return pct < 0 ? `−${Math.abs(pct)}%` : `+${pct}%`;
+}
