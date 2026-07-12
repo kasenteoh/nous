@@ -246,3 +246,50 @@ inherited from the prompt, not a claim about which model wrote the code.
   Blockchain/AE, Boards/IL). Three-stage drain loop running: infer →
   re-judge → description re-enrichment (90/run), each to empty selection,
   with the 3-hourly cron as fallback drain.
+
+# Initiative 2 — hygiene wave + Wave 3 (plan: 2026-07-11-hygiene-and-wave3-embeddings.md)
+
+## PR #150 — H-1: prominent-husk rescue (merged 2026-07-11)
+
+- Root cause of Perplexity-class husks: a 200–699-char dead zone (thin SPA
+  shells too rich for the 200-char headless trigger, too thin for the
+  700-char describe gate) + the 90-day refetch window + no needs-description
+  selection tier ⇒ prominent companies re-scraped the same shell quarterly,
+  forever.
+- Fix (scrape stage only): shown description-less companies sort first,
+  refetch on a 7-day cycle, and force the Playwright render below the
+  describe threshold (imported from enrich — single source of truth). Enrich
+  picks rescues up unchanged (end-to-end test).
+
+## PR #151 — H-2: canonical tag vocabulary (merged 2026-07-11)
+
+- `util/tags.py`: 96 canonical tags / 417 match keys; consolidates, never
+  gates (unknown tags pass through). Applied at the enrich write path, the
+  eval replay path, and as an idempotent `normalize-taxonomy` tags pass.
+  Judge prompt tightened (3–6 established tags) → 2026-07-11.1; verified the
+  bump re-selects no cohort.
+- Review catch: the PR's pipeline check went red because the map folded
+  `api-first`→`api` and `cloud-native`→`cloud`; a pre-existing DB-gated test
+  correctly pinned those as distinct concepts. Fixed the map, not the test —
+  and the explicit statusCheckRollup gate (post-incident discipline) is what
+  caught it before merge this time.
+
+## PR #152 — H-3: matcher word-boundaries + GitHub-trending discovery (merged 2026-07-11)
+
+- Funding keywords now match on word boundaries ("evaluations" no longer
+  triggers "valuation" — the live W-D false positive); all five feed
+  consumers inherit; hyphenated/wrapped true positives pinned.
+- GitHub-trending mapper: robots-checked (daily page only — `?since=` is
+  disallowed), cheapest-first gating (known-owner skip → personal-account
+  skip → DeepSeek company judgment, null-on-uncertainty), auto-create with
+  `discovered_via=github_trending`, weekly discovery.yml step +
+  adapter-health probe. <1¢/run.
+
+## Prod operations log (2026-07-11/12, drains)
+
+- Non-US lever: +500 checked across batches 4–8 (loop v3 continuing to
+  empty). Re-judge lever: complete — its worklist drained; the 3–4/batch
+  tail was interleaved crons' normal judge trickle, not rejudge re-selects.
+- Re-description: ~670 profiles rewritten by the drain loop so far (batches
+  of ~80–90 writes each) on top of cron contributions; v3 continues to the
+  two-consecutive-zero stop.
