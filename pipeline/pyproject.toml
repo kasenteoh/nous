@@ -41,6 +41,10 @@ dev = [
 # embedder through the Embedder Protocol seam.
 embeddings = [
     "fastembed>=0.8.0",
+    # compute-themes' KMeans (E-3). Same group as fastembed: both are the
+    # heavy "embedding math" runtime installed only where a stage needs it
+    # (pipeline.yml / discovery.yml); tests inject the Clusterer fake.
+    "scikit-learn>=1.4",
 ]
 
 [build-system]
@@ -84,6 +88,13 @@ ignore_missing_imports = true
 # the Any surface is one adapter constructor.
 [[tool.mypy.overrides]]
 module = ["fastembed", "fastembed.*"]
+ignore_missing_imports = true
+follow_imports = "skip"
+
+# scikit-learn: same optional `embeddings` group + lazy-import-behind-a-seam
+# story as fastembed above (compute-themes' KMeansClusterer adapter).
+[[tool.mypy.overrides]]
+module = ["sklearn", "sklearn.*"]
 ignore_missing_imports = true
 follow_imports = "skip"
 

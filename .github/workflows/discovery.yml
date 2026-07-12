@@ -197,6 +197,24 @@ jobs:
         continue-on-error: true
         run: uv run nous derive-relationships
 
+      - name: Compute themes
+        id: themes
+        # E-3: cluster the description embeddings (E-1) into named market
+        # themes for /themes. Runs weekly here but is TTL-gated INSIDE the
+        # stage (skips when themes were built < 25 days ago), so the
+        # effective cadence is monthly without a new workflow or inputs.
+        # LLM cost: ≤100 DeepSeek naming calls on a full rebuild (≈ well
+        # under $0.05 — pennies); steady-state runs centroid-match previous
+        # themes and spend ~nothing. The extra `uv sync --group embeddings`
+        # adds scikit-learn (KMeans) — the group the embed stage already
+        # uses in pipeline.yml. continue-on-error: themes are a derived
+        # aggregate surface; a failure must never block discovery.
+        timeout-minutes: 20
+        continue-on-error: true
+        run: |
+          uv sync --group embeddings
+          uv run nous compute-themes --limit 100
+
       - name: Estimate employees
         id: estimate
         if: ${{ inputs.skip_estimate != true }}

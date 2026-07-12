@@ -8,6 +8,7 @@ from sqlalchemy import (
     CheckConstraint,
     Date,
     DateTime,
+    Float,
     ForeignKey,
     Index,
     Integer,
@@ -697,6 +698,91 @@ class CompanyRelationship(Base):
             name="ck_company_relationships_type",
         ),
     )
+
+
+class Theme(Base):
+    """A named market segment: one embedding cluster within an industry_group.
+
+    Written by the compute-themes stage (migration 0034). Clusters are KMeans
+    over shown companies' description embeddings per industry; each coherent
+    cluster gets one DeepSeek naming call (name + one-sentence description),
+    and incoherent clusters are dropped rather than fabricated.
+
+    ``slug`` stays stable across re-runs via centroid matching: a new cluster
+    whose centroid is within cosine ≥ 0.9 of a previous theme's centroid keeps
+    that theme's slug/name (and its row, updated in place). Below the
+    tolerance the cluster is treated as genuinely new — the old slug dies with
+    its row (replace-per-industry semantics; acceptable for a monthly
+    aggregate surface whose inbound links are sitemap-driven).
+
+    Funding metrics are computed at build time from the member companies'
+    funding_rounds (announced_date / amount_raised) — derived from stored,
+    sourced rounds, never a new unattributed number:
+    - ``funding_recent_usd``: sum over the 2 most recent COMPLETE calendar
+      quarters as of the run date;
+    - ``funding_prior_usd``: sum over the 2 quarters before those;
+    - ``funding_growth``: (recent − prior) / prior — the /themes ranking key.
+      NULL when prior is 0 (undefined growth over a zero base; the web derives
+      a "new funding" label from the sums instead).
+    """
+
+    __tablename__ = "themes"
+
+    slug: Mapped[str] = mapped_column(Text, unique=True)
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    # Indexed: the stage's replace-per-industry writes and centroid-match
+    # reads both filter on it.
+    industry_group: Mapped[str] = mapped_column(Text, nullable=False, index=True)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Unit-normalized mean of member embeddings — the next run's slug-
+    # stability anchor. Same 384 dims as companies.embedding; deliberately no
+    # vector index (a handful of themes per industry, exact scan is trivial).
+    centroid: Mapped[list[float]] = mapped_column(Vector(384), nullable=False)
+    company_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    funding_recent_usd: Mapped[Decimal] = mapped_column(
+        Numeric(20, 2), nullable=False, server_default="0"
+    )
+    funding_prior_usd: Mapped[Decimal] = mapped_column(
+        Numeric(20, 2), nullable=False, server_default="0"
+    )
+    funding_growth: Mapped[Decimal | None] = mapped_column(
+        Numeric(12, 4), nullable=True
+    )
+    # theme_naming.PROMPT_VERSION that authored name/description (0031
+    # convention). Preserved unchanged when a centroid-matched theme keeps its
+    # previous name without a fresh LLM call.
+    prompt_version: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class CompanyTheme(Base):
+    """Theme membership: one company's assignment to one theme.
+
+    Replace-style per theme (the stage rewrites a theme's full member set each
+    run); UNIQUE (theme_id, company_id) is the idempotency key. ``similarity``
+    is the cosine similarity of the member's embedding to the theme centroid —
+    the web's member ordering and per-card ranking disclosure.
+    """
+
+    __tablename__ = "company_themes"
+    __table_args__ = (
+        UniqueConstraint(
+            "theme_id", "company_id", name="uq_company_themes_theme_company"
+        ),
+    )
+
+    theme_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("themes.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    company_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("companies.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    similarity: Mapped[float] = mapped_column(Float, nullable=False)
 
 
 class PipelineRun(Base):
