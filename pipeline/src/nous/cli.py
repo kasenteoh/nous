@@ -335,6 +335,81 @@ def embed_companies(limit: int) -> None:
     asyncio.run(_run())
 
 
+@cli.command("compute-themes")
+@click.option(
+    "--limit",
+    type=int,
+    default=100,
+    show_default=True,
+    help=(
+        "Max clusters to LLM-name per run (~1k tokens/call on DeepSeek — "
+        "100 calls is well under $0.05). Centroid-matched clusters reuse "
+        "their previous name at $0, so steady-state runs spend ~nothing."
+    ),
+)
+@click.option(
+    "--ttl-days",
+    type=int,
+    default=25,
+    show_default=True,
+    help=(
+        "Skip the run when themes were last built fewer than N days ago — "
+        "the monthly cadence gate for the weekly discovery workflow."
+    ),
+)
+@click.option(
+    "--force",
+    is_flag=True,
+    default=False,
+    help="Bypass the TTL gate (manual rebuilds / convergence checks).",
+)
+def compute_themes(limit: int, ttl_days: int, force: bool) -> None:
+    """Cluster company embeddings into named market themes (E-3).
+
+    Requires the optional ``embeddings`` dependency group for scikit-learn
+    (``uv sync --group embeddings``) — the KMeans import below fails cleanly
+    without it. Idempotent: unchanged embeddings re-cluster identically,
+    centroid-match their previous themes (slugs stable, zero LLM calls), and
+    only refresh metrics; the TTL gate keeps the effective cadence monthly.
+    """
+    import asyncio
+    from datetime import UTC, datetime
+
+    from nous.db.session import AsyncSessionLocal
+    from nous.observability import emit_run_telemetry, record_pipeline_run
+    from nous.pipeline.compute_themes import KMeansClusterer, run_compute_themes
+
+    # Constructed eagerly (outside _run) so a missing scikit-learn fails
+    # loudly before any DB session is opened.
+    clusterer = KMeansClusterer()
+
+    async def _run() -> None:
+        started = datetime.now(UTC)
+        try:
+            async with AsyncSessionLocal() as session:
+                summary = await run_compute_themes(
+                    session,
+                    clusterer,
+                    max_llm_clusters=limit,
+                    ttl_days=ttl_days,
+                    force=force,
+                )
+                click.echo(summary.model_dump_json(indent=2))
+            # flag_empty off: a TTL skip (or an all-industries-below-threshold
+            # catalog) is the steady state, not a silent failure.
+            await record_pipeline_run(
+                "compute-themes",
+                started_at=started,
+                inputs_seen=summary.clusters_found,
+                rows_written=summary.themes_created + summary.themes_matched,
+                summary=summary,
+            )
+        finally:
+            emit_run_telemetry("compute-themes")
+
+    asyncio.run(_run())
+
+
 @cli.command("refresh-vc-portfolios")
 @click.option(
     "--firm",

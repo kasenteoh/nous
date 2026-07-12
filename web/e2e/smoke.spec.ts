@@ -104,6 +104,28 @@ test.describe("structural smoke (no data required — CI contract)", () => {
     ).toBeVisible();
   });
 
+  test("/themes renders the themes index (200)", async ({ page }) => {
+    // Secret-free CI has no themes data; the page must render its empty
+    // state (not 500), and the chrome must mount — same contract as the
+    // other index routes.
+    const res = await page.goto("/themes");
+    expect(res?.status(), "GET /themes status").toBe(200);
+    await expectSiteChrome(page);
+    await expect(
+      page.getByRole("heading", { level: 1, name: "Themes" }),
+    ).toBeVisible();
+  });
+
+  test("/themes/<unknown-slug> returns 404", async ({ page }) => {
+    // Unknown theme slugs 404 by direct URL, with or without Supabase
+    // (getThemeBySlug returns null in both cases).
+    const res = await page.goto("/themes/definitely-not-a-theme-zzz");
+    expect(res?.status(), "GET /themes/<unknown> status").toBe(404);
+    await expect(
+      page.getByRole("heading", { level: 1, name: /not found/i }),
+    ).toBeVisible();
+  });
+
   test("/surprise resolves to a 200 page (redirect target)", async ({
     page,
   }) => {

@@ -65,3 +65,75 @@ export function computeTotalRaised(
     hasTotal: hasComputed || stated != null,
   };
 }
+
+// ─── Funding by quarter (themes, Wave 3 E-3) ──────────────────────────────────
+
+export interface DatedRoundAmount {
+  announced_date: string | null; // ISO date (YYYY-MM-DD) or null
+  amount_raised: number | string | null;
+}
+
+export interface QuarterBucket {
+  /** Display label, e.g. "Q3 2025". */
+  label: string;
+  /** ISO date of the quarter's first day — a stable key for rendering. */
+  start: string;
+  /** Sum of round amounts announced in this quarter, USD. */
+  totalUsd: number;
+}
+
+/** First month (1-based) of the calendar quarter containing `month`. */
+function quarterFirstMonth(month: number): number {
+  return 3 * Math.floor((month - 1) / 3) + 1;
+}
+
+/**
+ * Bucket funding rounds into the `quarters` most recent calendar quarters
+ * (oldest first), INCLUDING the in-progress current quarter — this is a
+ * display series, so recent activity should show; the theme row's growth
+ * metric separately compares only complete quarters (see the pipeline's
+ * compute-themes stage). Quarters with no dated rounds appear with a 0 so
+ * the bar chart's time axis has no silent gaps. Rounds without a date or an
+ * amount contribute nothing (they cannot be placed — unknown stays unknown).
+ *
+ * `now` is injectable for tests; date math is done on the ISO string's
+ * year/month so time zones can't shift a round across a quarter boundary.
+ */
+export function bucketFundingByQuarter(
+  rounds: readonly DatedRoundAmount[],
+  quarters = 8,
+  now: Date = new Date(),
+): QuarterBucket[] {
+  // Build the window of (year, firstMonth) quarter keys, oldest first.
+  let year = now.getUTCFullYear();
+  let month = quarterFirstMonth(now.getUTCMonth() + 1);
+  const keys: { year: number; month: number }[] = [];
+  for (let i = 0; i < quarters; i++) {
+    keys.unshift({ year, month });
+    month -= 3;
+    if (month < 1) {
+      month += 12;
+      year -= 1;
+    }
+  }
+
+  const totals = new Map<string, number>();
+  const keyOf = (y: number, m: number): string =>
+    `${y}-${String(m).padStart(2, "0")}`;
+  for (const k of keys) totals.set(keyOf(k.year, k.month), 0);
+
+  for (const round of rounds) {
+    if (round.announced_date == null || round.amount_raised == null) continue;
+    const match = /^(\d{4})-(\d{2})/.exec(round.announced_date);
+    if (!match) continue;
+    const key = keyOf(Number(match[1]), quarterFirstMonth(Number(match[2])));
+    if (!totals.has(key)) continue; // outside the window
+    totals.set(key, (totals.get(key) ?? 0) + Number(round.amount_raised));
+  }
+
+  return keys.map((k) => ({
+    label: `Q${Math.floor((k.month - 1) / 3) + 1} ${k.year}`,
+    start: `${keyOf(k.year, k.month)}-01`,
+    totalUsd: totals.get(keyOf(k.year, k.month)) ?? 0,
+  }));
+}

@@ -11,6 +11,7 @@ import {
   listAllInvestorSlugs,
   listAllTags,
   listAllStates,
+  listAllThemeSlugs,
   listAlternativesCompanySlugs,
 } from "@/lib/queries";
 import { siteOrigin } from "@/lib/site";
@@ -23,16 +24,19 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
     { url: `${origin}/companies` },
     { url: `${origin}/investors` },
     { url: `${origin}/new` },
+    { url: `${origin}/themes` },
     { url: `${origin}/about` },
   ];
 
-  const [companies, investors, tags, states, alternatives] = await Promise.all([
-    listAllCompanySlugs(),
-    listAllInvestorSlugs(),
-    listAllTags(),
-    listAllStates(),
-    listAlternativesCompanySlugs(),
-  ]);
+  const [companies, investors, tags, states, alternatives, themes] =
+    await Promise.all([
+      listAllCompanySlugs(),
+      listAllInvestorSlugs(),
+      listAllTags(),
+      listAllStates(),
+      listAlternativesCompanySlugs(),
+      listAllThemeSlugs(),
+    ]);
 
   const companyEntries: MetadataRoute.Sitemap = companies.map((c) => ({
     url: `${origin}/c/${c.slug}`,
@@ -64,6 +68,14 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
     lastModified: c.updated_at ?? undefined,
   }));
 
+  // `themes` is already the de-thinned list — listAllThemeSlugs returns only
+  // themes with ≥ MIN_THEME_MEMBER_COUNT members (mirroring the alternatives
+  // threshold) — so thin one/two-company theme pages stay out of the sitemap.
+  const themeEntries: MetadataRoute.Sitemap = themes.map((t) => ({
+    url: `${origin}/themes/${t.slug}`,
+    lastModified: t.updated_at ?? undefined,
+  }));
+
   return [
     ...staticEntries,
     ...companyEntries,
@@ -71,5 +83,6 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
     ...tagEntries,
     ...locationEntries,
     ...alternativesEntries,
+    ...themeEntries,
   ];
 }
