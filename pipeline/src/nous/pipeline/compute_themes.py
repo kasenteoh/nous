@@ -132,8 +132,13 @@ class KMeansClusterer:
     local ``uv sync``).
     """
 
+    def __init__(self) -> None:
+        # Import check up front: the CLI constructs this eagerly so a missing
+        # optional dependency group fails loudly at startup, not mid-run.
+        import sklearn.cluster  # noqa: F401  # optional dep — see class docstring
+
     def cluster(self, vectors: list[list[float]], k: int) -> list[int]:
-        from sklearn.cluster import KMeans  # optional dep — see class docstring
+        from sklearn.cluster import KMeans
 
         model = KMeans(n_clusters=k, random_state=0, n_init=10)
         labels = model.fit_predict(vectors)
