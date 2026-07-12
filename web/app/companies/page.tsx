@@ -5,12 +5,14 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import {
   listCompanies,
+  listCompaniesHybrid,
   listIndustryGroups,
   listDiscoveredViaValues,
   searchHuskFallback,
   type CompanyListOptions,
   type CompanyListSort,
 } from "@/lib/queries";
+import { embedQuery } from "@/lib/embed-query";
 import { discoveredViaLabel } from "@/lib/format";
 import { CompanyCard } from "@/components/CompanyCard";
 import { SaveSearch } from "@/components/SaveSearch";
@@ -105,7 +107,12 @@ export default async function CompaniesPage({
   const industry = firstStr(sp.industry);
   const source = firstStr(sp.source);
   const sortRaw = firstStr(sp.sort);
-  const sort: CompanyListSort = SORT_OPTIONS.some((o) => o.value === sortRaw)
+  // An explicit, valid ?sort= param. Distinct from the *effective* sort below:
+  // semantic blending only happens under the default ordering — appending
+  // cosine-ranked extras to an explicitly requested "Name (A–Z)" or "Largest
+  // raise" list would misorder it (see listCompaniesHybrid).
+  const explicitSort = SORT_OPTIONS.some((o) => o.value === sortRaw);
+  const sort: CompanyListSort = explicitSort
     ? (sortRaw as CompanyListSort)
     : "name_asc";
 
@@ -152,13 +159,42 @@ export default async function CompaniesPage({
   // total via a count fallback. We then clamp and optionally re-fetch.
   const offset = (parsedPage - 1) * PAGE_SIZE;
 
+  // Semantic search (E-2): embed the query server-side only when the result
+  // could actually blend — page 1, default sort, non-empty q, and no column
+  // filters (the semantic RPC ranks the whole catalog, so extras under an
+  // active filter could violate it — see listCompaniesHybrid, which gates on
+  // the same conditions; this check just avoids pointless model work).
+  // embedQuery returns null on ANY failure (no model, timeout, secret-free
+  // CI), which listCompaniesHybrid treats as "pure lexical" — search never
+  // breaks on the model. `sort: undefined` (vs the effective "name_asc") is
+  // the blend gate's signal that the ordering is the default, not user-chosen.
+  const columnFiltersActive =
+    Boolean(industry || source || stage || fundedSinceDays) ||
+    minRaised != null ||
+    maxRaised != null ||
+    foundedAfter != null ||
+    foundedBefore != null ||
+    empMin != null ||
+    empMax != null;
+  const semanticEligible =
+    Boolean(q) && parsedPage === 1 && !explicitSort && !columnFiltersActive;
+  const queryEmbedding = semanticEligible ? await embedQuery(q) : null;
+
   const [firstResult, industries, discoveredViaValues] = await Promise.all([
-    listCompanies({ ...filters, sort, limit: PAGE_SIZE, offset }),
+    listCompaniesHybrid(
+      {
+        ...filters,
+        sort: explicitSort ? sort : undefined,
+        limit: PAGE_SIZE,
+        offset,
+      },
+      queryEmbedding,
+    ),
     listIndustryGroups(),
     listDiscoveredViaValues(),
   ]);
 
-  const { total } = firstResult;
+  const { total, semanticCount } = firstResult;
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
   // Clamp the effective page to [1, totalPages].
   const page = Math.min(totalPages, Math.max(1, parsedPage));
@@ -194,11 +230,14 @@ export default async function CompaniesPage({
   const firstShown = total === 0 ? 0 : effectiveOffset + 1;
   const lastShown = Math.min(effectiveOffset + companies.length, total);
 
-  // Husk fallback: when the main search returns 0 results for a non-empty
-  // query, look for name-matching husks (companies with no description that
-  // passed exclusion but failed the catalog bar).
+  // Husk fallback: when the main search returns 0 LEXICAL results for a
+  // non-empty query, look for name-matching husks (companies with no
+  // description that passed exclusion but failed the catalog bar). Keyed on
+  // the lexical total, not the blended rows: semantic neighbors landing for
+  // "Anthropic" must not suppress the "we track Anthropic but have no full
+  // profile yet" box — that box is about name matches.
   const huskFallback =
-    companies.length === 0 && q ? await searchHuskFallback(q) : [];
+    firstResult.lexicalTotal === 0 && q ? await searchHuskFallback(q) : [];
 
   // The active filter/sort set as URLSearchParams (WITHOUT page). Single source
   // of truth reused by pagination links, the Save-Search button, and the CSV
@@ -590,6 +629,11 @@ export default async function CompaniesPage({
         {total === 0
           ? "No matching companies."
           : `Showing ${firstShown}–${lastShown} of ${total.toLocaleString("en-US")} ${total === 1 ? "company" : "companies"}`}
+        {/* Disclose when semantically related (not literally matching)
+            companies were appended to the results (E-2). */}
+        {semanticCount > 0 && (
+          <span className="text-ink-faint"> · includes semantic matches</span>
+        )}
       </p>
 
       {/* ── Company grid ──────────────────────────────────────────────────── */}

@@ -391,6 +391,182 @@ export async function listCompanies(
   return { rows, total: count ?? rows.length };
 }
 
+// ─── Semantic search (E-2) ────────────────────────────────────────────────────
+
+/**
+ * How many nearest neighbors the semantic RPC returns. Mirrors the /companies
+ * page size (PAGE_SIZE) and the semantic_companies() SQL default (migration
+ * 0035); passed explicitly so the SQL default and the UI cap can't drift
+ * apart silently — same convention as SIMILAR_COMPANIES_LIMIT.
+ */
+const SEMANTIC_MATCH_COUNT = 30;
+
+// Shape returned by the semantic_companies() Postgres function (migration
+// 0035): the card-list projection + similarity. Narrowed rather than `any`,
+// same as SimilarCompanyRpcRow.
+interface SemanticCompanyRpcRow {
+  slug: string | null;
+  name: string | null;
+  hq_city: string | null;
+  hq_state: string | null;
+  industry_group: string | null;
+  description_short: string | null;
+  status: string | null;
+  logo_url: string | null;
+  similarity: number | null;
+}
+
+/**
+ * Companies nearest to a query embedding, by cosine similarity over the
+ * pipeline-computed description embeddings — the semantic arm of /companies
+ * search. PostgREST cannot ORDER BY a vector distance through filter params,
+ * so the ranking lives in the `semantic_companies` SQL function (migration
+ * 0035) and this helper calls it via `.rpc()`, passing the vector in
+ * pgvector's `[x,y,...]` input format (a JSON array string).
+ *
+ * The function itself filters to shown (`exclusion_reason IS NULL`), embedded
+ * companies that pass the catalog bar, so excluded companies never surface;
+ * the slug/name guard here is the same defense-in-depth used by
+ * getSimilarCompanies. Returns [] on missing env or error — semantic search
+ * is an enhancement and must never break the page.
+ */
+export async function semanticCompanySearch(
+  queryEmbedding: number[],
+  matchCount: number = SEMANTIC_MATCH_COUNT,
+): Promise<CompanyListRow[]> {
+  const supabase = supabaseOrNull("semanticCompanySearch");
+  if (!supabase) return [];
+
+  const { data, error } = await supabase.rpc("semantic_companies", {
+    query_embedding: `[${queryEmbedding.join(",")}]`,
+    match_count: matchCount,
+  });
+
+  if (error) {
+    console.error("[semanticCompanySearch] rpc failed:", error.message);
+    return [];
+  }
+
+  return ((data ?? []) as SemanticCompanyRpcRow[]).flatMap((row) => {
+    if (!row.slug || !row.name) return [];
+    return [
+      {
+        slug: row.slug,
+        name: row.name,
+        hq_city: row.hq_city ?? null,
+        hq_state: row.hq_state ?? null,
+        industry_group: row.industry_group ?? null,
+        description_short: row.description_short ?? null,
+        status: row.status ?? "active",
+        logo_url: row.logo_url ?? null,
+      },
+    ];
+  });
+}
+
+/** {@link listCompaniesHybrid} result: the lexical page, possibly extended. */
+export interface HybridCompanyListResult extends CompanyListResult {
+  /**
+   * How many semantic-only rows were appended after the lexical matches.
+   * 0 whenever the blend was skipped or added nothing; the page shows its
+   * "includes semantic matches" hint only when this is positive.
+   */
+  semanticCount: number;
+  /**
+   * The lexical total on its own — what {@link listCompanies} would have
+   * reported. The page keys the husk fallback on THIS being zero (a semantic
+   * hit must not suppress the "we track X but have no profile yet" box,
+   * which is about name matches).
+   */
+  lexicalTotal: number;
+}
+
+/**
+ * listCompanies, plus semantic blending when a query embedding is available:
+ * lexical (ilike) matches come first, in their normal order — a user typing
+ * an exact or partial company name must see that name at the top — then
+ * semantic-only neighbors (cosine-ranked via {@link semanticCompanySearch})
+ * are appended, deduped by slug against the lexical rows, capped to the page
+ * size. `total` counts the appended rows so "Showing X–Y of N" stays honest.
+ *
+ * The blend deliberately narrows to the one case where it is both useful and
+ * honest, and falls back to plain listCompanies otherwise:
+ *
+ * - `queryEmbedding` null (embedder failed/timed out/absent — the state
+ *   secret-free CI exercises): pure lexical, silently.
+ * - Explicit sort (`opts.sort` set): appending cosine-ranked rows under
+ *   "Name (A–Z)" or "Largest raise" would misorder the list — semantic
+ *   reordering under an explicit sort is a lie. Callers pass `sort:
+ *   undefined` for the default ordering (listCompanies orders name-asc
+ *   either way).
+ * - Page 2+ (`opts.offset` > 0): blending only on page 1 keeps pagination
+ *   honest with zero bookkeeping — and since extras are only appended when
+ *   the lexical page has room (lexical total < page size ⇒ exactly one
+ *   lexical page), a blended result never coexists with real pagination.
+ * - Any column filter active (industry/source/tag/state/the C2 VC filters):
+ *   semantic_companies() ranks the WHOLE catalog (it applies only the
+ *   exclusion + catalog-bar semantics), so appended extras could violate an
+ *   explicit filter — e.g. non-Fintech rows under industry=Fintech. Blend
+ *   only when q is the sole active constraint.
+ * - Lexical page already full: nothing to append (implied by the above,
+ *   checked anyway).
+ *
+ * The RPC runs concurrently with the lexical query — its result is discarded
+ * in the rare full-page case rather than serializing the two round trips.
+ */
+export async function listCompaniesHybrid(
+  opts: CompanyListOptions,
+  queryEmbedding: number[] | null,
+): Promise<HybridCompanyListResult> {
+  const limit = opts.limit ?? 30;
+  const columnFiltersActive =
+    opts.industry_group != null ||
+    opts.discovered_via != null ||
+    opts.tag != null ||
+    opts.state != null ||
+    opts.min_raised != null ||
+    opts.max_raised != null ||
+    opts.founded_after != null ||
+    opts.founded_before != null ||
+    opts.emp_min != null ||
+    opts.emp_max != null ||
+    opts.stage != null ||
+    opts.funded_since_days != null;
+  const blendEligible =
+    queryEmbedding !== null &&
+    Boolean(opts.search) &&
+    opts.sort == null &&
+    (opts.offset ?? 0) === 0 &&
+    !columnFiltersActive;
+
+  const [lexical, semantic] = await Promise.all([
+    listCompanies(opts),
+    blendEligible && queryEmbedding !== null
+      ? semanticCompanySearch(queryEmbedding)
+      : Promise.resolve([]),
+  ]);
+
+  const base = {
+    ...lexical,
+    semanticCount: 0,
+    lexicalTotal: lexical.total,
+  };
+  if (!blendEligible || lexical.rows.length >= limit) return base;
+
+  const seen = new Set(lexical.rows.map((r) => r.slug));
+  const extras = semantic
+    .filter((r) => !seen.has(r.slug))
+    .slice(0, limit - lexical.rows.length);
+  if (extras.length === 0) return base;
+
+  return {
+    rows: [...lexical.rows, ...extras],
+    total: lexical.total + extras.length,
+    semanticCount: extras.length,
+    lexicalTotal: lexical.total,
+  };
+}
+
 /**
  * Minimum number of catalog companies an `industry_group` must apply to before
  * it appears in the /companies filter dropdown. The LLM emits ~227 distinct

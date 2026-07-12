@@ -151,6 +151,19 @@ test.describe("structural smoke (no data required — CI contract)", () => {
     ).toBeVisible();
   });
 
+  test("/companies?q= under the default sort stays a valid page (200)", async ({
+    page,
+  }) => {
+    // Exercises the semantic-search path (E-2): a bare q with no explicit
+    // sort is the one shape that attempts query embedding + the blend. In
+    // secret-free CI every semantic sub-step is allowed to fail (no model,
+    // no Supabase) and the page must still degrade to lexical and 200 —
+    // exactly the embedQuery-null → listCompaniesHybrid-pure-lexical path.
+    const res = await page.goto("/companies?q=ai+for+logistics");
+    expect(res?.status(), "GET /companies?q= status").toBe(200);
+    await expectSiteChrome(page);
+  });
+
   test("/companies with the full filter querystring stays a valid page (200)", async ({
     page,
   }) => {
