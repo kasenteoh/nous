@@ -352,3 +352,24 @@ inherited from the prompt, not a claim about which model wrote the code.
   activates in prod as the next pipeline crons apply migrations 0033–0035
   and drain the embed backlog (~1–2 days at 200/run × 8/day); until then
   every new surface degrades to its pre-Wave-3 behavior by construction.
+
+## Prod operations log — drains COMPLETE (2026-07-12)
+
+- **Non-US drain finished**: final batch selected 0 (≈770 companies checked
+  across all batches; all exclusions carry quoted registered-office sources).
+- **Re-description drain finished**: two consecutive zero-write batches after
+  ~1.7k+ profiles regenerated under the W-F prompt (drain batches + cron).
+- One-off failed run explained: the H-2 PR's gitleaks job flaked with
+  "failed to scan Git repository: stderr is not empty" (action infra, not a
+  leak); the next push re-ran green. Pin/retry the action if it recurs.
+
+## Docs refresh + handoff (2026-07-12)
+
+- README caught up to the shipped surface (semantic search, themes, similar
+  companies, durable URLs, new stages/workflows, pgvector dev image,
+  two-call enrich); BACKLOG annotated with SHIPPED markers; CLAUDE.md gained
+  the prompt-version/golden-gate and embeddings conventions plus the
+  DB-gated-tests-run-in-CI warning.
+- `docs/superpowers/HANDOFF.md` written for the next agent: working
+  agreement, environment gotchas, autonomous processes, open items,
+  architecture pointers.
