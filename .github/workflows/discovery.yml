@@ -121,6 +121,19 @@ jobs:
           fi
           uv run nous refresh-vc-portfolios "${ARGS[@]}"
 
+      - name: Discover GitHub trending
+        id: github_trending
+        # LLM-gated org→company mapper over github.com/trending (robots-
+        # allowed daily page; the ?since=weekly variant is robots-disallowed).
+        # Bounded at 25 DeepSeek judgments/run (≈ well under a cent) and only
+        # NEW owners are judged, so steady-state weekly cost is near zero.
+        # continue-on-error: a GitHub layout change or API hiccup must never
+        # block the rest of discovery; the adapter-health step probes the
+        # page (trending:github) so a structural break still surfaces.
+        timeout-minutes: 15
+        continue-on-error: true
+        run: uv run nous discover-github-trending
+
       - name: Deduplicate investors
         id: dedup_investors
         # Merges investor rows whose canonical name (after alias mapping, e.g.
