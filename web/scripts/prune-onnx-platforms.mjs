@@ -84,3 +84,32 @@ console.log(
     `[${removed.join(", ") || "none"}]; reclaimed ` +
     `${(reclaimed / 1e6).toFixed(1)}MB from ${napiRoot}`,
 );
+
+// onnxruntime-web (~130MB) is the browser/wasm backend. transformers' node
+// entry references it (so the package can't be deleted), but on Node the
+// onnxruntime-node backend is used and the web WASM binaries are never
+// instantiated. Its dist/ is dominated by 4 browser .wasm files (~73MB) plus
+// source maps — none of which are read at runtime on the server. Stripping
+// them keeps the JS entry importable while removing the bulk that would
+// otherwise push the /companies function back over the limit.
+const webDist = path.join(
+  webRoot,
+  "node_modules",
+  "onnxruntime-web",
+  "dist",
+);
+if (existsSync(webDist)) {
+  let webReclaimed = 0;
+  const webRemoved = [];
+  for (const entry of readdirSync(webDist)) {
+    if (!/\.(wasm|map)$/.test(entry)) continue;
+    const p = path.join(webDist, entry);
+    webReclaimed += statSync(p).size;
+    rmSync(p, { force: true });
+    webRemoved.push(entry);
+  }
+  console.log(
+    `[prune-onnx] onnxruntime-web/dist: removed ${webRemoved.length} ` +
+      `wasm/map file(s); reclaimed ${(webReclaimed / 1e6).toFixed(1)}MB`,
+  );
+}
