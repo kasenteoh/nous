@@ -209,7 +209,11 @@ _ALIAS_SOURCES: dict[str, list[str]] = {
         "developer-experience", "dx", "developer-productivity",
         "engineering-tools",
     ],
-    "api": ["apis", "api-first", "api-platform", "rest-api", "api-development"],
+    # "api-first" deliberately NOT aliased: it names a product philosophy,
+    # not a spelling variant of "api" (pinned by test_tags_are_normalized —
+    # folding it would erase real information, the same rule that keeps
+    # vendor tags standalone).
+    "api": ["apis", "api-platform", "rest-api", "api-development"],
     "sdk": ["sdks"],
     "open-source": ["opensource", "oss"],
     "ci-cd": [
@@ -230,7 +234,9 @@ _ALIAS_SOURCES: dict[str, list[str]] = {
     "sre": ["site-reliability", "site-reliability-engineering", "reliability"],
     "incident-management": ["on-call", "oncall", "incident-response"],
     "infrastructure": ["infra", "cloud-infrastructure", "it-infrastructure"],
-    "cloud": ["cloud-computing", "cloud-native", "multi-cloud", "cloud-platform"],
+    # "cloud-native" deliberately NOT aliased: an architecture style, not a
+    # spelling of "cloud" (same rationale and pin as "api-first" above).
+    "cloud": ["cloud-computing", "multi-cloud", "cloud-platform"],
     "kubernetes": ["k8s", "containers", "docker", "container-orchestration"],
     "automation": [
         "workflow-automation", "rpa", "process-automation",
