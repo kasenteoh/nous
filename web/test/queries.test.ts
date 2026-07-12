@@ -18,6 +18,7 @@ import {
   getCompanyBySlug,
   getCompanyOgData,
   getRelatedCompanies,
+  getSimilarCompanies,
   listCompanies,
   listNewestCompanies,
   sanitizeIlikeTerm,
@@ -495,6 +496,79 @@ describe("excluded-company null-out elsewhere", () => {
     }));
     const related = await getRelatedCompanies("c-main");
     expect(related.map((r) => r.slug)).toEqual(["ok"]);
+  });
+
+  it("getSimilarCompanies calls the similar_companies RPC with the id and cap", async () => {
+    const mock = useClient(() => ({ data: [] }));
+    await getSimilarCompanies("c-main");
+
+    const [builder] = mock.buildersFor("rpc:similar_companies");
+    expect(builder).toBeDefined();
+    expect(
+      builder.has("rpc", "similar_companies", {
+        company_id: "c-main",
+        match_count: 6,
+      }),
+    ).toBe(true);
+  });
+
+  it("getSimilarCompanies maps RPC rows and drops unresolved ones", async () => {
+    useClient(() => ({
+      data: [
+        {
+          id: "c-1",
+          slug: "vector-co",
+          name: "Vector Co",
+          logo_url: "https://logo.example/v.png",
+          description_short: "Vector search infra.",
+          industry_group: "developer-tools",
+          similarity: 0.87,
+        },
+        // Defensive drop: a row the function should never produce, but the
+        // web must not render a nameless/linkless card if it ever does.
+        {
+          id: "c-2",
+          slug: null,
+          name: "Ghost Co",
+          logo_url: null,
+          description_short: null,
+          industry_group: null,
+          similarity: 0.5,
+        },
+      ],
+    }));
+
+    const similar = await getSimilarCompanies("c-main");
+    expect(similar).toEqual([
+      {
+        slug: "vector-co",
+        name: "Vector Co",
+        logoUrl: "https://logo.example/v.png",
+        descriptionShort: "Vector search infra.",
+        industryGroup: "developer-tools",
+        similarity: 0.87,
+      },
+    ]);
+  });
+
+  it("getSimilarCompanies returns [] when the company has no embedding (empty RPC result)", async () => {
+    useClient(() => ({ data: [] }));
+    await expect(getSimilarCompanies("c-unembedded")).resolves.toEqual([]);
+  });
+
+  it("getSimilarCompanies degrades to [] on an RPC error", async () => {
+    useClient(() => ({
+      data: null,
+      error: { message: "function similar_companies does not exist" },
+    }));
+    await expect(getSimilarCompanies("c-main")).resolves.toEqual([]);
+  });
+
+  it("getSimilarCompanies returns [] when Supabase is unconfigured", async () => {
+    mockedCreate.mockImplementation(() => {
+      throw new Error("SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must be set");
+    });
+    await expect(getSimilarCompanies("c-main")).resolves.toEqual([]);
   });
 
   it("getCompaniesForCompare drops excluded slugs and preserves the caller's order", async () => {

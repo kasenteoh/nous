@@ -323,6 +323,25 @@ export interface RelatedCompany {
 }
 
 /**
+ * A nearest-neighbor company by description-embedding cosine similarity,
+ * returned by the `similar_companies` Postgres function (migration 0033) via
+ * {@link getSimilarCompanies}. The function itself filters excluded companies
+ * and rows without an embedding, so every entry here is renderable; the web
+ * still drops rows with a missing slug/name defensively. `similarity` is
+ * cosine similarity in roughly (0, 1], rendered as the per-card provenance
+ * caption (every fact on the page has a visible source — this one's source is
+ * the similarity computation itself).
+ */
+export interface SimilarCompany {
+  slug: string;
+  name: string;
+  logoUrl: string | null;
+  descriptionShort: string | null;
+  industryGroup: string | null;
+  similarity: number;
+}
+
+/**
  * A company that shares one or more (low-degree) investors with the company
  * being viewed, computed read-time in {@link getAlsoBackedBy}. `sharedInvestors`
  * holds the names of the shared investors, for the attribution caption.

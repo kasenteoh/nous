@@ -10,6 +10,7 @@ import {
   getCompanyBySlug,
   getInvestorNameToSlugMap,
   getRelatedCompanies,
+  getSimilarCompanies,
 } from "@/lib/queries";
 import type {
   CompanyRow,
@@ -281,10 +282,14 @@ export default async function CompanyPage({ params }: Props) {
 
   // Relationship-graph fetches depend on the resolved company id, so they run
   // after getCompanyBySlug — but in parallel with each other (same idiom as the
-  // detail fan-out). Both degrade to [] on missing env / error, so the section
-  // simply renders nothing when there's no graph data yet.
-  const [similar, alsoBackedBy] = await Promise.all([
+  // detail fan-out). All degrade to [] on missing env / error, so the section
+  // simply renders nothing when there's no graph data yet. The embedding
+  // neighbors (getSimilarCompanies) replace the heuristic 'similar' edges in
+  // the UI when the company has an embedding; the heuristic list stays the
+  // fallback for not-yet-embedded companies.
+  const [similar, similarByDescription, alsoBackedBy] = await Promise.all([
     getRelatedCompanies(company.id),
+    getSimilarCompanies(company.id),
     getAlsoBackedBy(company.id),
   ]);
 
@@ -649,7 +654,11 @@ export default async function CompanyPage({ params }: Props) {
       <Competitors competitors={competitors} alternativesSlug={company.slug} />
 
       {/* ── Related companies (relationship graph) ─────────────────────── */}
-      <RelatedCompanies similar={similar} alsoBackedBy={alsoBackedBy} />
+      <RelatedCompanies
+        similar={similar}
+        similarByDescription={similarByDescription}
+        alsoBackedBy={alsoBackedBy}
+      />
 
       {/* ── News ───────────────────────────────────────────────────────── */}
       <News news={news} asOf={latestNewsDate} />
