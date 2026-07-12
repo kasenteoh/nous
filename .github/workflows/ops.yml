@@ -23,6 +23,7 @@ on:
         options:
           - exclude-company
           - unexclude-company
+          - inspect-company
       slug:
         description: "Company slug to operate on."
         required: true
@@ -87,6 +88,8 @@ jobs:
             else
               uv run nous exclude-company "$OP_SLUG" --reason "$OP_REASON" | tee "$GITHUB_STEP_SUMMARY"
             fi
+          elif [ "$OP_COMMAND" = "inspect-company" ]; then
+            { echo '```json'; uv run nous inspect-company "$OP_SLUG"; echo '```'; } | tee "$GITHUB_STEP_SUMMARY"
           else
             uv run nous unexclude-company "$OP_SLUG" | tee "$GITHUB_STEP_SUMMARY"
           fi
