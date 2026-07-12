@@ -13,15 +13,18 @@ from __future__ import annotations
 import os
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from unittest.mock import AsyncMock
 
 import httpx
 import pytest
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from nous.db.models import Company, RawPage
 from nous.pipeline.scrape_homepages import run_scrape_homepages
+from nous.sources.headless_browser import HeadlessBrowserClient
 from nous.sources.homepage import FetchResult, HomepageClient, RobotsBlockedError
+from tests.test_browser_fallback import DEAD_ZONE_SHELL_HTML
 
 # ---------------------------------------------------------------------------
 # Skip guard
@@ -44,6 +47,7 @@ def _make_company(
     website: str | None = "https://acme.com",
     latest_round_amount: Decimal | None = None,
     funding_round_count: int = 0,
+    description_short: str | None = None,
 ) -> Company:
     return Company(
         name=name,
@@ -53,6 +57,7 @@ def _make_company(
         website=website,
         latest_round_amount=latest_round_amount,
         funding_round_count=funding_round_count,
+        description_short=description_short,
     )
 
 
@@ -783,3 +788,295 @@ async def test_logo_discovery_skipped_for_plain_mock_client(
     assert summary.logos_found == 0
     await db.refresh(company)
     assert company.logo_url is None
+
+
+# ---------------------------------------------------------------------------
+# Husk rescue (H-1): selection priority, short refetch cycle, forced render
+# ---------------------------------------------------------------------------
+
+# Rendered DOM the mock browser "produces" for the dead-zone shell: >700 chars
+# of visible text so the rescued page clears BOTH enrich gates (_MIN_TEXT_CHARS
+# and _MIN_DESCRIBE_CHARS). No <a> tags — keeps the scrape to one page.
+_RENDERED_RICH_HTML = (
+    "<html><body><main><h1>Perplexity</h1><p>"
+    + (
+        "Perplexity is an AI-powered answer engine that searches the live web "
+        "and responds with cited, conversational answers. "
+        * 12
+    )
+    + "</p></main></body></html>"
+)
+
+
+class DeadZoneShellClient(MockHomepageClient):
+    """Static fetch always succeeds (HTTP 200) but returns the SPA shell whose
+    extracted text sits between the near-zero fallback trigger (200) and the
+    describe threshold (700) — the Perplexity shape."""
+
+    async def fetch(self, url: str) -> FetchResult:
+        return FetchResult(
+            url=url,
+            status_code=200,
+            content=DEAD_ZONE_SHELL_HTML,
+            content_type="text/html",
+        )
+
+
+def _mock_browser(rendered_html: str = _RENDERED_RICH_HTML) -> AsyncMock:
+    browser = AsyncMock(spec=HeadlessBrowserClient)
+    browser.fetch_rendered_html = AsyncMock(return_value=rendered_html)
+    return browser
+
+
+async def test_husk_outranks_prominent_described_company(db: AsyncSession) -> None:
+    """A shown, description-less company sorts ahead of a far more prominent
+    already-described one: a bounded run spends its slots on rescues before
+    routine refetches."""
+    described = _make_company(
+        name="BigDescribed Inc.",
+        slug="husk-prio-described",
+        website="https://husk-prio-described.com",
+        latest_round_amount=Decimal("500000000"),  # $500M — would win on raise
+        description_short="Already has a description.",
+    )
+    husk = _make_company(
+        name="SmallHusk Inc.",
+        slug="husk-prio-husk",
+        website="https://husk-prio-husk.com",
+        latest_round_amount=Decimal("1000000"),  # $1M
+        description_short=None,
+    )
+    db.add_all([described, husk])
+    await db.flush()
+    await db.commit()
+
+    summary = await run_scrape_homepages(db, MockHomepageClient(), limit=1)
+
+    assert summary.companies_seen == 1
+    husk_pages = (
+        await db.execute(select(RawPage).where(RawPage.company_id == husk.id))
+    ).scalars().all()
+    described_pages = (
+        await db.execute(select(RawPage).where(RawPage.company_id == described.id))
+    ).scalars().all()
+    assert len(husk_pages) == 1
+    assert described_pages == []
+    await db.refresh(described)
+    assert described.last_scrape_attempt_at is None  # never attempted this run
+
+
+async def test_husks_order_by_prominence_within_the_rescue_tier(
+    db: AsyncSession,
+) -> None:
+    """Within the husk tier the standing prominence order still applies."""
+    big_husk = _make_company(
+        name="BigHusk Inc.",
+        slug="husk-tier-big",
+        website="https://husk-tier-big.com",
+        latest_round_amount=Decimal("200000000"),
+    )
+    small_husk = _make_company(
+        name="SmallerHusk Inc.",
+        slug="husk-tier-small",
+        website="https://husk-tier-small.com",
+        latest_round_amount=Decimal("2000000"),
+    )
+    db.add_all([small_husk, big_husk])
+    await db.flush()
+    await db.commit()
+
+    summary = await run_scrape_homepages(db, MockHomepageClient(), limit=1)
+
+    assert summary.companies_seen == 1
+    big_pages = (
+        await db.execute(select(RawPage).where(RawPage.company_id == big_husk.id))
+    ).scalars().all()
+    assert len(big_pages) == 1
+    await db.refresh(small_husk)
+    assert small_husk.last_scrape_attempt_at is None
+
+
+async def test_husk_refetches_on_rescue_cycle(db: AsyncSession) -> None:
+    """A husk with 10-day-old pages re-enters the selection under the default
+    7-day rescue window even though the standing 90-day window hasn't elapsed."""
+    husk = _make_company(
+        slug="husk-rescue-cycle", website="https://husk-rescue-cycle.com"
+    )
+    db.add(husk)
+    await db.flush()
+    await db.commit()
+
+    client = MockHomepageClient()
+    s1 = await run_scrape_homepages(db, client)
+    assert s1.pages_fetched == 1
+
+    ten_days_ago = datetime.now(tz=UTC) - timedelta(days=10)
+    await db.execute(
+        update(RawPage)
+        .where(RawPage.company_id == husk.id)
+        .values(fetched_at=ten_days_ago)
+    )
+    await db.commit()
+
+    s2 = await run_scrape_homepages(db, client, refetch_after_days=90)
+    assert s2.companies_seen == 1
+    assert s2.pages_fetched >= 1
+
+
+async def test_described_company_waits_out_the_full_window(
+    db: AsyncSession,
+) -> None:
+    """The rescue cycle applies ONLY to description-less companies: a described
+    company with 10-day-old pages stays on the 90-day cadence."""
+    described = _make_company(
+        slug="husk-cycle-described",
+        website="https://husk-cycle-described.com",
+        description_short="Described already.",
+    )
+    db.add(described)
+    await db.flush()
+    await db.commit()
+
+    client = MockHomepageClient()
+    s1 = await run_scrape_homepages(db, client)
+    assert s1.pages_fetched == 1
+
+    ten_days_ago = datetime.now(tz=UTC) - timedelta(days=10)
+    await db.execute(
+        update(RawPage)
+        .where(RawPage.company_id == described.id)
+        .values(fetched_at=ten_days_ago)
+    )
+    await db.commit()
+
+    s2 = await run_scrape_homepages(db, client, refetch_after_days=90)
+    assert s2.companies_seen == 0
+
+
+async def test_husk_with_fresh_pages_is_not_hammered(db: AsyncSession) -> None:
+    """The rescue cycle is bounded: a husk scraped moments ago is NOT
+    re-selected — at most one scrape set per rescue window."""
+    husk = _make_company(
+        slug="husk-rescue-bounded", website="https://husk-rescue-bounded.com"
+    )
+    db.add(husk)
+    await db.flush()
+    await db.commit()
+
+    client = MockHomepageClient()
+    s1 = await run_scrape_homepages(db, client)
+    assert s1.pages_fetched == 1
+
+    s2 = await run_scrape_homepages(db, client)
+    assert s2.companies_seen == 0
+
+
+async def test_forced_render_rescues_spa_shell_husk(db: AsyncSession) -> None:
+    """Regression (the Perplexity shape): a husk whose static fetch succeeds
+    (HTTP 200) with dead-zone-thin visible text now stores the headless-rendered
+    text instead of the shell."""
+    husk = _make_company(
+        name="Perplexity-Shaped Inc.",
+        slug="husk-forced-render",
+        website="https://husk-forced-render.com",
+    )
+    db.add(husk)
+    await db.flush()
+    await db.commit()
+
+    browser = _mock_browser()
+    summary = await run_scrape_homepages(
+        db, DeadZoneShellClient(), browser_client=browser
+    )
+
+    assert summary.pages_via_browser_fallback == 1
+    browser.fetch_rendered_html.assert_awaited()
+    pages = (
+        await db.execute(select(RawPage).where(RawPage.company_id == husk.id))
+    ).scalars().all()
+    assert len(pages) == 1
+    # The stored content is the extracted RENDERED text, not the shell chips,
+    # and it is long enough to clear enrich's judge + describe input gates.
+    assert "answer engine that searches the live web" in pages[0].content
+    assert len(pages[0].content) >= 700
+
+
+async def test_described_company_keeps_dead_zone_static_content(
+    db: AsyncSession,
+) -> None:
+    """A described company with the same dead-zone static text does NOT pay for
+    a render — the raised threshold applies only to husks."""
+    described = _make_company(
+        slug="husk-render-described",
+        website="https://husk-render-described.com",
+        description_short="Described already.",
+    )
+    db.add(described)
+    await db.flush()
+    await db.commit()
+
+    browser = _mock_browser()
+    summary = await run_scrape_homepages(
+        db, DeadZoneShellClient(), browser_client=browser
+    )
+
+    assert summary.pages_via_browser_fallback == 0
+    browser.fetch_rendered_html.assert_not_called()
+    pages = (
+        await db.execute(select(RawPage).where(RawPage.company_id == described.id))
+    ).scalars().all()
+    assert len(pages) == 1
+    assert "answer engine that searches the live web" not in pages[0].content
+
+
+async def test_rescued_husk_is_picked_up_by_enrich(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """End-to-end: after the forced render stores rich text, the UNCHANGED
+    enrich selection (description_short IS NULL + a >=200-char page) picks the
+    husk up on its next run and writes both descriptions."""
+    from nous.llm.prompts.company_description import CompanyDescription
+    from nous.llm.prompts.company_description_long import CompanyLongDescription
+    from nous.pipeline.enrich_companies import run_enrich_companies
+
+    husk = _make_company(
+        name="RescuedHusk Inc.",
+        slug="husk-enrich-pickup",
+        website="https://husk-enrich-pickup.com",
+    )
+    db.add(husk)
+    await db.flush()
+    await db.commit()
+
+    scrape_summary = await run_scrape_homepages(
+        db, DeadZoneShellClient(), browser_client=_mock_browser()
+    )
+    assert scrape_summary.pages_via_browser_fallback == 1
+
+    canned_judge = CompanyDescription(
+        description_short="An AI answer engine with cited answers.",
+        primary_category="ai search",
+        tags=["ai", "search"],
+        website_state="ok",
+    )
+    canned_long = CompanyLongDescription(
+        description_long="Paragraph one.\n\nParagraph two."
+    )
+
+    async def fake_complete_json(prompt: str, schema: type, **kwargs: object) -> object:
+        if schema is CompanyDescription:
+            return canned_judge
+        assert schema is CompanyLongDescription, f"unexpected schema {schema}"
+        return canned_long
+
+    monkeypatch.setattr(
+        "nous.pipeline.enrich_companies.complete_json", fake_complete_json
+    )
+
+    enrich_summary = await run_enrich_companies(db)
+
+    assert enrich_summary.companies_enriched == 1
+    assert enrich_summary.descriptions_written == 1
+    await db.refresh(husk)
+    assert husk.description_short == "An AI answer engine with cited answers."
+    assert husk.description_long == "Paragraph one.\n\nParagraph two."

@@ -35,7 +35,6 @@ obtained for the in-flight company are still committed).
 from __future__ import annotations
 
 import logging
-import re
 from datetime import UTC, datetime, timedelta
 from urllib.parse import urlparse
 
@@ -69,6 +68,7 @@ from nous.llm.prompts.company_description_long import (
     build_prompt as build_long_description_prompt,
 )
 from nous.util.industry import normalize_industry
+from nous.util.tags import canonicalize_tags
 from nous.util.text import extract_visible_text, truncate_to_chars
 
 logger = logging.getLogger(__name__)
@@ -82,12 +82,6 @@ _MIN_TEXT_CHARS = 200
 # page renders the short description alone). Distinct from _MIN_TEXT_CHARS:
 # 200–700-char sites still get judged + short-described.
 _MIN_DESCRIBE_CHARS = 700
-
-
-def _normalize_tag(tag: str) -> str:
-    """Lowercase + replace whitespace runs with hyphens."""
-    tag = tag.lower().strip()
-    return re.sub(r"\s+", "-", tag)
 
 
 # ---------------------------------------------------------------------------
@@ -430,8 +424,10 @@ async def run_enrich_companies(
             summary.skipped_bad_website += 1
             continue
 
-        # Normalize tags: lowercase + hyphenated.
-        normalized_tags = [_normalize_tag(t) for t in description.tags if t.strip()]
+        # Normalize tags: lowercase + hyphenated + canonical-alias map
+        # (near-synonyms collapse onto the committed vocabulary; unknown tags
+        # pass through — see util/tags.py). Deduped, order-preserving.
+        normalized_tags = canonicalize_tags(description.tags)
 
         company.description_short = description.description_short
         company.primary_category = description.primary_category
