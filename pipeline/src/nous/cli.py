@@ -1863,6 +1863,31 @@ def unexclude_company(slug: str) -> None:
     asyncio.run(_run())
 
 
+@cli.command("inspect-company")
+@click.argument("slug")
+def inspect_company(slug: str) -> None:
+    """Read-only: dump a company's husk-relevant state (scrape/enrich) by slug.
+
+    Prints the stored raw-page text lengths, description fields, scrape/enrich
+    timestamps, failure counter, and prompt-version stamps as JSON — enough to
+    tell whether a husk is an honest thin-site null, a failing scrape, or a
+    stalled re-enrichment. Writes nothing.
+
+    Example: inspect-company perplexity
+    """
+    import asyncio
+
+    from nous.db.session import AsyncSessionLocal
+    from nous.pipeline.inspect_company import run_inspect_company
+
+    async def _run() -> None:
+        async with AsyncSessionLocal() as session:
+            result = await run_inspect_company(session, slug=slug)
+            click.echo(result.model_dump_json(indent=2))
+
+    asyncio.run(_run())
+
+
 @cli.command("eval-prompts")
 @click.option(
     "--record",
