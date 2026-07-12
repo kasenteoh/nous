@@ -48,6 +48,14 @@ failures (robots block, 404, network) surface as recorded *errors* here
 rather than being swallowed into ``[]`` the way the ingest-path fetchers
 deliberately do.
 
+GitHub trending
+---------------
+The sweep also probes the GitHub trending page (the discover-github-trending
+discovery source) under the ``trending:github`` key, counting parsed repo
+cards against a floor of 0 — its fetcher maps failures to ``[]`` like the
+feed adapters, so this probe is where a dead page or selector-breaking
+redesign surfaces.
+
 This stage is **read-only**: it performs network fetches and writes exactly one
 ``pipeline_runs`` audit row, nothing else.  It is **resilient**: each adapter is
 isolated, so one raising adapter is recorded as a failed/zero-count entry and
@@ -72,6 +80,7 @@ from pydantic import BaseModel
 from nous.observability import write_step_summary
 from nous.sources.crunchbase_news import CB_NEWS_FEED
 from nous.sources.geekwire import GEEKWIRE_FUNDING_FEED
+from nous.sources.github_trending import GITHUB_TRENDING_URL, parse_trending_repos
 from nous.sources.homepage import HomepageClient
 from nous.sources.news import NewsClient
 from nous.sources.prnewswire import PRNEWSWIRE_VC_FEED
@@ -100,6 +109,15 @@ NEWS_FEEDS: dict[str, str] = {
 # unfiltered, so a live feed always clears this; zero items over
 # NEWS_PROBE_LOOKBACK_DAYS means the feed is dead, frozen, or no longer RSS.
 DEFAULT_NEWS_FLOOR = 0
+
+# GitHub-trending probe key + floor. The discover-github-trending stage rides
+# the weekly discovery path and its fetcher deliberately maps failures to []
+# (like the feed adapters), so this probe is what surfaces a dead page or a
+# selector-breaking redesign. Floor 0: healthy means *any* repo card parsed —
+# trending windows vary, and the page normally lists ~25 cards, so a parse of
+# zero is a structural break, not churn.
+GITHUB_TRENDING_KEY = "trending:github"
+DEFAULT_TRENDING_FLOOR = 0
 
 # Wide probe window so a slow publishing fortnight cannot trip the canary on
 # its own (the standing ingest lookback is 14 days).
@@ -284,6 +302,34 @@ async def _probe_news_feed(
     return health
 
 
+async def _probe_github_trending(client: NewsClient, url: str) -> AdapterHealth:
+    """Fetch the trending page raw and count parsed repo cards.
+
+    Mirrors :func:`_probe_news_feed`: the URL is fetched directly (not through
+    the stage's fetcher, which maps transport failures to ``[]``) so a robots
+    block, HTTP error, or network failure is recorded as the error it is, and
+    the count reflects whether the parser still recognizes the page layout.
+    """
+    floor = ADAPTER_FLOORS.get(GITHUB_TRENDING_KEY, DEFAULT_TRENDING_FLOOR)
+    try:
+        html = await client.fetch_text(url)
+        count = len(parse_trending_repos(html))
+    except Exception as exc:  # noqa: BLE001 — per-probe isolation is the point
+        logger.exception("adapter-health: github-trending probe failed")
+        return AdapterHealth(
+            firm=GITHUB_TRENDING_KEY, count=0, floor=floor, error=repr(exc)
+        )
+
+    health = AdapterHealth(firm=GITHUB_TRENDING_KEY, count=count, floor=floor)
+    logger.info(
+        "adapter-health: trending=github count=%d floor=%d healthy=%s",
+        count,
+        floor,
+        health.healthy,
+    )
+    return health
+
+
 async def run_adapter_health(
     client: HomepageClient,
     *,
@@ -291,6 +337,7 @@ async def run_adapter_health(
     global_floor: int = DEFAULT_GLOBAL_FLOOR,
     news_client: NewsClient | None = None,
     news_feeds: dict[str, str] | None = None,
+    github_trending_url: str | None = None,
 ) -> AdapterHealthReport:
     """Probe every adapter (and news feed) and return an :class:`AdapterHealthReport`.
 
@@ -307,6 +354,11 @@ async def run_adapter_health(
         news_feeds: slug -> feed-URL registry to probe when ``news_client``
             is given; defaults to :data:`NEWS_FEEDS`.  Results are keyed
             ``news:<slug>``.
+        github_trending_url: Trending-page URL to probe (through
+            ``news_client``) under the :data:`GITHUB_TRENDING_KEY` key.
+            ``None`` (the default) skips the probe — feed-only callers and
+            existing tests are unaffected; the production driver passes
+            :data:`~nous.sources.github_trending.GITHUB_TRENDING_URL`.
 
     Adapters are probed sequentially.  Each adapter already throttles its own
     HTTP (the shared per-domain 1 req/s budget in :class:`HomepageClient`), and
@@ -326,6 +378,12 @@ async def run_adapter_health(
         for slug in sorted(feed_registry):
             report.adapters.append(
                 await _probe_news_feed(slug, feed_registry[slug], news_client)
+            )
+        if github_trending_url is not None:
+            # The GitHub-trending discovery source rides the same client;
+            # probed last so the ordering stays firms → news:* → trending:*.
+            report.adapters.append(
+                await _probe_github_trending(news_client, github_trending_url)
             )
     return report
 
@@ -443,7 +501,10 @@ async def adapter_health_main(
         ) as news_client,
     ):
         report = await run_adapter_health(
-            client, global_floor=global_floor, news_client=news_client
+            client,
+            global_floor=global_floor,
+            news_client=news_client,
+            github_trending_url=GITHUB_TRENDING_URL,
         )
 
     summary = build_summary(report)

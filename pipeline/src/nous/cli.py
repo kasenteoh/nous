@@ -399,6 +399,83 @@ def refresh_vc_portfolios_cmd(
     asyncio.run(_run())
 
 
+@cli.command("discover-github-trending")
+@click.option(
+    "--limit",
+    type=int,
+    default=None,
+    help=(
+        "Maximum LLM judgments this run (spend bound). Default: "
+        "MAX_LLM_JUDGMENTS_PER_RUN (25)."
+    ),
+)
+@click.option(
+    "--similarity-threshold",
+    type=float,
+    default=None,
+    help=(
+        "pg_trgm similarity threshold for the existing-company skip and the "
+        "auto-create path. Default: Settings.COMPANY_FUZZY_MATCH_THRESHOLD."
+    ),
+)
+def discover_github_trending_cmd(
+    limit: int | None, similarity_threshold: float | None
+) -> None:
+    """Discover companies from GitHub's trending page (LLM-gated)."""
+    import asyncio
+    from datetime import UTC, datetime
+
+    from nous.config import Settings
+    from nous.db.session import AsyncSessionLocal
+    from nous.observability import emit_run_telemetry, record_pipeline_run
+    from nous.pipeline.discover_github_trending import (
+        MAX_LLM_JUDGMENTS_PER_RUN,
+        run_discover_github_trending,
+    )
+    from nous.sources.news import NewsClient
+
+    settings = Settings()
+    threshold = (
+        similarity_threshold
+        if similarity_threshold is not None
+        else settings.COMPANY_FUZZY_MATCH_THRESHOLD
+    )
+
+    async def _run() -> None:
+        started = datetime.now(UTC)
+        try:
+            async with (
+                NewsClient(
+                    settings.SEC_USER_AGENT,
+                    requests_per_second_per_domain=1.0,
+                ) as news_client,
+                AsyncSessionLocal() as session,
+            ):
+                summary = await run_discover_github_trending(
+                    session,
+                    news_client,
+                    github_token=settings.GITHUB_TOKEN,
+                    limit=limit if limit is not None else MAX_LLM_JUDGMENTS_PER_RUN,
+                    similarity_threshold=threshold,
+                )
+                click.echo(summary.model_dump_json(indent=2))
+            await record_pipeline_run(
+                "discover-github-trending",
+                started_at=started,
+                inputs_seen=summary.owners_seen,
+                rows_written=summary.companies_created,
+                summary=summary,
+                # No flag_empty: a run where every trending owner is already
+                # known (or nothing clears the LLM gate) writes zero rows and
+                # is HEALTHY — trending windows vary. The adapter-health probe
+                # covers the fetch/parse-collapse failure mode instead.
+            )
+        finally:
+            emit_run_telemetry("discover-github-trending")
+
+    asyncio.run(_run())
+
+
 @cli.command("ingest-news")
 @click.option(
     "--lookback-days",
@@ -1098,14 +1175,16 @@ def snapshot_companies(week: str | None) -> None:
 def normalize_taxonomy_cmd() -> None:
     """Recanonicalize companies' free-text taxonomy in place (zero LLM).
 
-    Applies nous.util.category.normalize_category to primary_category AND
-    nous.util.industry.normalize_industry to industry_group, collapsing the
-    historical free-text spelling sprawl (ad-tech / adtech / advertising
-    technology; biotech / biotech tooling; healthcare / healthtech /
-    healthcare AI) onto the canonical sets. Backfilling industry_group here
-    heals the browse dropdown without waiting on re-enrichment. Set-based per
-    distinct value and idempotent: a second run finds nothing to change. No
-    schema change (string update only).
+    Applies nous.util.category.normalize_category to primary_category,
+    nous.util.industry.normalize_industry to industry_group, AND
+    nous.util.tags.canonicalize_tags to tags, collapsing the historical
+    free-text spelling sprawl (ad-tech / adtech / advertising technology;
+    biotech / biotech tooling; healthcare / healthtech / healthcare AI;
+    ci-observability / ci-cd) onto the canonical sets. Backfilling here heals
+    the browse dropdown and the /tag/* long tail without waiting on
+    re-enrichment. Set-based per distinct value (tags: per distinct array)
+    and idempotent: a second run finds nothing to change. No schema change
+    (content update only).
     """
     import asyncio
     from datetime import UTC, datetime

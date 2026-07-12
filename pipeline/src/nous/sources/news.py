@@ -153,10 +153,37 @@ class ResolvedArticle(BaseModel):
     body: str  # cleaned visible article text (>= MIN_BODY_CHARS)
 
 
+def _compile_keyword_pattern(keywords: tuple[str, ...]) -> re.Pattern[str]:
+    """Compile ``keywords`` into a single word-boundary alternation regex.
+
+    Substring matching produced a live false-positive class (W-D): an LLM-evals
+    piece was kept because "e**valuation**s" contains "valuation" — likewise
+    "praised"/"appraises" contain "raised"/"raises", "encloses" contains
+    "closes", and "misled by" contains "led by". Each keyword therefore matches
+    only between ``\\b`` word boundaries. Multi-word keywords ("series a",
+    "led by") tolerate any run of whitespace OR hyphens between their words, so
+    "Series-A round" and a line-wrapped "led\\nby" still hit.
+
+    Keywords are lowercase by convention (the matcher lowercases its input);
+    all begin and end in word characters, which ``\\b`` relies on.
+    """
+    alternatives = (
+        r"[\s\-]+".join(re.escape(word) for word in keyword.split())
+        for keyword in keywords
+    )
+    return re.compile(r"\b(?:" + "|".join(alternatives) + r")\b")
+
+
+_FUNDING_KEYWORD_RE = _compile_keyword_pattern(FUNDING_KEYWORDS)
+
+
 def _matches_funding_keyword(text: str) -> bool:
-    """Case-insensitive match against FUNDING_KEYWORDS."""
-    lowered = text.lower()
-    return any(kw in lowered for kw in FUNDING_KEYWORDS)
+    """Case-insensitive whole-word match against FUNDING_KEYWORDS.
+
+    Whole-word (not substring): see :func:`_compile_keyword_pattern` for the
+    false-positive class this guards against.
+    """
+    return _FUNDING_KEYWORD_RE.search(text.lower()) is not None
 
 
 # How much of a resolved/fetched article body we scan for the company name when

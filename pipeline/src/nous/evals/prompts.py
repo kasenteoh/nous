@@ -140,14 +140,16 @@ def score_company_description(cases: Sequence[CaseEvaluation]) -> PromptReport:
     - grounding_mean / grounding_min — no-fabrication proxy: proper nouns
       and numbers in description_short must appear in the input text.
 
-    Informational (not gated): tags_* — normalized-tag set overlap. Tags
+    Informational (not gated): tags_* — canonicalized-tag set overlap
+    (both sides pass through the runtime alias map in util/tags.py, so
+    near-synonyms like ci-observability/ci-cd count as agreement). Tags
     were briefly gated on exact-set F1, but the first live re-recording
     showed DeepSeek picks a systematically different (equally reasonable)
     tag vocabulary than a fixture author — exact overlap ran ~0.3 against a
     0.98 simulated floor. Tag quality is subjective and vocabulary-sensitive,
     so the metric is reported for visibility but does not gate.
     """
-    from nous.pipeline.enrich_companies import _normalize_tag  # runtime tag normalizer
+    from nous.util.tags import canonicalize_tag  # runtime tag normalizer + alias map
 
     issues: dict[str, list[str]] = {}
     parse = Accuracy()
@@ -236,8 +238,8 @@ def score_company_description(cases: Sequence[CaseEvaluation]) -> PromptReport:
                 f" extra {sorted(recorded_people - expected_people)}",
             )
 
-        expected_tags = {_normalize_tag(t) for t in expected.tags if t.strip()}
-        recorded_tags = {_normalize_tag(t) for t in recorded.tags if t.strip()}
+        expected_tags = {canonicalize_tag(t) for t in expected.tags if t.strip()}
+        recorded_tags = {canonicalize_tag(t) for t in recorded.tags if t.strip()}
         tags.add_sets(expected_tags, recorded_tags)
         if expected_tags != recorded_tags:
             _issue(

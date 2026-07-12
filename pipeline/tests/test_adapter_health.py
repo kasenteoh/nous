@@ -18,6 +18,8 @@ from nous.pipeline.adapter_health import (
     ADAPTER_FLOORS,
     DEFAULT_GLOBAL_FLOOR,
     DEFAULT_NEWS_FLOOR,
+    DEFAULT_TRENDING_FLOOR,
+    GITHUB_TRENDING_KEY,
     NEWS_FEEDS,
     AdapterHealth,
     AdapterHealthReport,
@@ -443,4 +445,93 @@ async def test_mixed_sweep_reports_firms_and_feeds_together() -> None:
     summary = build_summary(report)
     assert summary.counts == {"acme": 20, "news:acme": 2}
     assert summary.adapters_checked == 2
+    assert summary.adapters_unhealthy == 0
+
+
+# ---------------------------------------------------------------------------
+# GitHub-trending probe (trending:github)
+# ---------------------------------------------------------------------------
+
+_TRENDING_HTML = """
+<html><body><main>
+  <article class="Box-row">
+    <h2 class="h3 lh-condensed"><a href="/acme/widget">acme / widget</a></h2>
+    <p>Widget engine</p>
+  </article>
+  <article class="Box-row">
+    <h2 class="h3 lh-condensed"><a href="/foolabs/toolkit">foolabs / toolkit</a></h2>
+    <p>A toolkit</p>
+  </article>
+</main></body></html>
+"""
+
+_TRENDING_EMPTY_HTML = "<html><body><main></main></body></html>"
+
+_TRENDING_TEST_URL = "https://trending.example.com/trending"
+
+
+async def test_github_trending_probed_and_classified() -> None:
+    """The trending probe reports under trending:github: parsed cards > 0
+    healthy, an unrecognizable page (0 cards) trips, a fetch error records."""
+    news_client = StubNewsClient(
+        {
+            "https://ok.example.com/trending": _TRENDING_HTML,
+            "https://dead.example.com/trending": _TRENDING_EMPTY_HTML,
+            "https://blocked.example.com/trending": RobotsBlockedError(
+                "robots.txt disallows: https://blocked.example.com/trending"
+            ),
+        }
+    )
+
+    for url, healthy, count, has_error in (
+        ("https://ok.example.com/trending", True, 2, False),
+        ("https://dead.example.com/trending", False, 0, False),
+        ("https://blocked.example.com/trending", False, 0, True),
+    ):
+        report = await run_adapter_health(
+            _stub_client(),
+            adapters={},
+            news_client=news_client,
+            news_feeds={},
+            github_trending_url=url,
+        )
+        assert [a.firm for a in report.adapters] == [GITHUB_TRENDING_KEY]
+        probe = report.adapters[0]
+        assert probe.healthy is healthy
+        assert probe.count == count
+        assert probe.floor == DEFAULT_TRENDING_FLOOR
+        assert (probe.error is not None) is has_error
+
+
+async def test_github_trending_skipped_without_url() -> None:
+    """No github_trending_url (the default) means no trending probe —
+    feed-only callers and existing tests see identical behavior."""
+    news_client = StubNewsClient({"https://ok.example.com/feed": _ALIVE_FEED_XML})
+    report = await run_adapter_health(
+        _stub_client(),
+        adapters={},
+        news_client=news_client,
+        news_feeds={"okfeed": "https://ok.example.com/feed"},
+    )
+    assert [a.firm for a in report.adapters] == ["news:okfeed"]
+
+
+async def test_full_sweep_orders_firms_feeds_then_trending() -> None:
+    """Firms, feeds, and the trending probe coexist with disjoint keys."""
+    news_client = StubNewsClient(
+        {
+            "https://acme.example.com/feed": _ALIVE_FEED_XML,
+            _TRENDING_TEST_URL: _TRENDING_HTML,
+        }
+    )
+    report = await run_adapter_health(
+        _stub_client(),
+        adapters={"acme": FakeAdapter(firm="acme", count=20)},
+        news_client=news_client,
+        news_feeds={"acme": "https://acme.example.com/feed"},
+        github_trending_url=_TRENDING_TEST_URL,
+    )
+    summary = build_summary(report)
+    assert summary.counts == {"acme": 20, "news:acme": 2, GITHUB_TRENDING_KEY: 2}
+    assert summary.adapters_checked == 3
     assert summary.adapters_unhealthy == 0
