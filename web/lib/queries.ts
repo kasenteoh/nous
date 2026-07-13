@@ -2182,8 +2182,12 @@ export async function getAlsoBackedBy(
  * overwhelming majority apply to a single company, so per-tag pages were thin,
  * near-duplicate SEO doorways. Requiring ≥3 companies keeps only tags that
  * actually group the catalog. Raise/lower in one place here.
+ *
+ * Exported so the /tag/[tag] route can noindex any tag page below this same bar
+ * — keeping page-level indexability in lockstep with sitemap inclusion (a tag
+ * too thin for the sitemap is also told noindex, and vice versa).
  */
-const MIN_TAG_COMPANY_COUNT = 3;
+export const MIN_TAG_COMPANY_COUNT = 3;
 
 /**
  * Non-null tag values that apply to at least {@link MIN_TAG_COMPANY_COUNT}

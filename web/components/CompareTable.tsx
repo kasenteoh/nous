@@ -11,6 +11,7 @@ import {
   formatEmployeeRange,
   formatLocation,
   formatUsd,
+  formatUsdExact,
 } from "@/lib/format";
 import type { CompareCompany } from "@/lib/types";
 
@@ -93,7 +94,10 @@ export function CompareTable({ companies }: { companies: CompareCompany[] }) {
             companies={companies}
             render={(c) =>
               c.totalRaised != null ? (
-                <span className="font-mono text-money">
+                <span
+                  className="font-mono text-money"
+                  title={formatUsdExact(c.totalRaised)}
+                >
                   {formatUsd(c.totalRaised)}
                 </span>
               ) : (
@@ -111,7 +115,10 @@ export function CompareTable({ companies }: { companies: CompareCompany[] }) {
                   {c.latestRoundAmount != null && (
                     <>
                       {" · "}
-                      <span className="font-mono text-money">
+                      <span
+                        className="font-mono text-money"
+                        title={formatUsdExact(c.latestRoundAmount)}
+                      >
                         {formatUsd(c.latestRoundAmount)}
                       </span>
                     </>

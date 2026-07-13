@@ -5,7 +5,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { getCoInvestors, getInvestorBySlug } from "@/lib/queries";
-import { formatDate, formatUsd } from "@/lib/format";
+import { formatDate, formatUsd, formatUsdExact } from "@/lib/format";
 import { CompanyCard } from "@/components/CompanyCard";
 
 type Props = {
@@ -305,7 +305,10 @@ export default async function InvestorPage({ params, searchParams }: Props) {
                     </td>
                     <td className="py-3 pr-6 text-right font-mono">
                       {round.amount_raised != null ? (
-                        <span className="text-money">
+                        <span
+                          className="text-money"
+                          title={formatUsdExact(round.amount_raised)}
+                        >
                           {formatUsd(round.amount_raised)}
                         </span>
                       ) : (
@@ -350,9 +353,15 @@ export default async function InvestorPage({ params, searchParams }: Props) {
                     {round.companyName}
                   </Link>
                   {round.round_type ? ` ${round.round_type}` : ""}
-                  {round.amount_raised != null
-                    ? ` (${formatUsd(round.amount_raised)})`
-                    : ""}
+                  {round.amount_raised != null && (
+                    <>
+                      {" ("}
+                      <span title={formatUsdExact(round.amount_raised)}>
+                        {formatUsd(round.amount_raised)}
+                      </span>
+                      {")"}
+                    </>
+                  )}
                 </span>
               </li>
             ))}

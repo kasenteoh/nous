@@ -26,6 +26,7 @@ import {
   formatUsdExact,
 } from "@/lib/format";
 import { computeTotalRaised } from "@/lib/funding";
+import { repoIssueUrl, siteOrigin } from "@/lib/site";
 import { CompanyLogo } from "@/components/CompanyCard";
 import { JsonLd } from "@/components/JsonLd";
 import { Markdown } from "@/components/Markdown";
@@ -677,6 +678,37 @@ export default async function CompanyPage({ params }: Props) {
 
       {/* ── Sources (D1: consolidated, labeled, at the bottom) ─────────── */}
       <Sources citations={citations} />
+
+      {/* ── Report incorrect data (company-scoped) ─────────────────────────
+          The repo is public, so this prefilled GitHub-issue link resolves for
+          visitors. Company-scoped: the issue title carries the name + slug and
+          the body pre-fills this page's canonical URL plus a what's-wrong /
+          correct-value / source skeleton. Additive to the site-wide footer
+          "Report it" link — kept quiet (small, muted) beneath the Sources. */}
+      <p className="text-xs text-ink-faint">
+        Spotted something wrong on this page?{" "}
+        <a
+          href={repoIssueUrl(
+            `Data correction: ${company.name} (${company.slug})`,
+            [
+              `Company: ${company.name}`,
+              `Page: ${siteOrigin()}/c/${company.slug}`,
+              "",
+              "What's incorrect:",
+              "",
+              "Correct value:",
+              "",
+              "Source (URL):",
+              "",
+            ].join("\n"),
+          )}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="underline underline-offset-2 decoration-ink-faint hover:text-ink"
+        >
+          Report incorrect data
+        </a>
+      </p>
     </main>
   );
 }
