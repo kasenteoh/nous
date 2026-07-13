@@ -1,0 +1,91 @@
+name: resolve-website-fallback
+
+# Manual lever for the husk website re-mining stage, against the production DB.
+# No local environment holds DATABASE_URL — Actions secrets are the only place
+# this can run against real husks. Two uses:
+#   1. Dry run (default): measure per-source yield + cross-source conflicts on a
+#      bounded slice before trusting the apply path. Writes nothing.
+#   2. Backfill: a larger bounded apply run to drain the ~890-husk backlog faster
+#      than the 3h cron's small per-run --limit.
+# The recurring bounded run rides pipeline.yml; this is the on-demand knob.
+#
+# Example (30-company dry run):
+#   gh workflow run resolve-website-fallback.yml -f dry_run=true -f limit=30
+# Example (apply 100, both sources, 10-min budget):
+#   gh workflow run resolve-website-fallback.yml -f dry_run=false -f limit=100 \
+#     -f max_runtime_minutes=10
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Dry run: run every source and print the yield table without writing."
+        required: false
+        type: boolean
+        default: true
+      limit:
+        description: "Max website-less husks to process."
+        required: false
+        type: string
+        default: "30"
+      max_runtime_minutes:
+        description: "Wall-clock budget (minutes). Blank = no budget (bounded only by --limit)."
+        required: false
+        type: string
+      sources:
+        description: "Comma-separated source subset in priority order (blank = all)."
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+# Mutates the companies table on an apply run — serialize with every other
+# DB-writing workflow (the cron, discovery, ops).
+concurrency:
+  group: nous-pipeline-db
+  cancel-in-progress: false
+
+jobs:
+  resolve-website-fallback:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: pipeline
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      # The stage builds Wikidata/News clients, which require a contact-email
+      # User-Agent (empty → ValueError). Same requirement as ops.yml.
+      SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39 # v3
+
+      - name: Install dependencies
+        run: uv sync
+
+      - name: Run resolve-website-fallback
+        env:
+          OP_DRY_RUN: ${{ inputs.dry_run }}
+          OP_LIMIT: ${{ inputs.limit }}
+          OP_MAX_RUNTIME: ${{ inputs.max_runtime_minutes }}
+          OP_SOURCES: ${{ inputs.sources }}
+        # Inputs pass through env vars (never string-interpolated into the
+        # script). The stage writes its markdown yield table to
+        # $GITHUB_STEP_SUMMARY itself (observability.write_step_summary); the
+        # JSON summary lands in the run log. pipefail so a failing `uv run`
+        # surfaces as a failed step.
+        run: |
+          set -o pipefail
+          ARGS=(--limit "${OP_LIMIT:-30}")
+          if [ "$OP_DRY_RUN" = "true" ]; then ARGS+=(--dry-run); fi
+          if [ -n "$OP_MAX_RUNTIME" ]; then ARGS+=(--max-runtime-minutes "$OP_MAX_RUNTIME"); fi
+          if [ -n "$OP_SOURCES" ]; then ARGS+=(--sources "$OP_SOURCES"); fi
+          uv run nous resolve-website-fallback "${ARGS[@]}"

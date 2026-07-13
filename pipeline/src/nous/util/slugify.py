@@ -94,6 +94,27 @@ def normalize_name(name: str) -> str:
     return re.sub(r"[^a-z0-9]+", "", cleaned)
 
 
+def name_tokens(name: str) -> frozenset[str]:
+    """Normalized alphanumeric token set for name matching.
+
+    Applies the same suffix-stripping normalization as :func:`normalize_name`
+    per whitespace token, preserving token boundaries so "Perplexity AI" →
+    ``{"perplexity", "ai"}``. Empty tokens are dropped.
+    """
+    return frozenset(t for t in (normalize_name(part) for part in name.split()) if t)
+
+
+def names_token_subset(a: str, b: str) -> bool:
+    """True if one name's token set is a non-empty subset of the other's.
+
+    Admits "Perplexity" ↔ "Perplexity AI" (either direction) while two wholly
+    different names share no coverage. A precision building-block for matching a
+    company against an external label (Wikidata entity, news anchor text).
+    """
+    ta, tb = name_tokens(a), name_tokens(b)
+    return bool(ta) and bool(tb) and (ta <= tb or tb <= ta)
+
+
 def slug_with_disambiguator(base: str, seed: str) -> str:
     """Append a 6-hex-char suffix to a base slug to resolve collisions.
 

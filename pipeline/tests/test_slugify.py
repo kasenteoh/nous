@@ -5,7 +5,13 @@ No database or network access — pure string transformation logic.
 
 from __future__ import annotations
 
-from nous.util.slugify import normalize_name, slug_with_disambiguator, slugify
+from nous.util.slugify import (
+    name_tokens,
+    names_token_subset,
+    normalize_name,
+    slug_with_disambiguator,
+    slugify,
+)
 
 
 class TestSlugify:
@@ -164,3 +170,26 @@ class TestSlugWithDisambiguator:
             result = slug_with_disambiguator("co", cik)
             suffix = result.split("-")[-1]
             assert len(suffix) == 6
+
+
+class TestNameTokens:
+    """Tests for name_tokens() and names_token_subset()."""
+
+    def test_tokens_normalized_and_split(self) -> None:
+        assert name_tokens("Perplexity AI") == frozenset({"perplexity", "ai"})
+        assert name_tokens("Acme, Inc.") == frozenset({"acme"})  # suffix stripped
+        assert name_tokens("") == frozenset()
+
+    def test_subset_matches_either_direction(self) -> None:
+        assert names_token_subset("Perplexity", "Perplexity AI")
+        assert names_token_subset("Perplexity AI", "Perplexity")
+        assert names_token_subset("Mistral AI", "Mistral AI")
+
+    def test_disjoint_names_do_not_match(self) -> None:
+        assert not names_token_subset("Perplexity", "Anthropic")
+        # Partial overlap that is neither subset is not a match.
+        assert not names_token_subset("Acme Robotics", "Acme Health")
+
+    def test_empty_never_matches(self) -> None:
+        assert not names_token_subset("", "Acme")
+        assert not names_token_subset("Acme", "")

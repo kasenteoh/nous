@@ -1334,6 +1334,111 @@ def name_quality_cmd(limit: int | None, dry_run: bool) -> None:
     asyncio.run(_run())
 
 
+@cli.command("resolve-website-fallback")
+@click.option(
+    "--limit",
+    type=int,
+    default=None,
+    help="Maximum number of website-less husks to process (for bounded runs).",
+)
+@click.option(
+    "--refetch-after-days",
+    type=int,
+    default=90,
+    show_default=True,
+    help="Re-attempt companies this stage last checked more than N days ago.",
+)
+@click.option(
+    "--max-runtime-minutes",
+    type=float,
+    default=None,
+    help=(
+        "Wall-clock budget: stop cleanly at the next company boundary once "
+        "exceeded. Remaining companies are picked up by the next run."
+    ),
+)
+@click.option(
+    "--sources",
+    type=str,
+    default=None,
+    help=(
+        "Comma-separated subset of sources to run, in priority order "
+        "(default: all). E.g. 'wikidata' or 'wikidata,news_outbound'."
+    ),
+)
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    default=False,
+    help="Run EVERY source per company and print the yield table without writing.",
+)
+def resolve_website_fallback_cmd(
+    limit: int | None,
+    refetch_after_days: int,
+    max_runtime_minutes: float | None,
+    sources: str | None,
+    dry_run: bool,
+) -> None:
+    """Resolve husk websites by re-mining non-origin sources (no Cloudflare fight).
+
+    The website-less husk cohort can't be scraped (Cloudflare-403 from Actions
+    IPs), so this resolves each site from sources that were never the origin
+    homepage — Wikidata "official website" and outbound links in news articles
+    we already sourced — recording a provenance source per resolved website.
+    Idempotent, self-bounding on ``website IS NULL``. Use ``--dry-run`` to
+    measure per-source yield before an apply run. $0 (both sources are free).
+    """
+    import asyncio
+    from datetime import UTC, datetime
+
+    from nous.config import Settings
+    from nous.db.session import AsyncSessionLocal
+    from nous.observability import record_pipeline_run, write_step_summary
+    from nous.pipeline.resolve_website_fallback import (
+        DEFAULT_SOURCES,
+        render_yield_table,
+        run_resolve_website_fallback,
+    )
+
+    settings = Settings()
+    if sources:
+        selected = tuple(s.strip() for s in sources.split(",") if s.strip())
+        unknown = sorted(set(selected) - set(DEFAULT_SOURCES))
+        if unknown:
+            raise click.BadParameter(
+                f"unknown source(s): {unknown}; valid: {list(DEFAULT_SOURCES)}"
+            )
+    else:
+        selected = DEFAULT_SOURCES
+
+    async def _run() -> None:
+        started = datetime.now(UTC)
+        async with AsyncSessionLocal() as session:
+            summary = await run_resolve_website_fallback(
+                session,
+                user_agent=settings.SEC_USER_AGENT,
+                sources=selected,
+                refetch_after_days=refetch_after_days,
+                limit=limit,
+                max_runtime_minutes=max_runtime_minutes,
+                dry_run=dry_run,
+            )
+        click.echo(summary.model_dump_json(indent=2))
+        # Render the yield table into the CI step summary (no-op locally).
+        write_step_summary(render_yield_table(summary))
+        if not dry_run:
+            await record_pipeline_run(
+                "resolve-website-fallback",
+                started_at=started,
+                inputs_seen=summary.companies_seen,
+                rows_written=summary.resolved,
+                summary=summary,
+                flag_empty=True,
+            )
+
+    asyncio.run(_run())
+
+
 @cli.command("link-competitors")
 @click.option(
     "--limit",
