@@ -258,6 +258,18 @@ jobs:
         continue-on-error: true
         run: uv run nous normalize-taxonomy
 
+      - name: Normalize hq_state
+        id: normalize_hq_state
+        # Canonicalize companies.hq_state to the 2-letter USPS code (zero LLM,
+        # per-row). Self-bounding: selects only US-state rows that differ from
+        # canonical, so once drained it rewrites nothing — safe in the recurring
+        # cron. Heals full-name /location links (routing-safe; the route matches
+        # the code). Bounded by --limit; id'd like normalize-taxonomy so a run
+        # that actually changes data triggers the redeploy below.
+        timeout-minutes: 5
+        continue-on-error: true
+        run: uv run nous normalize-hq-state --limit 500
+
       - name: Repair wrong websites
         id: repair_websites
         if: ${{ inputs.run_repair_websites == true }}
