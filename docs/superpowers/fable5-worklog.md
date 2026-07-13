@@ -557,3 +557,39 @@ SEO growth-engine **slice 2**, on the `0036` momentum RPCs.
   failure and equally easy to mistake a masked one for green.
 - **Verified:** lint + 233 unit tests (+3 `growthToneClass`) + webpack `build`
   (`/trends` static@6h) + `check:bundle` (no leaks) + `test:e2e` (16, +1 smoke).
+
+## PR #167 — `/vs/[a]/[b]` head-to-head compare pages + shared `CompareTable` (merged 2026-07-13)
+
+SEO growth-engine **slice 3**.
+
+- **Surface:** `/vs/[a]/[b]` renders two listed companies side by side via the
+  shared `CompareTable`. **Conservative indexing** (the owner-approved call): a
+  page is indexable ONLY when the two are a **resolved competitor edge AND ≥1
+  side has real funding**; every other pair renders but `noindex,follow`s — the
+  long tail of arbitrary pairs would be thin, near-duplicate doorway pages.
+  Pairs are unordered: both URL orderings render identical content and canonical
+  to the lexicographically-sorted URL. 404 on self-compare or a non-listed side.
+- **`CompareTable`** extracted verbatim from `/compare` (behavior-preserving —
+  reviewer diffed it char-identical); `/compare` + `/vs` both render it.
+- **New code:** `lib/vs.ts` (pure — `canonicalVsPair`, `vsPath`);
+  `lib/queries.ts` `areCompetitorsBySlug` — resolved-edge probe in EITHER
+  direction via a PostgREST `or(and(company_id.eq.A,competitor_company_id.eq.B),
+  and(company_id.eq.B,competitor_company_id.eq.A))` filter. This is the first
+  nested-`and()`-in-`.or()` in the repo — syntax verified against the live
+  supabase docs (context7) before shipping, not from memory. UUIDs are
+  DB-sourced (no injection surface).
+- **Discovery, no pair-sitemap:** internal "Compare X vs Y" links on
+  `/alternatives/[slug]` resolved competitors are the crawl path to the
+  indexable pairs. A full pair-sitemap would be O(edges) huge and mostly
+  noindex; internal links + the noindex gate is the conservative equivalent.
+- **`loadVs` wrapped in React `cache()`** so `generateMetadata` + the page share
+  one fetch per render (the double-fetch the /industry + /themes detail pages
+  still eat — worth retrofitting there later).
+- **Review lane:** independent adversarial pass → APPROVE, 0 critical/high; its
+  one MEDIUM (the double-fetch) fixed via `cache()` above. Verified the
+  excluded-company path is airtight (an excluded side → `<2` listed → 404 before
+  the edge signal is ever used).
+- **Verified:** lint + 237 unit tests (+4 `vs` helpers) + webpack `build` (`/vs`
+  dynamic on-demand, no `generateStaticParams`) + `check:bundle` (no leaks) +
+  `test:e2e` (18, +2 smoke: self-404, unknown-404). Full `statusCheckRollup`
+  all-green (no infra flake this time) before merge.
