@@ -14,6 +14,7 @@ import {
   listAllThemeSlugs,
   listAlternativesCompanySlugs,
   listCanonicalIndustries,
+  listIndustriesWithMapCoords,
 } from "@/lib/queries";
 import { industryToSlug } from "@/lib/industry";
 import { siteOrigin } from "@/lib/site";
@@ -32,16 +33,25 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
     { url: `${origin}/about` },
   ];
 
-  const [companies, investors, tags, states, alternatives, themes, industries] =
-    await Promise.all([
-      listAllCompanySlugs(),
-      listAllInvestorSlugs(),
-      listAllTags(),
-      listAllStates(),
-      listAlternativesCompanySlugs(),
-      listAllThemeSlugs(),
-      listCanonicalIndustries(),
-    ]);
+  const [
+    companies,
+    investors,
+    tags,
+    states,
+    alternatives,
+    themes,
+    industries,
+    mapIndustries,
+  ] = await Promise.all([
+    listAllCompanySlugs(),
+    listAllInvestorSlugs(),
+    listAllTags(),
+    listAllStates(),
+    listAlternativesCompanySlugs(),
+    listAllThemeSlugs(),
+    listCanonicalIndustries(),
+    listIndustriesWithMapCoords(),
+  ]);
 
   const companyEntries: MetadataRoute.Sitemap = companies.map((c) => ({
     url: `${origin}/c/${c.slug}`,
@@ -90,8 +100,22 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
     url: `${origin}/industry/${industryToSlug(i.group)}`,
   }));
 
+  // Per-industry market-map URLs — self-gating: listIndustriesWithMapCoords
+  // returns [] (thus no entries) until companies.map_x/map_y exist on prod, so
+  // an empty map is never listed. Same "don't index empty maps" principle as
+  // the industry block's noindex guard above.
+  const mapEntries: MetadataRoute.Sitemap = mapIndustries.map((group) => ({
+    url: `${origin}/map/${industryToSlug(group)}`,
+  }));
+
+  // Only surface the /map hub once there is at least one map to crawl to —
+  // listing an empty hub pre-coords would be thin content.
+  const mapHub: MetadataRoute.Sitemap =
+    mapIndustries.length > 0 ? [{ url: `${origin}/map` }] : [];
+
   return [
     ...staticEntries,
+    ...mapHub,
     ...companyEntries,
     ...investorEntries,
     ...tagEntries,
@@ -99,5 +123,6 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
     ...alternativesEntries,
     ...themeEntries,
     ...industryEntries,
+    ...mapEntries,
   ];
 }

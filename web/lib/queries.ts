@@ -1011,6 +1011,123 @@ export async function listCanonicalIndustries(): Promise<IndustryCount[]> {
   return [...bySlug.values()];
 }
 
+// ─── Market map (/map/[industry]) ─────────────────────────────────────────────
+
+/** One positioned market-map node: coords + the fields the SVG needs. */
+export interface MapCompanyNode {
+  slug: string;
+  name: string;
+  map_x: number;
+  map_y: number;
+  /** Node radius (sqrt-scaled); null → min radius. */
+  latest_round_amount: number | null;
+  /** Optional node coloring (deferred in v1; carried for a follow-up). */
+  primary_category: string | null;
+}
+
+/**
+ * Cap on nodes rendered per map. A market map with >~400 dots is unreadable and
+ * the SVG payload balloons; we take the most prominent by latest raise. Also
+ * dodges PostgREST's silent 1000-row cap without a keyset scan (most industries
+ * are well under it, but this makes the bound explicit and the SVG bounded).
+ */
+const MAP_NODE_LIMIT = 400;
+
+/**
+ * Companies in one canonical industry that have precomputed map coordinates,
+ * ranked by latest raise desc (biggest first — the nodes we most want to keep
+ * and label), name asc as a stable tiebreak, capped to {@link MAP_NODE_LIMIT}.
+ *
+ * Filters mirror every other public surface: exclusion_reason IS NULL + the
+ * catalog bar. Selecting map_x/map_y EXPLICITLY means that until the columns
+ * reach prod (migration ordering) this 400s → the standard error path → [] →
+ * the page's empty state. That is the intended "no coords yet" behavior, so no
+ * feature flag is needed (same property {@link getCompanyOgData} relies on).
+ * Returns [] on missing env or error.
+ */
+export async function listIndustryMapNodes(
+  group: string,
+  limit = MAP_NODE_LIMIT,
+): Promise<MapCompanyNode[]> {
+  const supabase = supabaseOrNull("listIndustryMapNodes");
+  if (!supabase) return [];
+
+  const { data, error } = await supabase
+    .from("companies")
+    .select("slug, name, map_x, map_y, latest_round_amount, primary_category")
+    .is("exclusion_reason", null)
+    .or(CATALOG_BAR_OR)
+    .eq("industry_group", group)
+    .not("map_x", "is", null)
+    .not("map_y", "is", null)
+    .order("latest_round_amount", { ascending: false, nullsFirst: false })
+    .order("name", { ascending: true })
+    .limit(limit);
+
+  if (error) {
+    console.error("[listIndustryMapNodes] query failed:", error.message);
+    return [];
+  }
+
+  return (
+    (data ?? []) as unknown as {
+      slug: string | null;
+      name: string | null;
+      map_x: number | null;
+      map_y: number | null;
+      latest_round_amount: number | null;
+      primary_category: string | null;
+    }[]
+  ).flatMap((r) =>
+    r.slug && r.name && r.map_x != null && r.map_y != null
+      ? [
+          {
+            slug: r.slug,
+            name: r.name,
+            map_x: r.map_x,
+            map_y: r.map_y,
+            latest_round_amount: r.latest_round_amount ?? null,
+            primary_category: r.primary_category ?? null,
+          },
+        ]
+      : [],
+  );
+}
+
+/**
+ * Minimum mapped companies before an industry earns a /map page. A 3-dot map is
+ * thin; mirrors {@link MIN_INDUSTRY_COMPANY_COUNT}'s spirit for the map surface.
+ */
+const MIN_MAP_NODE_COUNT = 8;
+
+/**
+ * Canonical industry labels that have ≥ {@link MIN_MAP_NODE_COUNT} companies
+ * with precomputed coords — the gate for the /map hub and the sitemap map URLs.
+ * Same full-catalog keyset tally as {@link listCanonicalIndustries} (a flat
+ * select caps at 1000 rows). Returns [] when the map_x column is absent on prod
+ * (scanCompanies → null on the 400) — so maps enter the hub/sitemap ONLY once
+ * coords exist, never indexing an empty map. Sorted by count desc then name.
+ */
+export async function listIndustriesWithMapCoords(): Promise<string[]> {
+  const rows = await scanCompanies(
+    "listIndustriesWithMapCoords",
+    "slug, industry_group, map_x",
+    "map_x", // notNullColumn — server-side drops null-coord rows
+    true, // catalogOnly
+  );
+  if (rows === null) return [];
+
+  const counts = new Map<string, number>();
+  for (const row of rows) {
+    const g = row.industry_group as string | null;
+    if (g) counts.set(g, (counts.get(g) ?? 0) + 1);
+  }
+  return [...counts.entries()]
+    .filter(([, c]) => c >= MIN_MAP_NODE_COUNT)
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .map(([g]) => g);
+}
+
 /**
  * The `funding_by_quarter` RPC (migration 0036): pre-aggregated quarter totals,
  * oldest first, over the last `quarters` calendar quarters (including the
