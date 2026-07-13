@@ -147,6 +147,26 @@ test.describe("structural smoke (no data required — CI contract)", () => {
     ).toBeVisible();
   });
 
+  test("/vs/<a>/<a> (same company) returns 404", async ({ page }) => {
+    // Comparing a company with itself is meaningless — loadVs returns null for
+    // an identical pair regardless of data, so it 404s.
+    const res = await page.goto("/vs/acme/acme");
+    expect(res?.status(), "GET /vs/<a>/<a> status").toBe(404);
+    await expect(
+      page.getByRole("heading", { level: 1, name: /not found/i }),
+    ).toBeVisible();
+  });
+
+  test("/vs/<unknown>/<unknown> returns 404", async ({ page }) => {
+    // Two distinct slugs that aren't both listed (always the case with no
+    // Supabase) → fewer than 2 companies resolve → 404.
+    const res = await page.goto("/vs/unknown-co-aaa/unknown-co-bbb");
+    expect(res?.status(), "GET /vs/<unknown>/<unknown> status").toBe(404);
+    await expect(
+      page.getByRole("heading", { level: 1, name: /not found/i }),
+    ).toBeVisible();
+  });
+
   test("/trends renders the funding trends dashboard (200)", async ({
     page,
   }) => {
