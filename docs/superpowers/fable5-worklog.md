@@ -641,3 +641,35 @@ timeline half is a separate PR because it destructively redesigns `/c`).
 - **Verified:** lint + 244 unit tests (+7 rss) + webpack build (`/feed.xml`
   static@6h) + `check:bundle` + e2e (19, +1 smoke: 200 + content-type + valid
   envelope). Full rollup all-green before merge.
+
+## PR #170 — `/c` unified event timeline (merged 2026-07-13)
+
+SEO growth-engine **slice 4b** — the destructive half of the RSS+timeline item.
+Replaced the separate Funding History table + News list on `/c/[slug]` with one
+"Timeline" (`components/EventTimeline.tsx`): funding rounds + news interleaved,
+funding entries keeping full detail (round type, amount, post-money valuation,
+lead/other investors, low-confidence pill). Deleted `FundingHistory.tsx` +
+`News.tsx` (only `/c` used them) and migrated their tests.
+
+- **Owner deferred the design to me**; I took Option 1 (unified timeline, funding
+  stays rich) and — because this redesigns the most-viewed page type — did NOT
+  merge on green CI alone. Verified the RENDER on a Vercel preview against a real
+  funding-heavy page (Anthropic).
+- **Preview-verification earned its keep** — it exposed a UX bug invisible to
+  unit tests + green CI: Anthropic's rounds are **undated** (LLM-extracted rounds
+  often are), so a naive chronological merge buried the $65B Series H BELOW ~45
+  dated news items. Fix: a **tiered sort** — undated funding leads (tier 0),
+  dated events run chronologically (tier 1), undated news trails (tier 2). Dated
+  funding still interleaves naturally.
+- **Adversarial review** (separate lane) → COMMENT, 0 critical/high; two MEDIUMs
+  fixed before merge: a bare "Led by —" when a round had only non-lead investors,
+  and the post-money valuation losing its money-green color vs the old table.
+  Added `aria-label` on the `<ol>` + tests for the tiered order and the investor
+  case. LOWs (freshness riders dropped; table→list a11y) judged acceptable.
+- **Lesson reinforced:** for a destructive change to a core page, preview-verify
+  the actual render on real data before merge — green CI + mocked unit tests said
+  nothing about the buried-funding ordering. See [[nous-postgrest-ambiguous-embed]]
+  (the last time real-data verification caught what CI couldn't).
+- **Verified:** lint + 247 unit tests (+ EventTimeline suite) + webpack build +
+  `check:bundle` (no leaks) + e2e (19) + the two-round preview render. Full
+  rollup all-green before merge.
