@@ -20,6 +20,8 @@ import {
   getRelatedCompanies,
   getSimilarCompanies,
   listCompanies,
+  listIndustriesWithMapCoords,
+  listIndustryMapNodes,
   listNewestCompanies,
   sanitizeIlikeTerm,
   searchHuskFallback,
@@ -857,6 +859,154 @@ describe("getAlsoBackedBy", () => {
     });
     await expect(getAlsoBackedBy(COMPANY)).resolves.toEqual([]);
     expect(mock.buildersFor("investors")).toHaveLength(0);
+  });
+});
+
+// ─── Market map queries (/map/[industry]) ─────────────────────────────────────
+
+const MAP_ROW = {
+  slug: "acme",
+  name: "Acme",
+  map_x: 1.5,
+  map_y: -2.25,
+  latest_round_amount: 12_000_000,
+  primary_category: "payments",
+};
+
+describe("listIndustryMapNodes", () => {
+  it("maps rows to MapCompanyNode and applies the public-surface filters + funding-desc order", async () => {
+    const mock = useClient(() => ({ data: [MAP_ROW] }));
+    const nodes = await listIndustryMapNodes("Fintech");
+
+    expect(nodes).toEqual([
+      {
+        slug: "acme",
+        name: "Acme",
+        map_x: 1.5,
+        map_y: -2.25,
+        latest_round_amount: 12_000_000,
+        primary_category: "payments",
+      },
+    ]);
+
+    const b = mock.buildersFor("companies")[0];
+    expect(b.has("is", "exclusion_reason", null)).toBe(true);
+    expect(b.has("or", CATALOG_BAR_OR)).toBe(true);
+    expect(b.has("eq", "industry_group", "Fintech")).toBe(true);
+    // Only positioned companies — both coord columns must be non-null.
+    expect(b.has("not", "map_x", "is", null)).toBe(true);
+    expect(b.has("not", "map_y", "is", null)).toBe(true);
+    // Biggest raise first (so the biggest names win the scarce SVG labels).
+    expect(
+      b.has("order", "latest_round_amount", {
+        ascending: false,
+        nullsFirst: false,
+      }),
+    ).toBe(true);
+    expect(b.has("order", "name", { ascending: true })).toBe(true);
+    expect(b.has("limit", 400)).toBe(true); // MAP_NODE_LIMIT default cap
+  });
+
+  it("drops rows missing a slug, name, or either coordinate", async () => {
+    useClient(() => ({
+      data: [
+        MAP_ROW,
+        { ...MAP_ROW, slug: null }, // unlinkable
+        { ...MAP_ROW, name: null }, // nameless
+        { ...MAP_ROW, map_x: null }, // unpositioned
+        { ...MAP_ROW, map_y: null }, // unpositioned
+      ],
+    }));
+    const nodes = await listIndustryMapNodes("Fintech");
+    expect(nodes).toHaveLength(1);
+    expect(nodes[0].slug).toBe("acme");
+  });
+
+  it("defaults latest_round_amount and primary_category to null when absent", async () => {
+    useClient(() => ({
+      data: [
+        {
+          slug: "husk",
+          name: "Husk",
+          map_x: 0,
+          map_y: 0,
+          latest_round_amount: null,
+          primary_category: null,
+        },
+      ],
+    }));
+    const [node] = await listIndustryMapNodes("Fintech");
+    expect(node.latest_round_amount).toBeNull();
+    expect(node.primary_category).toBeNull();
+  });
+
+  it("returns [] when Supabase is unconfigured (secret-free CI/dev)", async () => {
+    mockedCreate.mockImplementation(() => {
+      throw new Error("SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must be set");
+    });
+    await expect(listIndustryMapNodes("Fintech")).resolves.toEqual([]);
+  });
+
+  it("returns [] on a query error — the pre-migration 400 (map_x column absent) → empty-state path", async () => {
+    useClient(() => ({
+      error: { message: 'column companies.map_x does not exist', code: "42703" },
+    }));
+    await expect(listIndustryMapNodes("Fintech")).resolves.toEqual([]);
+  });
+});
+
+describe("listIndustriesWithMapCoords", () => {
+  it("tallies mapped companies per industry and drops groups below the minimum", async () => {
+    // AI: 10 mapped, Fintech: 8 (== the floor), DevTools: 3 (below the floor).
+    const rows = [
+      ...Array.from({ length: 10 }, (_, i) => ({
+        slug: `ai-${i}`,
+        industry_group: "AI Infrastructure",
+        map_x: i,
+      })),
+      ...Array.from({ length: 8 }, (_, i) => ({
+        slug: `fin-${i}`,
+        industry_group: "Fintech",
+        map_x: i,
+      })),
+      ...Array.from({ length: 3 }, (_, i) => ({
+        slug: `dev-${i}`,
+        industry_group: "DevTools",
+        map_x: i,
+      })),
+    ];
+    useClient(() => ({ data: rows }));
+
+    // Sorted by count desc: AI (10) before Fintech (8); DevTools (3) excluded.
+    await expect(listIndustriesWithMapCoords()).resolves.toEqual([
+      "AI Infrastructure",
+      "Fintech",
+    ]);
+  });
+
+  it("filters null coords via the server-side notNullColumn on the scan", async () => {
+    const mock = useClient(() => ({ data: [] }));
+    await listIndustriesWithMapCoords();
+    const b = mock.buildersFor("companies")[0];
+    // The keyset scan drops null-coord rows server-side (only mapped companies
+    // are tallied) and stays on the catalog surface.
+    expect(b.has("not", "map_x", "is", null)).toBe(true);
+    expect(b.has("is", "exclusion_reason", null)).toBe(true);
+    expect(b.has("or", CATALOG_BAR_OR)).toBe(true);
+  });
+
+  it("returns [] when the scan errors (map_x column absent pre-migration)", async () => {
+    useClient(() => ({
+      error: { message: 'column companies.map_x does not exist', code: "42703" },
+    }));
+    await expect(listIndustriesWithMapCoords()).resolves.toEqual([]);
+  });
+
+  it("returns [] when Supabase is unconfigured", async () => {
+    mockedCreate.mockImplementation(() => {
+      throw new Error("SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must be set");
+    });
+    await expect(listIndustriesWithMapCoords()).resolves.toEqual([]);
   });
 });
 
