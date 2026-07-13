@@ -9,7 +9,8 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { competitorLeaksMeta } from "@/lib/competitor-guards";
 import { createSupabaseServerClient, SupabaseConfigError } from "@/lib/db";
-import { computeTotalRaised } from "@/lib/funding";
+import { computeTotalRaised, type QuarterTotal } from "@/lib/funding";
+import { industryToSlug } from "@/lib/industry";
 import { buildSpotlightPool, type Spotlight } from "@/lib/spotlight";
 import type {
   AlsoBackedByCompany,
@@ -811,6 +812,144 @@ export async function getIndustrySummary(topN = 6): Promise<IndustrySummary> {
     .map(([value]) => value);
 
   return { top, moreCount: Math.max(0, counts.size - top.length) };
+}
+
+// ─── Industry landing pages (0036 momentum RPCs) ──────────────────────────────
+
+/** One `industry_group` bucket with its exact catalog head-count. */
+export interface IndustryCount {
+  group: string;
+  count: number;
+}
+
+/**
+ * Canonical `industry_group` buckets — those applying to at least
+ * {@link MIN_INDUSTRY_COMPANY_COUNT} catalog companies — with head-counts,
+ * ranked by count desc then name. Same full-catalog keyset tally as
+ * {@link listIndustryGroups} (a flat select is silently capped at 1000 rows by
+ * PostgREST). `/industry`, its detail routes, and the sitemap gate to EXACTLY
+ * this list, so an arbitrary freeform label can never mint a thin page.
+ */
+export async function listCanonicalIndustries(): Promise<IndustryCount[]> {
+  const rows = await scanCompanies(
+    "listCanonicalIndustries",
+    "slug, industry_group",
+    "industry_group",
+    true,
+  );
+  if (rows === null) return [];
+
+  const counts = new Map<string, number>();
+  for (const row of rows) {
+    const value = row.industry_group as string | null;
+    if (value) counts.set(value, (counts.get(value) ?? 0) + 1);
+  }
+
+  const ranked = [...counts.entries()]
+    .filter(([, count]) => count >= MIN_INDUSTRY_COMPANY_COUNT)
+    .map(([group, count]) => ({ group, count }))
+    .sort((a, b) => b.count - a.count || a.group.localeCompare(b.group));
+
+  // Guard against two labels that slugify to the same URL ("AI/ML" vs "AI ML"
+  // both → "ai-ml"): keep only the first (highest-count) label per slug, so the
+  // index, the detail route's resolver, and the sitemap all agree on exactly one
+  // reachable page per slug. Collisions are rare (enrichment labels are
+  // consistent) but this makes a stray one impossible to turn into a silently
+  // unreachable page (both index rows would otherwise link to one URL, and the
+  // resolver would render only the first). Map preserves the ranked order.
+  const bySlug = new Map<string, IndustryCount>();
+  for (const entry of ranked) {
+    const slug = industryToSlug(entry.group);
+    if (!bySlug.has(slug)) bySlug.set(slug, entry);
+  }
+  return [...bySlug.values()];
+}
+
+/**
+ * The `funding_by_quarter` RPC (migration 0036): pre-aggregated quarter totals,
+ * oldest first, over the last `quarters` calendar quarters (including the
+ * in-progress one). `industryGroup` scopes it to one bucket for the per-industry
+ * chart, or null (the default) sums the whole catalog for the /trends chart.
+ * The aggregation lives in SQL because a flat select of every round would blow
+ * PostgREST's 1000-row cap on the largest industries. Returns [] on missing env
+ * or error — the chart degrades to its empty state, never breaks the page.
+ */
+export async function fundingByQuarter(
+  quarters: number,
+  industryGroup?: string,
+): Promise<QuarterTotal[]> {
+  const supabase = supabaseOrNull("fundingByQuarter");
+  if (!supabase) return [];
+
+  const { data, error } = await supabase.rpc("funding_by_quarter", {
+    p_quarters: quarters,
+    p_industry_group: industryGroup ?? null,
+  });
+
+  if (error) {
+    console.error("[fundingByQuarter] rpc failed:", error.message);
+    return [];
+  }
+
+  return (
+    (data ?? []) as { quarter_start: string | null; total_usd: number | string | null }[]
+  ).flatMap((r) =>
+    r.quarter_start
+      ? [{ quarter_start: r.quarter_start, total_usd: r.total_usd }]
+      : [],
+  );
+}
+
+/** One row of the `industry_funding_momentum` RPC (0036). */
+export interface IndustryMomentumRow {
+  industry_group: string;
+  /** Raised in the trailing 2 complete quarters, USD. */
+  recent_usd: number;
+  /** Raised in the 2 quarters before that, USD. */
+  prior_usd: number;
+  /** Round count in the recent window. */
+  round_count: number;
+}
+
+/**
+ * The `industry_funding_momentum` RPC (migration 0036): per-industry
+ * trailing-2-complete-quarter raised (recent) vs the 2 quarters before (prior)
+ * — the same window math as the themes growth metric, with the in-progress
+ * quarter excluded so a mid-quarter run never compares a partial window against
+ * full ones. The web derives growth = (recent − prior)/prior itself (see
+ * {@link fundingGrowth}) and ranks the "hottest industries". Returns [] on
+ * missing env or error.
+ */
+export async function industryFundingMomentum(): Promise<IndustryMomentumRow[]> {
+  const supabase = supabaseOrNull("industryFundingMomentum");
+  if (!supabase) return [];
+
+  const { data, error } = await supabase.rpc("industry_funding_momentum", {});
+
+  if (error) {
+    console.error("[industryFundingMomentum] rpc failed:", error.message);
+    return [];
+  }
+
+  return (
+    (data ?? []) as {
+      industry_group: string | null;
+      recent_usd: number | string | null;
+      prior_usd: number | string | null;
+      round_count: number | null;
+    }[]
+  ).flatMap((r) =>
+    r.industry_group
+      ? [
+          {
+            industry_group: r.industry_group,
+            recent_usd: Number(r.recent_usd ?? 0),
+            prior_usd: Number(r.prior_usd ?? 0),
+            round_count: r.round_count ?? 0,
+          },
+        ]
+      : [],
+  );
 }
 
 /** Exact number of companies in the index (head-only count). */
@@ -3083,6 +3222,38 @@ export async function listThemes(): Promise<ThemeListRow[]> {
 
   if (error) {
     console.error("[listThemes] query failed:", error.message);
+    return [];
+  }
+
+  return ((data ?? []) as unknown as ThemeRowRaw[]).flatMap((row) => {
+    const theme = toThemeListRow(row);
+    return theme ? [theme] : [];
+  });
+}
+
+/**
+ * Themes whose `industry_group` matches, ranked exactly like {@link listThemes}
+ * — the "sub-themes" module on /industry/[group]. These embedding-cluster
+ * sub-groups (plus the funding chart) are the ONLY net-new content an industry
+ * page carries over /companies?industry=X, so the page hard-guards on this
+ * being non-empty for indexing (see the route). Returns [] on missing env.
+ */
+export async function listThemesByIndustry(
+  industryGroup: string,
+): Promise<ThemeListRow[]> {
+  const supabase = supabaseOrNull("listThemesByIndustry");
+  if (!supabase) return [];
+
+  const { data, error } = await supabase
+    .from("themes")
+    .select(THEME_COLUMNS)
+    .eq("industry_group", industryGroup)
+    .order("funding_growth", { ascending: false, nullsFirst: false })
+    .order("funding_recent_usd", { ascending: false })
+    .order("name", { ascending: true });
+
+  if (error) {
+    console.error("[listThemesByIndustry] query failed:", error.message);
     return [];
   }
 

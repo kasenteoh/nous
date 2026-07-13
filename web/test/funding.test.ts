@@ -1,6 +1,14 @@
 import { describe, expect, it } from "vitest";
 
-import { computeTotalRaised, dedupedRoundsTotal } from "@/lib/funding";
+import {
+  computeTotalRaised,
+  dedupedRoundsTotal,
+  fundingGrowth,
+  quarterBucketsFromTotals,
+} from "@/lib/funding";
+
+// Mid-Q3 2026 — matches the pipeline-side + themes tests' reference date.
+const NOW = new Date("2026-07-11T12:00:00Z");
 
 describe("dedupedRoundsTotal", () => {
   it("sums distinct rounds", () => {
@@ -94,5 +102,66 @@ describe("computeTotalRaised", () => {
     expect(r.hasTotal).toBe(true);
     expect(r.statedWins).toBe(true);
     expect(r.total).toBe(0);
+  });
+});
+
+describe("quarterBucketsFromTotals", () => {
+  it("windows pre-aggregated RPC rows, oldest first, including the current quarter", () => {
+    const buckets = quarterBucketsFromTotals(
+      [
+        { quarter_start: "2025-10-01", total_usd: 10_000_000 },
+        { quarter_start: "2026-04-01", total_usd: 5_000_000 }, // current-ish
+        { quarter_start: "2023-01-01", total_usd: 99_000_000 }, // outside window
+      ],
+      4,
+      NOW,
+    );
+    expect(buckets.map((b) => b.label)).toEqual([
+      "Q4 2025",
+      "Q1 2026",
+      "Q2 2026",
+      "Q3 2026",
+    ]);
+    expect(buckets.map((b) => b.totalUsd)).toEqual([
+      10_000_000, 0, 5_000_000, 0,
+    ]);
+  });
+
+  it("fills omitted quarters with 0 so the time axis has no gaps", () => {
+    const buckets = quarterBucketsFromTotals([], 8, NOW);
+    expect(buckets).toHaveLength(8);
+    expect(buckets[0].label).toBe("Q4 2024");
+    expect(buckets.every((b) => b.totalUsd === 0)).toBe(true);
+  });
+
+  it("coerces numeric-string totals and skips null totals", () => {
+    const buckets = quarterBucketsFromTotals(
+      [
+        { quarter_start: "2026-04-01", total_usd: "3000000" },
+        { quarter_start: "2026-04-01", total_usd: null },
+      ],
+      4,
+      NOW,
+    );
+    const q2 = buckets.find((b) => b.label === "Q2 2026");
+    expect(q2?.totalUsd).toBe(3_000_000);
+  });
+
+  it("keys buckets by the quarter's first day (stable render key)", () => {
+    const [first] = quarterBucketsFromTotals([], 1, NOW);
+    expect(first.start).toBe("2026-07-01");
+  });
+});
+
+describe("fundingGrowth", () => {
+  it("returns the fractional growth when there is a prior base", () => {
+    expect(fundingGrowth(15_000_000, 5_000_000)).toBe(2); // +200%
+    expect(fundingGrowth(2_000_000, 8_000_000)).toBe(-0.75); // −75%
+  });
+
+  it("returns null when the prior window has no funding to divide by", () => {
+    expect(fundingGrowth(10_000_000, 0)).toBeNull();
+    expect(fundingGrowth(0, 0)).toBeNull();
+    expect(fundingGrowth(5_000_000, -1)).toBeNull(); // defensive: no negative base
   });
 });
