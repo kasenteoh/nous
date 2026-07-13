@@ -424,4 +424,55 @@ inherited from the prompt, not a claim about which model wrote the code.
 - **Perplexity husk** — still description-less on prod (generic fallback
   meta, zero prose paragraphs vs Anthropic's 27). The H-1 rescue target has
   no profile yet; open follow-up (honest-null thin-SPA vs rescue-not-cycled
-  — needs a look, lower priority than the deploy freeze was).
+  — needs a look, lower priority than the deploy freeze was). **Root-caused +
+  partly fixed below.**
+
+## Perplexity / website-less-husk arc (PRs #158–#163, 2026-07-12)
+
+- **Root cause (two layers, both surprising):** Perplexity was NOT a
+  thin-content husk — it renders 1095 chars via Playwright locally. (1) It had
+  **no `website`**: resolved 2026-06-16, before the curl_cffi Cloudflare bypass
+  (PR #132) existed, so plain httpx got a 403 on every TLD candidate → null;
+  the 90-day re-resolve window wouldn't retry for months. (2) Even with a
+  website set, the **prod scrape is Cloudflare-403'd from the Actions
+  datacenter IP** (both httpx and curl_cffi), and a 403 short-circuits to
+  "dead" before the Playwright render — so 0 pages, still a husk. Blocks the
+  whole Cloudflare-heavy prominent-husk class.
+- **Tools shipped:** read-only `inspect-company` (#158, later +news_titles /
+  funding_rounds #162) and `reresolve-company [--set-url]` (#159), both via
+  `ops.yml` dispatch (which now also passes `SEC_USER_AGENT`, #160 — a masked
+  `tee` had hidden a crash as green).
+- **Cohort fix (slices 1+2):** `db-stats` now counts the stuck cohort (#161) —
+  **890 website-less shown companies, 163 funded, 882 re-drainable now** — and
+  `resolve-homepages` re-admits the pre-#132 cohort for one self-bounding
+  re-attempt with the stronger resolver (#163, keyed on the shared
+  `_RESOLVER_GENERATION_SINCE = 2026-07-10`). No migration/CLI/dispatch input;
+  rides the existing step, DeepSeek paced by the standing scrape/enrich caps.
+- **Structured-describe (A) — validated, not yet built:** designed via a
+  multi-agent workflow + adversarial critique. Verified on real data that A
+  would work for Perplexity (its sourced news titles carry product descriptors
+  — "AI search unicorn", "challenge Google in search", "$750M Microsoft
+  tie-up"), so a source-compliant profile is groundable. Build deferred with
+  three required fixes: strict `description_short` gating (it's syndicated
+  off-page to meta/JSON-LD with no Sources footer), cross-company-title
+  contamination handling, and a min-signal bar that requires a NON-funding
+  descriptor.
+
+## Product roadmap designed (2026-07-12) — "do all except monetization"
+
+Two multi-agent workflows produced grounded designs + adversarial critiques
+for the next-wave program; owner approved the order + key calls (RSS-only
+digest, conservative `/vs` indexing). Sequenced: (1) website-less-husk fix
+[DONE, above]; (2) industry pages `/industry/[group]` + `/trends` — the SEO
+anchor, needs the `funding_by_quarter` momentum RPC in slice 1 (critique: the
+per-industry chart would silently truncate at PostgREST's 1000-row cap without
+it); (3) RSS feed + `/c` event timeline (frontend-only quick win; must REPLACE
+the existing FundingHistory/News sections, not duplicate); (4) `/vs/[a]/[b]`
+compare pages (conservative: index only competitor-edge pairs with real
+funding on ≥1 side); (5) market map `/map/[industry]` (pipeline-time PCA
+projection of embeddings → static server SVG; land the migration early since
+coords fill on the ~monthly compute-themes cadence). Shared infra to build
+once: the `0036` momentum RPCs, a `web/lib/industry.ts` slug↔label helper, an
+extracted `CompareTable`. Design call for industry pages: on-demand ISR (NOT
+`generateStaticParams`, which no route uses and which would couple `next build`
+to the DB), gated to the 30 canonical `industry_group` buckets.
