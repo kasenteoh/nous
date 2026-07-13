@@ -285,6 +285,38 @@ describe("EventTimeline", () => {
     expect(items[1]).toHaveTextContent("Series A");
     expect(items[2]).toHaveTextContent("Older news");
   });
+
+  it("floats an undated funding round to the top and sinks undated news to the bottom", () => {
+    render(
+      <EventTimeline
+        rounds={[round({ round_type: "Series H", announced_date: null })]}
+        news={[
+          newsArticle({ title: "Dated news", published_date: "2026-05-20" }),
+          newsArticle({ title: "Undated news", published_date: null }),
+        ]}
+      />,
+    );
+    const items = screen.getAllByRole("listitem");
+    expect(items).toHaveLength(3);
+    // Undated funding leads, dated news middle, undated news trails.
+    expect(items[0]).toHaveTextContent("Series H");
+    expect(items[1]).toHaveTextContent("Dated news");
+    expect(items[2]).toHaveTextContent("Undated news");
+  });
+
+  it("omits the 'Led by' clause when only non-lead investors are present", () => {
+    render(
+      <EventTimeline
+        rounds={[
+          round({ leadInvestors: [], otherInvestors: ["Alpha", "Beta"] }),
+        ]}
+        news={[]}
+      />,
+    );
+    // No bare "Led by —"; the other investors still show.
+    expect(screen.queryByText(/Led by/)).not.toBeInTheDocument();
+    expect(screen.getByText(/Alpha, Beta/)).toBeInTheDocument();
+  });
 });
 
 // ─── Investors ────────────────────────────────────────────────────────────────

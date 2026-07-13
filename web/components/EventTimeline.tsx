@@ -6,8 +6,13 @@
 // investors, low-confidence flag); news entries link out to the source article.
 // Read-only display, all data flows in via props.
 //
-// Undated events can't be placed on the time axis, so they sort to the end
-// (never dropped — no data loss); dated events are newest-first.
+// Ordering: dated events run newest-first. Undated events can't be placed on
+// the time axis (never dropped — no data loss), so they're tiered by
+// importance: an undated FUNDING round floats to the TOP (it's the structured
+// spine of the page — LLM-extracted rounds often lack a clean date, and burying
+// a company's $65B round below dozens of dated news items reads as broken),
+// while undated news sinks to the bottom. Dated funding still interleaves with
+// news chronologically.
 
 import { formatDate, formatUsd, formatUsdExact } from "@/lib/format";
 import type { FundingRoundWithInvestors, NewsArticleRow } from "@/lib/types";
@@ -28,6 +33,17 @@ function joinOthers(names: string[]): string {
 type TimelineEvent =
   | { kind: "funding"; date: string | null; round: FundingRoundWithInvestors }
   | { kind: "news"; date: string | null; article: NewsArticleRow };
+
+/**
+ * Ordering tier: undated funding leads (0), dated events run chronologically
+ * (1, newest-first within the tier), undated news trails (2). Keeps a company's
+ * rounds prominent even when the pipeline couldn't date them, without disturbing
+ * the dated chronology.
+ */
+function timelineTier(event: TimelineEvent): number {
+  if (event.date) return 1;
+  return event.kind === "funding" ? 0 : 2;
+}
 
 interface Props {
   rounds: FundingRoundWithInvestors[];
@@ -50,7 +66,13 @@ export function EventTimeline({ rounds, news }: Props) {
         article,
       }),
     ),
-  ].sort((a, b) => (b.date ?? "").localeCompare(a.date ?? ""));
+  ].sort((a, b) => {
+    const ta = timelineTier(a);
+    const tb = timelineTier(b);
+    if (ta !== tb) return ta - tb;
+    // Same tier: dated events newest-first; undated tiers keep insertion order.
+    return (b.date ?? "").localeCompare(a.date ?? "");
+  });
 
   return (
     <section className="mb-12">
@@ -61,7 +83,10 @@ export function EventTimeline({ rounds, news }: Props) {
           No funding rounds or news recorded yet.
         </p>
       ) : (
-        <ol className="relative ml-2 border-l border-edge">
+        <ol
+          className="relative ml-2 border-l border-edge"
+          aria-label="Company timeline"
+        >
           {events.map((event) => {
             const dateLabel = event.date ? formatDate(event.date) : EM_DASH;
             const key =
@@ -113,11 +138,14 @@ function FundingEntry({ round }: { round: FundingRoundWithInvestors }) {
           </span>
         )}
         {round.valuation_post_money != null && (
-          <span className="font-mono text-xs text-ink-muted">
-            <span title={formatUsdExact(round.valuation_post_money)}>
+          <span className="font-mono text-xs">
+            <span
+              className="text-money"
+              title={formatUsdExact(round.valuation_post_money)}
+            >
               {formatUsd(round.valuation_post_money)}
             </span>{" "}
-            post-money
+            <span className="text-ink-muted">post-money</span>
           </span>
         )}
         {round.extraction_confidence === "low" && (
@@ -131,10 +159,13 @@ function FundingEntry({ round }: { round: FundingRoundWithInvestors }) {
       </p>
       {hasInvestors && (
         <p className="mt-0.5 text-sm text-ink-soft">
-          Led by {joinNames(round.leadInvestors)}
-          {round.otherInvestors.length > 0 && (
-            <> · {joinOthers(round.otherInvestors)}</>
+          {round.leadInvestors.length > 0 && (
+            <>Led by {joinNames(round.leadInvestors)}</>
           )}
+          {round.leadInvestors.length > 0 &&
+            round.otherInvestors.length > 0 &&
+            " · "}
+          {round.otherInvestors.length > 0 && joinOthers(round.otherInvestors)}
         </p>
       )}
     </>
