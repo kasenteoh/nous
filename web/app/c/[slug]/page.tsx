@@ -31,11 +31,10 @@ import { JsonLd } from "@/components/JsonLd";
 import { Markdown } from "@/components/Markdown";
 import { StatusBadge } from "@/components/StatusBadge";
 import { Team } from "@/components/Team";
-import { FundingHistory } from "@/components/FundingHistory";
+import { EventTimeline } from "@/components/EventTimeline";
 import { Investors } from "@/components/Investors";
 import { Competitors } from "@/components/Competitors";
 import { RelatedCompanies } from "@/components/RelatedCompanies";
-import { News } from "@/components/News";
 import { Sources } from "@/components/Sources";
 
 // At or above this many consecutive failed homepage scrapes, the detail page
@@ -400,15 +399,6 @@ export default async function CompanyPage({ params }: Props) {
     });
   }
 
-  // Per-section freshness riders: the latest dated funding round / news article.
-  // Both lists arrive sorted newest-first with nulls last (see getCompanyBySlug),
-  // so the first entry carrying a date is the most recent. Null when no entry has
-  // a date — the rider then hides rather than printing an em dash.
-  const latestFundingDate =
-    fundingRounds.find((r) => r.announced_date !== null)?.announced_date ?? null;
-  const latestNewsDate =
-    news.find((a) => a.published_date !== null)?.published_date ?? null;
-
   return (
     <main className="flex-1 px-6 py-12 max-w-4xl mx-auto w-full">
       <JsonLd data={companyJsonLd(company)} />
@@ -637,8 +627,9 @@ export default async function CompanyPage({ params }: Props) {
       {/* ── Leadership / founders (from the company website) ───────────── */}
       <Team people={people} />
 
-      {/* ── Funding history (M3) ───────────────────────────────────────── */}
-      <FundingHistory rounds={fundingRounds} asOf={latestFundingDate} />
+      {/* ── Timeline: funding rounds + news, merged reverse-chronologically
+             (replaces the old separate Funding History table + News list) ── */}
+      <EventTimeline rounds={fundingRounds} news={news} />
 
       {/* ── Investors ──────────────────────────────────────────────────── */}
       <Investors
@@ -659,9 +650,6 @@ export default async function CompanyPage({ params }: Props) {
         similarByDescription={similarByDescription}
         alsoBackedBy={alsoBackedBy}
       />
-
-      {/* ── News ───────────────────────────────────────────────────────── */}
-      <News news={news} asOf={latestNewsDate} />
 
       {/* ── Category + Tags (D3: moved to just before Sources) ─────────── */}
       {(company.primary_category || (company.tags && company.tags.length > 0)) && (
