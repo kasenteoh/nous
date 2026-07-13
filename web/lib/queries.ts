@@ -743,6 +743,71 @@ export async function listRecentFundings(
   });
 }
 
+/** One recent news article, joined to its company — for the RSS feed. */
+export interface RecentNewsRow {
+  id: string;
+  title: string;
+  url: string;
+  source: string;
+  published_date: string | null;
+  companySlug: string;
+  companyName: string;
+}
+
+/**
+ * The latest news articles across the catalog with a known publish date, newest
+ * first, joined to a non-excluded company. Feeds the /feed.xml RSS document
+ * (paired with {@link listRecentFundings}). Excluded companies' articles never
+ * surface; rows whose company join is missing are dropped. Returns [] on
+ * missing env or error.
+ */
+export async function listRecentNews(limit = 30): Promise<RecentNewsRow[]> {
+  const supabase = supabaseOrNull("listRecentNews");
+  if (!supabase) return [];
+
+  const { data, error } = await supabase
+    .from("news_articles")
+    .select("id, title, url, source, published_date, companies!inner(name, slug)")
+    .is("companies.exclusion_reason", null)
+    .not("published_date", "is", null)
+    .order("published_date", { ascending: false })
+    .limit(limit);
+
+  if (error) {
+    console.error("[listRecentNews] query failed:", error.message);
+    return [];
+  }
+
+  type Row = {
+    id: string | null;
+    title: string | null;
+    url: string | null;
+    source: string | null;
+    published_date: string | null;
+    companies: NestedFundingCompany | NestedFundingCompany[] | null;
+  };
+
+  return ((data ?? []) as Row[]).flatMap((row) => {
+    const company = Array.isArray(row.companies)
+      ? row.companies[0]
+      : row.companies;
+    if (!row.id || !row.title || !row.url || !company?.name || !company.slug) {
+      return [];
+    }
+    return [
+      {
+        id: row.id,
+        title: row.title,
+        url: row.url,
+        source: row.source ?? "",
+        published_date: row.published_date,
+        companySlug: company.slug,
+        companyName: company.name,
+      },
+    ];
+  });
+}
+
 /** One "Biggest recent rounds" row on /trends. */
 export interface BiggestRoundRow {
   companySlug: string;
