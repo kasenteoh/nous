@@ -3001,7 +3001,13 @@ export async function getCompaniesForCompare(
         "latest_round_amount, latest_round_date, exclusion_reason, " +
         "funding_rounds(round_type, amount_raised, funding_round_investors(investors(name))), " +
         "company_investors(investors(name)), " +
-        "competitors(competitor_name, rank)",
+        // The `competitors` table has TWO FKs to `companies` (company_id and
+        // competitor_company_id), so a bare `competitors(...)` embed is ambiguous
+        // and PostgREST 400s the WHOLE query — which silently returned [] here,
+        // leaving /compare empty and every /vs pair a 404. Hint the owning-company
+        // FK (company_id) to select this company's own competitor list, mirroring
+        // how getAlternatives hints `companies!competitor_company_id`.
+        "competitors!company_id(competitor_name, rank)",
     )
     .in("slug", wanted);
 
