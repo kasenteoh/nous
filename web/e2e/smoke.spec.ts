@@ -147,6 +147,21 @@ test.describe("structural smoke (no data required — CI contract)", () => {
     ).toBeVisible();
   });
 
+  test("/feed.xml serves a valid RSS document (200, xml content-type)", async ({
+    request,
+  }) => {
+    // Secret-free CI yields an empty-but-valid feed (no items), not a 500.
+    const res = await request.get("/feed.xml");
+    expect(res.status(), "GET /feed.xml status").toBe(200);
+    expect(
+      res.headers()["content-type"] ?? "",
+      "content-type",
+    ).toContain("application/rss+xml");
+    const body = await res.text();
+    expect(body).toContain('<rss version="2.0"');
+    expect(body).toContain("<channel>");
+  });
+
   test("/vs/<a>/<a> (same company) returns 404", async ({ page }) => {
     // Comparing a company with itself is meaningless — loadVs returns null for
     // an identical pair regardless of data, so it 404s.

@@ -27,6 +27,15 @@ export const metadata: Metadata = {
     template: "%s — nous",
   },
   description: "US software startup discovery, from VC portfolios and funding news.",
+  // RSS auto-discovery: renders <link rel="alternate" type="application/rss+xml">
+  // in <head> so feed readers find /feed.xml from any page.
+  alternates: {
+    types: {
+      "application/rss+xml": [
+        { url: "/feed.xml", title: "nous — new funding & news" },
+      ],
+    },
+  },
   openGraph: {
     siteName: SITE_NAME,
     type: "website",
@@ -197,6 +206,9 @@ export default function RootLayout({
               <Link href="/new" className="hover:text-ink transition-colors">
                 New this week
               </Link>
+              <a href="/feed.xml" className="hover:text-ink transition-colors">
+                RSS
+              </a>
               <Link href="/about" className="hover:text-ink transition-colors">
                 About
               </Link>
