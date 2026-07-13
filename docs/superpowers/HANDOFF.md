@@ -8,6 +8,32 @@ for the detail behind the Latest-update block below), then the two plan docs
 under `docs/superpowers/plans/` (2026-07-10 improvement plan; 2026-07-11
 hygiene + Wave 3). `BACKLOG.md` is annotated with what shipped.
 
+## LATEST UPDATE — market map shipped (2026-07-13, PRs #179/#180)
+
+ROADMAP **Next #1 (market map) done** — the first depth feature after the Now
+horizon. Built by 6 agents across two workflows (2 scout → 2 implement → 2
+review), pipeline + web in parallel (isolated worktree + main tree), each
+adversarially reviewed (both APPROVE, 0 blocking).
+- **#179 (pipeline):** `compute-map-positions` — per-`industry_group` scikit-learn
+  **PCA(2)** over description embeddings → deterministic (svd_solver="full" +
+  pinned sign convention + per-axis min-max) 2D coords in three new nullable
+  columns (`map_x`/`map_y`/`map_computed_at`, **migration 0038**). $0 (local CPU,
+  reuses the `embeddings` uv group), per-industry TTL-gated (25d) off
+  `discovery.yml` → effective monthly. `Projector` Protocol seam (tests inject a
+  fake; sklearn not needed to run them).
+- **#180 (web):** `/map/[industry]` — a **static server SVG** (no client
+  component, **no ML on the Vercel function** — the #157 lesson, proven via build
+  traces). Nodes = SVG `<a>` links, funding-sized, canonical-gated, ISR,
+  a11y-complete. Queries degrade to an **empty-state** until coords exist
+  (migration-ordering-for-free), so the two PRs were independent.
+- **To see real maps:** coords populate on the next **`discovery.yml`** run once
+  migration 0038 reaches prod (next pipeline cron applies it). Until then every
+  map is the empty-state by design. To populate sooner: after 0038 is on prod,
+  dispatch `discovery.yml` once (it's TTL-gated, so `compute-map-positions` runs).
+- **Deferred follow-ups:** interactive client renderer (d3-force) + theme
+  coloring + a global theme-level meta-graph; the per-axis-vs-shared-scale visual
+  tuning call (BACKLOG).
+
 ## LATEST UPDATE — Now horizon field-normalization + report-data (2026-07-13, PRs #176/#177)
 
 ROADMAP Now **#3 and #4 done** — the data-quality "Now" horizon is now
@@ -29,10 +55,10 @@ consolidated to main after.
   funding figure; `/tag/[tag]` `noindex` when <3 companies (lockstep with the
   sitemap's ≥3 filter).
 
-**What's next:** the Now horizon is essentially cleared, so the frontier is the
-**NEXT horizon (depth)** — the market map `/map/[industry]` (the last un-built
-SEO-era item), momentum signals from `company_snapshots`, per-entity RSS,
-talent-flow/investor graphs. Smaller Now follow-ups remain: run the
+**What's next:** the Now horizon is cleared and the market map (Next #1) shipped
+(#179/#180), so the frontier is the rest of the **NEXT horizon (depth)** —
+momentum signals from `company_snapshots`, per-entity RSS, talent-flow/investor
+graphs. Smaller Now follow-ups remain: run the
 `normalize-hq-state` backfill once; wire `util.completeness` into
 husk-enrichment ordering; watch the `data-quality` cron report (esp. the
 website-provenance / wrong-site proxy from the husk re-mining).
@@ -251,11 +277,11 @@ small (below). The frontier is now the **NEXT horizon (depth)** — see `ROADMAP
 The frontier is now the **NEXT horizon (depth)**, detailed just below.
 
 **NEXT horizon (depth, after the foundation):** the **market map
-`/map/[industry]`** (the last un-built SEO-era item — pipeline-time PCA
-projection of embeddings → static server SVG; land the migration early, coords
-fill on the ~monthly compute-themes cadence; keep onnx/transformers OFF the web
-function, the #157 lesson), momentum signals from `company_snapshots`,
-per-entity RSS, and talent-flow + investor graphs. Full detail in `ROADMAP.md`.
+`/map/[industry]`** SHIPPED (#179/#180, see the top update block). Remaining Next
+bets: **momentum signals** from `company_snapshots` (the "open it every morning"
+hook — accelerating companies), **per-entity RSS/feeds** (industry/investor/
+company-scoped, fanning out `/feed.xml`), **talent-flow** from `people`, and
+**investor depth** (co-investment networks). Full detail in `ROADMAP.md`.
 
 Deferred (unchanged): the structured-describe fallback ("A", with its three
 required fixes — see the worklog), and anchoring the judge/funding golden

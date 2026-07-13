@@ -245,8 +245,8 @@ already-cached `news_articles` + `raw_pages`, new prompt under `llm/prompts/`,
 capped ~100 articles/run (~$0.15/wk), weekly cron in the shared concurrency
 group. If poor: competitor edges + themes carry the map; drop the type.
 
-### Market map — `/map/[industry]` [L]
-**Pipeline side SHIPPED (#PR)** — `compute-map-positions` stage: per-industry
+### Market map — `/map/[industry]` [L] — SHIPPED (#179 pipeline, #180 web)
+**Pipeline side SHIPPED (#179)** — `compute-map-positions` stage: per-industry
 scikit-learn PCA(2) over the shown+embedded description embeddings (E-1),
 deterministic sign-pin + per-axis min-max to `[0,1]²`, written to three new
 nullable columns on `companies` (`map_x`, `map_y`, `map_computed_at`; migration
@@ -256,16 +256,16 @@ per-industry TTL-gated (25d) off weekly `discovery.yml` → effective monthly.
 The web read is a flat single-table `WHERE industry_group = $1 AND map_x IS NOT
 NULL` (no RPC, no PCA on Vercel — the #157 lesson).
 
-**Still open (web side):** the codebase's first client component: d3-force +
-hand-rolled canvas renderer (~10–15KB gz), compact index-referenced JSON passed
-as props from a server component (no API route, key stays server-side). Nodes
-sized by funding, colored by theme, click → company page. With coords now
-precomputed, the renderer can also draw a static server-rendered SVG scatter
-directly from `map_x`/`map_y` (no client lib) as the first cut. Global view is a
-theme-level meta-graph (~100 nodes), never the full raw graph. Fallback lib:
-`react-force-graph-2d`. One visual call to make: per-axis `[0,1]` min-max fills
-the box but exaggerates the lower-variance PC2 — switch to a single shared scale
-factor if the true PC1:PC2 variance ratio should be preserved.
+**Web side SHIPPED (#180)** — shipped as a **static server-rendered SVG** (no
+client component, no ML on the web function — the #157 lesson): `/map/[industry]`
+reads `map_x`/`map_y` and renders nodes (SVG `<a>` links, funding-sized radius,
+greedy non-overlapping labels, a11y via `aria-labelledby` + `sr-only` fallback)
+plus a `/map` hub, both canonical-gated + coords-gated in the sitemap.
+Migration-ordering-for-free: the queries degrade to an empty-state until coords
+land. **Follow-ups (deferred):** an interactive client renderer (d3-force /
+`react-force-graph-2d`) + theme coloring + a global theme-level meta-graph; one
+visual tuning call (per-axis min-max exaggerates the lower-variance PC2 — switch
+to a single shared scale factor to preserve the true PC1:PC2 ratio).
 
 ### `slug_aliases` table with 301 redirects [M]
 **SHIPPED — PR #141 (308 miss-path redirects).**

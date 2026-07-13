@@ -102,10 +102,13 @@ cleverly → make correctness visible.
 
 Built on top of the now-trustworthy foundation.
 
-1. **The market map (`/map/[industry]`).** The designed-but-unbuilt payoff.
-   `company_relationships` is already derived and clean — this is the visual,
-   differentiating graph surface (competitor clusters, funding-weighted nodes)
-   that nous is structurally able to show and nobody else bothers to.
+1. **The market map (`/map/[industry]`).** — **SHIPPED (#179 pipeline, #180
+   web).** A pipeline PCA(2) projection of company embeddings → per-industry 2D
+   coords (`compute-map-positions`, deterministic, TTL-gated, $0) rendered as a
+   static server SVG at `/map/[industry]` (funding-sized nodes, canonical-gated,
+   ML kept off the web function per #157). Coords fill on the discovery cadence.
+   Follow-ups: interactive client renderer + theme coloring + a global
+   theme-level meta-graph (BACKLOG).
 
 2. **Momentum signals — the "open it every morning" hook.** `company_snapshots`
    already records weekly headcount + news velocity. Build detection on top:

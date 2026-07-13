@@ -862,7 +862,7 @@ blocking) alongside #176.
   before merge. Merged sequentially (pipeline first) with docs consolidated to
   main after, to avoid BACKLOG hunk collisions.
 
-## PR #TBD — feat(pipeline): market-map coords stage (compute-map-positions) (branch `fable5/market-map-pipeline`)
+## PR #179 — feat(pipeline): market-map coords stage (compute-map-positions) (merged 2026-07-13)
 
 Pipeline side of the ROADMAP "Market map — `/map/[industry]`" bet: precompute
 the per-industry 2D scatter positions so the web reads flat columns and never
@@ -913,3 +913,36 @@ separate follow-up.
   $1 AND map_x IS NOT NULL`. One visual call flagged for the renderer: per-axis
   `[0,1]` min-max fills the box but exaggerates the lower-variance PC2; switch to
   a single shared scale factor to preserve the true PC1:PC2 variance ratio.
+
+## PR #180 — feat(web): market map at /map/[industry] (merged 2026-07-13)
+
+Web side of the market map (ROADMAP Next #1), paired with #179. Built by a
+parallel agent (main tree, npm-verified) and adversarially reviewed (APPROVE, 0
+blocking) alongside #179. Shipped as a **static server-rendered SVG** — no client
+component, and critically no ML in the Vercel function (the #157 lesson).
+- **`web/lib/map-layout.ts`** — pure, deterministic geometry: coord→viewBox
+  scaling (degenerate-axis safe), sqrt-scaled funding radius, greedy
+  non-overlapping labels. Unit-tested in isolation.
+- **`web/components/IndustryMap.tsx`** — server SVG. Each node an SVG `<a
+  href="/c/{slug}">` with a `<title>` (name + exact funding), theme-safe CSS-var
+  colors, an `sr-only` fallback link list, accessible naming via
+  `aria-labelledby` (deliberately NO `role="img"`, which would hide the links).
+- **`/map/[industry]`** — on-demand ISR (`revalidate=21600`, no
+  `generateStaticParams`), hard-gated to canonical `industry_group` buckets
+  (`notFound()` on miss), empty maps `noindex`'d. **`/map`** hub + coords-gated
+  sitemap entries.
+- **`listIndustryMapNodes` / `listIndustriesWithMapCoords`** — explicit
+  `map_x`/`map_y` select, so a pre-migration prod 400s → the existing error path
+  → `[]` → the empty-state. **Migration-ordering-for-free**: no feature flag, and
+  the web PR was independent of #179 (mergeable in any order); maps enter the
+  hub/sitemap only once coords exist.
+- **#157 ML-safety proven:** build traces show 0 onnxruntime refs in the `/map`
+  routes (vs 1 in the `/companies` control); `EMBEDDER_ROUTES` untouched.
+- **Verified:** npm lint + 275 tests + build green; full CI rollup green.
+- **Note:** coords populate on the next `discovery.yml` run (TTL-gated,
+  effective monthly) once migration 0038 reaches prod (next pipeline cron). Until
+  then every map is the empty-state by design. Force earlier by dispatching
+  `discovery.yml` after 0038 lands.
+- **Orchestration:** #179 (pipeline, isolated worktree, uv) + #180 (web, main
+  tree, npm) were scouted, implemented, and reviewed by 6 agents across two
+  workflows (2 scout → 2 implement → 2 review), merged sequentially.
