@@ -1601,6 +1601,29 @@ def db_stats(cap_mb: int | None, warn_pct: int | None) -> None:
     asyncio.run(_run())
 
 
+@cli.command("data-quality")
+def data_quality_cmd() -> None:
+    """Report catalog completeness over the shown cohort (read-only, no writes).
+
+    The completeness sibling of db-stats (size) and pipeline-health (freshness):
+    field-completeness %s, website provenance, the per-company completeness-score
+    distribution, duplicate rate, and enrichment staleness — emitted to the
+    Actions step summary. The instrument panel for the data-quality horizon.
+    """
+    import asyncio
+
+    from nous.db.session import AsyncSessionLocal
+    from nous.pipeline.data_quality import emit_data_quality_summary, run_data_quality
+
+    async def _run() -> None:
+        async with AsyncSessionLocal() as session:
+            summary = await run_data_quality(session)
+        click.echo(summary.model_dump_json(indent=2))
+        emit_data_quality_summary(summary)
+
+    asyncio.run(_run())
+
+
 @cli.command("judge-eligibility")
 @click.option(
     "--limit",

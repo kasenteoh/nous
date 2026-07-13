@@ -89,18 +89,22 @@ resolved site (`website_source` + `website_source_url`, migration 0037).
   dispatch, `dry_run=false`) can drain the ~890 backlog quicker than 25/run if
   the gradual cron drain proves too slow.
 
-### Data-quality dashboard [M] — P1
-Internal QC surface — extends the "Pipeline observability" `/stats` work
-(Ops & quality hardening) but for *completeness*, not just freshness: % of
-companies with website / description / funding / logo / people, husk-count
-trend, duplicate rate, staleness distribution. The instrument panel for this
-whole horizon — makes every subsequent fix measurable. Direct counts +
-`pipeline_runs`.
+### Data-quality dashboard [M] — P1 — SHIPPED (#175)
+Read-only `data-quality` stage (completeness sibling of db-stats/pipeline-health)
+emits a step-summary report over the shown cohort: field-completeness %s
+(website / description / funding / logo / people / location / industry / tags /
+employees), **website provenance by `website_source`** (surfaces the #174
+re-mining contribution + wrong-site proxy), completeness-score distribution,
+duplicate rate (shared `normalized_name`), enrichment staleness. Id-free cron
+step. **Follow-up:** a web-facing version is ROADMAP Later (provenance UI); this
+is internal-report-only for now.
 
-### Per-company completeness / confidence score [S] — P2
-Compute a per-row completeness score from present fields + `extraction_confidence`.
-Expose internally first (feeds the dashboard and husk-enrichment prioritisation
-ordering), publicly later as a trust badge (ROADMAP Later horizon — provenance UI).
+### Per-company completeness / confidence score [S] — P2 — SHIPPED (internal primitive, #175)
+Pure `util.completeness` weighted 0..1 score (husk-defining fields dominate),
+aggregated by the data-quality report. **Remaining:** wire it into
+husk-enrichment prioritisation ordering, and a public trust badge (ROADMAP Later
+— provenance UI). `extraction_confidence` not yet folded in (field-presence
+only for now).
 
 ### Pulled into this push — existing open entries
 Consciously scoped into the Now horizon; tracked in their home sections, listed
