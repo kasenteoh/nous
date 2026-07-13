@@ -23,15 +23,16 @@ from nous.db.base import Base
 from nous.db.models import Company
 from nous.observability import write_step_summary
 
+# The generation cutoff (curl_cffi bypass date) is owned by the resolver, whose
+# re-drain term keys on it; import it so the measurement and the fix can never
+# disagree on which cohort is "stuck".
+from nous.pipeline.resolve_homepages import _RESOLVER_GENERATION_SINCE
+
 logger = logging.getLogger(__name__)
 
-# The curl_cffi Chrome-impersonation bypass (PR #132) landed 2026-07-10. Shown
-# companies resolved BEFORE it that hit a Cloudflare 403 on every TLD candidate
-# were stamped website_resolved_at with a null website by the weaker resolver;
-# the 90-day re-resolve window won't retry them for months. These counts measure
-# that stuck cohort (and how much a generation-cutoff re-drain would unstick NOW)
-# so the fix is gated on a real number before it triggers any scrape/describe.
-_RESOLVER_GENERATION_SINCE = datetime(2026, 7, 10, tzinfo=UTC)
+# These counts measure the stuck website-less cohort (and how much a re-drain
+# would unstick NOW) so the fix is gated on a real number before it triggers
+# any scrape/describe. The 90-day window mirrors resolve-homepages' default.
 _RESOLVE_REFETCH_DAYS = 90
 
 
