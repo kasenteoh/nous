@@ -74,6 +74,16 @@ class Company(Base):
     description_short: Mapped[str | None]
     description_long: Mapped[str | None]
     website: Mapped[str | None]
+    # Website provenance (sibling-column convention, cf. status_source_url /
+    # total_raised_source_url). website_source is a short source-type tag
+    # ('wikidata' | 'news_outbound' | 'vc_portfolio' | …) set by
+    # resolve-website-fallback; website_source_url is the specific attributing
+    # URL (the Wikidata entity page, the sourcing article, the portfolio page).
+    # Both NULL for the legacy cohort — resolve-homepages resolves by blind TLD
+    # guess and records no source. Un-indexed: read for display/aggregation,
+    # never used in a WHERE (selection keys on website IS NULL).
+    website_source: Mapped[str | None] = mapped_column(Text, nullable=True)
+    website_source_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     logo_url: Mapped[str | None]
 
     # Location
@@ -112,6 +122,17 @@ class Company(Base):
     tags: Mapped[list[str] | None] = mapped_column(ARRAY(String))
     last_enriched_payload: Mapped[dict | None] = mapped_column(JSONB)  # type: ignore[type-arg]
     website_resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # When resolve-website-fallback (husk re-mining) last attempted this company,
+    # success or not. Deliberately separate from website_resolved_at (which
+    # resolve-homepages stamps) so the two resolvers rotate independently — a
+    # husk resolve-homepages just failed on stays immediately eligible for the
+    # re-mine. Drives that stage's selection WHERE + back-off; indexed for it.
+    # Mirrors the other *_checked_at rotation stamps.
+    website_fallback_checked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        index=True,
+    )
     last_scrape_attempt_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),
         nullable=True,
