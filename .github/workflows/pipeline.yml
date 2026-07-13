@@ -538,6 +538,15 @@ jobs:
         continue-on-error: true
         run: uv run nous db-stats
 
+      - name: Data quality
+        # Read-only completeness report (field %s, website provenance, the
+        # per-company completeness-score distribution, duplicate rate,
+        # staleness) → step summary. The instrument panel for the data-quality
+        # horizon. Always runs; id-free so it can't trigger the Vercel deploy.
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        run: uv run nous data-quality
+
       - name: Pipeline health
         # Always runs (even if earlier stages failed) so every pipeline run gets
         # a health annotation in the Actions UI.  Exits 0 — never blocks the
