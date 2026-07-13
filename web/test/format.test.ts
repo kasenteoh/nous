@@ -6,6 +6,7 @@ import {
   formatLocation,
   formatUsd,
   formatUsdExact,
+  growthToneClass,
   stateAbbrev,
 } from "@/lib/format";
 
@@ -159,5 +160,21 @@ describe("discoveredViaLabel", () => {
   it("title-cases unknown values instead of leaking the raw enum", () => {
     expect(discoveredViaLabel("hacker_news")).toBe("Hacker News");
     expect(discoveredViaLabel("some_new_source")).toBe("Some New Source");
+  });
+});
+
+describe("growthToneClass", () => {
+  it("maps gains and brand-new activity to money-green", () => {
+    expect(growthToneClass("+200%")).toBe("text-money");
+    expect(growthToneClass("+0%")).toBe("text-money");
+    expect(growthToneClass("new")).toBe("text-money");
+  });
+
+  it("maps declines (U+2212 minus) to warn-amber", () => {
+    expect(growthToneClass("−75%")).toBe("text-warn");
+  });
+
+  it("maps the no-data em-dash to muted", () => {
+    expect(growthToneClass("—")).toBe("text-ink-faint");
   });
 });

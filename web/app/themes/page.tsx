@@ -9,7 +9,7 @@ export const revalidate = 21600;
 import type { Metadata } from "next";
 import Link from "next/link";
 import { listThemes } from "@/lib/queries";
-import { formatGrowthLabel, formatUsd } from "@/lib/format";
+import { formatGrowthLabel, formatUsd, growthToneClass } from "@/lib/format";
 
 export const metadata: Metadata = {
   // The layout's title template appends " — nous".
@@ -19,13 +19,6 @@ export const metadata: Metadata = {
     "from recorded funding rounds.",
   alternates: { canonical: "/themes" },
 };
-
-/** Tone class for the growth chip: gains green, declines amber, rest muted. */
-function growthClass(label: string): string {
-  if (label.startsWith("+") || label === "new") return "text-money";
-  if (label.startsWith("−")) return "text-warn";
-  return "text-ink-faint";
-}
 
 export default async function ThemesPage() {
   const themes = await listThemes();
@@ -71,7 +64,7 @@ export default async function ThemesPage() {
                       {theme.name}
                     </span>
                     <span
-                      className={`shrink-0 font-mono text-sm ${growthClass(growth)}`}
+                      className={`shrink-0 font-mono text-sm ${growthToneClass(growth)}`}
                       title={
                         theme.funding_growth != null
                           ? `${formatUsd(theme.funding_recent_usd)} raised in the last 2 full quarters vs ${formatUsd(theme.funding_prior_usd)} in the 2 before`

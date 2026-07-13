@@ -15,7 +15,7 @@ import {
   listCanonicalIndustries,
 } from "@/lib/queries";
 import { fundingGrowth } from "@/lib/funding";
-import { formatGrowthLabel, formatUsd } from "@/lib/format";
+import { formatGrowthLabel, formatUsd, growthToneClass } from "@/lib/format";
 import { industryToSlug } from "@/lib/industry";
 
 export const metadata: Metadata = {
@@ -26,13 +26,6 @@ export const metadata: Metadata = {
     "companies building in it — derived from recorded funding rounds.",
   alternates: { canonical: "/industry" },
 };
-
-/** Tone class for the growth chip: gains green, declines amber, rest muted. */
-function growthClass(label: string): string {
-  if (label.startsWith("+") || label === "new") return "text-money";
-  if (label.startsWith("−")) return "text-warn";
-  return "text-ink-faint";
-}
 
 export default async function IndustriesPage() {
   const [industries, momentum] = await Promise.all([
@@ -89,7 +82,7 @@ export default async function IndustriesPage() {
                     </span>
                     {recent > 0 && (
                       <span
-                        className={`shrink-0 font-mono text-sm ${growthClass(label)}`}
+                        className={`shrink-0 font-mono text-sm ${growthToneClass(label)}`}
                         title={
                           growth != null
                             ? `${formatUsd(recent)} raised in the last 2 full quarters vs ${formatUsd(m?.prior_usd ?? 0)} in the 2 before`

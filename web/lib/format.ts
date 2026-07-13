@@ -227,3 +227,16 @@ export function formatGrowthLabel(
   // U+2212 minus sign for negatives, matching the site's typographic dashes.
   return pct < 0 ? `−${Math.abs(pct)}%` : `+${pct}%`;
 }
+
+/**
+ * Tailwind text-color token for a growth chip produced by
+ * {@link formatGrowthLabel}: gains (and brand-new activity) read money-green,
+ * declines amber-warn, everything else muted. Shared by every surface that
+ * shows a growth chip (/themes, /industry, /trends) so the tone mapping stays
+ * defined once.
+ */
+export function growthToneClass(label: string): string {
+  if (label.startsWith("+") || label === "new") return "text-money";
+  if (label.startsWith("−")) return "text-warn";
+  return "text-ink-faint";
+}
