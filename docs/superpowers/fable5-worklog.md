@@ -593,3 +593,30 @@ SEO growth-engine **slice 3**.
   dynamic on-demand, no `generateStaticParams`) + `check:bundle` (no leaks) +
   `test:e2e` (18, +2 smoke: self-404, unknown-404). Full `statusCheckRollup`
   all-green (no infra flake this time) before merge.
+
+## PR #168 — fix: disambiguate the competitors embed (broken /compare, 404 /vs) (merged 2026-07-13)
+
+**A latent prod bug the /vs launch surfaced.** Verifying /vs on prod, every
+pair 404'd. Root cause was NOT /vs: `getCompaniesForCompare` embeds
+`competitors(competitor_name, rank)` with no FK hint, but the `competitors`
+table has TWO FKs to `companies` (`company_id` + `competitor_company_id`,
+models.py:470/478). PostgREST can't resolve the ambiguous embed → **400s the
+whole query** → the helper's catch returned `[]`. So `/compare` had rendered
+"None of those companies are listed" for EVERY pair since the compare feature
+shipped (#91), and `/vs` inherited it as a 404 (`loadVs` saw <2 listed).
+
+- **Why it stayed hidden:** the `/compare` e2e smoke only asserts the empty-
+  state + unknown-slug paths; the data-backed smoke that would've caught it is
+  gated behind `SMOKE_HAS_DATA=1`, which CI doesn't set. A mocked unit test
+  can't see a PostgREST query-shape error either. Test-coverage gap noted.
+- **Fix (one line):** `competitors!company_id(competitor_name, rank)` — hint the
+  owning-company FK, mirroring `getAlternatives`' `companies!competitor_company_id`.
+- **Verification (the important part):** local lint/test/build are blind to this
+  (mocked), so proof was the **Vercel preview deploy against real Supabase**:
+  `/compare?slugs=anthropic,cresta` renders both columns + all rows; `/vs/
+  anthropic/cresta` → 200, indexable (a funded competitor edge); `/vs/0x-labs/
+  100ms` → 200 but `noindex,follow` (arbitrary non-edge pair) — confirming the
+  conservative-indexing gate end-to-end on real data. Then confirmed on prod.
+- **Gotcha for next time:** a PostgREST/supabase-js embed of a table with ≥2 FKs
+  to the same parent is ambiguous and 400s the ENTIRE request — always hint
+  `child!fk_column(...)`. Silent because the helper swallows the error to `[]`.
