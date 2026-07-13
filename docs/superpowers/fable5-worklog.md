@@ -673,3 +673,25 @@ lead/other investors, low-confidence pill). Deleted `FundingHistory.tsx` +
 - **Verified:** lint + 247 unit tests (+ EventTimeline suite) + webpack build +
   `check:bundle` (no leaks) + e2e (19) + the two-round preview render. Full
   rollup all-green before merge.
+
+## PR #171 — docs: ROADMAP.md living doc + doc-maintenance convention (merged 2026-07-13)
+
+- Product-strategy pass (product owner + CTO-partner brainstorm), not a
+  fable5-series code change — logged here to keep the one-entry-per-PR record
+  whole.
+- **`ROADMAP.md` (new):** strategic layer above `BACKLOG.md`, as Now/Next/Later
+  horizons. North star fixed with the owner: **data quality first, then depth.**
+  Records the sourcing moat and the **"route around, don't evade"** principle for
+  the ~890 husk companies (proxy/Cloudflare evasion rejected on principle: it
+  contradicts the sourcing moat, rots on Cloudflare updates, and is unnecessary
+  since husks are prominent enough to resolve via news/portfolio outbound links →
+  Wikidata → Common Crawl). Deliberately-deferred bets carried forward with
+  reasons.
+- **`CLAUDE.md`:** new "Keeping the docs current" section — which-doc-when table
+  making doc upkeep part of "done" (backlog / roadmap / handoff / worklog).
+- **`BACKLOG.md`:** ROADMAP cross-link + dated "Now horizon" section. New work
+  (husk re-mining stage, data-quality dashboard, per-company completeness score)
+  cross-references existing open entries (formatUsd, hq_state, report-incorrect-
+  data, thin-tag hygiene) instead of duplicating them.
+- **Verified:** docs-only, no code paths; full CI rollup (pipeline / web /
+  secrets / Vercel) green before squash-merge.
