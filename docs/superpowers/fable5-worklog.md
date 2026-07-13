@@ -861,3 +861,55 @@ blocking) alongside #176.
   near-full disk), each flowing straight into an adversarial code-reviewer agent
   before merge. Merged sequentially (pipeline first) with docs consolidated to
   main after, to avoid BACKLOG hunk collisions.
+
+## PR #TBD — feat(pipeline): market-map coords stage (compute-map-positions) (branch `fable5/market-map-pipeline`)
+
+Pipeline side of the ROADMAP "Market map — `/map/[industry]`" bet: precompute
+the per-industry 2D scatter positions so the web reads flat columns and never
+runs ML in the Vercel function (the #157 250MB lesson). Web renderer is a
+separate follow-up.
+- **Migration 0038** (hand-written, chains off 0037): three nullable columns on
+  `companies` — `map_x`/`map_y` (double precision, normalized `[0,1]` cohort
+  coords; NULL = not positioned) + `map_computed_at` (timestamptz freshness
+  stamp). NO index (never a selective WHERE key; the read filters the already-
+  indexed `industry_group` and treats `map_x IS NOT NULL` as a within-partition
+  predicate — same call as `embedding_text_hash` in 0033). Columns over a side
+  table: coords are strictly 1:1 with a company, so a side table would add a
+  join+FK for zero cardinality benefit (mirrors the 0028 `latest_round_*`
+  denormalization rationale).
+- **`compute-map-positions` stage** (`pipeline/compute_map_positions.py`):
+  per-`industry_group` with ≥ `MIN_MAP_COMPANIES` (5) shown+embedded companies,
+  fits scikit-learn `PCA(n_components=2, svd_solver="full")` over the
+  unit-normalized description embeddings (E-1), projects to 2D, pins a
+  deterministic sign convention, and per-axis min-max normalizes to `[0,1]²`,
+  then writes coords + stamp. Mirrors compute-themes: a `Projector` Protocol
+  seam with a real `PCAProjector` (eager `import sklearn.decomposition` in
+  `__init__` to fail loud, lazy `PCA` in `project()`) so tests inject a
+  deterministic fake and scikit-learn is never needed to run them; id-ordered
+  fetch; per-industry incremental commit; Pydantic summary.
+- **Determinism (the idempotence contract):** `ORDER BY id` +
+  `svd_solver="full"` (exact SVD, deterministic at any cohort size — unlike
+  `"auto"`, which switches to the randomized solver above 500 samples) + a
+  pinned sign convention (each axis's largest-|score| sample, ties→lowest index,
+  forced positive) + deterministic min-max. The sign pin is load-bearing
+  *because* min-max encodes sign — negate then min-max yields the mirror
+  `1 − x`, so without it two runs could emit mirror-image maps. Degenerate
+  (constant) axis → `0.5`.
+- **Thresholds/cadence:** `MIN_MAP_COMPANIES = 5` (below themes' 8 on purpose —
+  a map has no LLM naming, hence no coherence floor). Per-industry TTL gate on
+  `MAX(map_computed_at)` (default 25 days), so the weekly `discovery.yml` step
+  (after Compute themes) runs at an effective monthly cadence. `--force` bypasses
+  the gate. `$0` — local CPU PCA, no LLM, no network, no new dependency
+  (`sklearn.decomposition.PCA` ships in the `scikit-learn` already in the
+  `embeddings` group for KMeans).
+- **Tests:** `test_compute_map_positions.py` (pure — sign-pin invariance under
+  global + per-axis mirror, `[0,1]` endpoints, degenerate-axis→0.5,
+  determinism, `unit_normalize`, CLI registration, `FakeProjector`) +
+  `test_compute_map_positions_db.py` (DB-gated — migration round-trip,
+  full flow, below-threshold NULL, excluded/un-embedded skipped, per-industry
+  TTL + `--force`, idempotence/determinism).
+- **Web hand-off:** read is `SELECT slug, name, map_x, map_y,
+  latest_round_amount, funding_round_count FROM companies WHERE industry_group =
+  $1 AND map_x IS NOT NULL`. One visual call flagged for the renderer: per-axis
+  `[0,1]` min-max fills the box but exaggerates the lower-variance PC2; switch to
+  a single shared scale factor to preserve the true PC1:PC2 variance ratio.

@@ -215,6 +215,26 @@ jobs:
           uv sync --group embeddings
           uv run nous compute-themes --limit 100
 
+      - name: Compute map positions
+        id: map
+        # Market map: per-industry PCA(2) projection of the description
+        # embeddings (E-1) into normalized 2D coords for the /map/[industry]
+        # SVG scatter. $0 — local scikit-learn PCA on CPU, no LLM, no network.
+        # Runs weekly here but is TTL-gated INSIDE the stage PER INDUSTRY
+        # (skips industries whose coords are < 25 days old), so the effective
+        # cadence is monthly without a new workflow. Reuses the `embeddings`
+        # group compute-themes just synced (scikit-learn); the sync line is
+        # kept for self-containment / reorder safety (uv sync is idempotent).
+        # continue-on-error: a derived aggregate surface must never block
+        # discovery. The `map` step id makes a successful run contribute to the
+        # deploy-hook gate below (contains(steps.*.outcome, 'success')), so
+        # fresh coords trigger a redeploy that renders them.
+        timeout-minutes: 15
+        continue-on-error: true
+        run: |
+          uv sync --group embeddings
+          uv run nous compute-map-positions
+
       - name: Estimate employees
         id: estimate
         if: ${{ inputs.skip_estimate != true }}
