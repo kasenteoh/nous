@@ -476,3 +476,48 @@ once: the `0036` momentum RPCs, a `web/lib/industry.ts` slug↔label helper, an
 extracted `CompareTable`. Design call for industry pages: on-demand ISR (NOT
 `generateStaticParams`, which no route uses and which would couple `next build`
 to the DB), gated to the 30 canonical `industry_group` buckets.
+
+## PR #165 — industry landing pages (`/industry` + `/industry/[group]`) (merged 2026-07-13)
+
+SEO growth-engine **slice 1**, built on the `0036` momentum RPCs.
+
+- **Surface:** `/industry` hub lists the canonical `industry_group` buckets
+  (≥3 companies), ranked by trailing recent funding with a 2-quarter growth
+  chip. `/industry/[group]` = funding-by-quarter chart (server SVG from the
+  `funding_by_quarter` RPC, so it can't truncate at PostgREST's 1000-row cap on
+  the largest industries) + the industry's **sub-themes** (the net-new content
+  vs the plain filtered list) + a funding-ranked company preview linking to
+  `/companies?industry=X`.
+- **New/changed code:** `web/lib/industry.ts` (new, pure — no `server-only`,
+  import-safe anywhere): `industryToSlug` + `resolveIndustrySlug`, resolving
+  only against the canonical list (the hard gate). `web/lib/funding.ts`:
+  `quarterBucketsFromTotals` (windows the RPC's pre-aggregated rows into a
+  gap-filled 8-quarter series — extracted a shared `quarterWindow`/
+  `bucketsFromWindow` from `bucketFundingByQuarter`) + `fundingGrowth`.
+  `web/lib/queries.ts`: `listCanonicalIndustries` (slug-deduped),
+  `fundingByQuarter`, `industryFundingMomentum`, `listThemesByIndustry`.
+  `ThemeFundingChart` reused (two user-visible strings neutralized so the copy
+  is honest on both surfaces); nav + sitemap wired.
+- **Design calls:** on-demand ISR, NO `generateStaticParams` (never couples
+  `next build` to the DB — build confirms `/industry` static@6h,
+  `/industry/[group]` dynamic); **hard thin-content guard** — a page with no
+  funding chart AND no sub-themes is `noindex`'d via `generateMetadata.robots`
+  (it carries nothing `/companies?industry=X` doesn't); **one company-count
+  source** (`listCompanies.total`) so the header, the "See all N" link, and its
+  destination all report one number at render time.
+- **Review lane (separate from authoring):** independent adversarial
+  code-review pass → APPROVE, 0 critical/high. Its two MEDIUMs were fixed
+  before merge: (a) slug-collision dedup in `listCanonicalIndustries` — two
+  labels slugifying alike ("AI/ML" vs "AI ML") would otherwise both link to one
+  URL and leave the loser a silently-unreachable page; (b) the single-count-
+  source consistency fix above. Two LOWs consciously deferred: sub-second
+  `CURRENT_DATE` (Postgres) vs `new Date()` (Node) drift at a quarter boundary
+  (self-heals on the 6h ISR window; both UTC), and the full momentum table
+  fetched per detail render (intentional — the same RPC feeds the index; ISR-
+  amortized; scoping it would need a new migration for a ~50-row read).
+- **Verified:** web `lint` + 230 unit tests (+11 new: slug helpers, quarter
+  windowing, `fundingGrowth`) + webpack `build` + `check:bundle` (no leaks) +
+  `test:e2e` (15, +2 smoke: index 200, non-canonical 404). Full
+  `statusCheckRollup` green (secrets/pipeline/web/Vercel) before merge.
+- **Next in the SEO program:** `/trends` dashboard (reuses the same `0036` RPCs
+  + `ThemeFundingChart`), then `/vs/[a]/[b]`, RSS + `/c` timeline, market map.
