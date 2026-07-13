@@ -23,6 +23,7 @@ import {
   formatDate,
   formatGrowthLabel,
   formatUsd,
+  formatUsdExact,
   growthToneClass,
 } from "@/lib/format";
 import { industryToSlug } from "@/lib/industry";
@@ -158,7 +159,10 @@ export default async function TrendsPage() {
                     {r.companyName}
                   </span>
                   <span className="shrink-0 font-mono text-xs text-ink-muted">
-                    <span className="text-money text-sm">
+                    <span
+                      className="text-money text-sm"
+                      title={formatUsdExact(r.amount_raised)}
+                    >
                       {formatUsd(r.amount_raised)}
                     </span>
                     {r.round_type ? ` · ${r.round_type}` : ""} ·{" "}

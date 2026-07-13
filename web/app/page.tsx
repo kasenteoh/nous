@@ -15,7 +15,7 @@ import {
   listRecentFundings,
   type TrendingCompany,
 } from "@/lib/queries";
-import { formatDate, formatUsd } from "@/lib/format";
+import { formatDate, formatUsd, formatUsdExact } from "@/lib/format";
 import { SITE_NAME, siteOrigin } from "@/lib/site";
 
 // Title and description inherit the layout defaults; only the canonical is
@@ -153,7 +153,10 @@ export default async function FrontPage() {
                           unknown — never a green "—" (spec §2). */}
                       {funding.amount_raised != null &&
                         funding.amount_raised > 0 && (
-                          <span className="font-mono text-money">
+                          <span
+                            className="font-mono text-money"
+                            title={formatUsdExact(funding.amount_raised)}
+                          >
                             {formatUsd(funding.amount_raised)}
                           </span>
                         )}{" "}

@@ -12,7 +12,7 @@ import {
   listNewThisWeekFundingRounds,
   countNewThisWeek,
 } from "@/lib/queries";
-import { formatDate, formatUsd } from "@/lib/format";
+import { formatDate, formatUsd, formatUsdExact } from "@/lib/format";
 import type {
   NewThisWeekCompanyRow,
   NewThisWeekFundingRow,
@@ -186,7 +186,10 @@ export default async function NewThisWeekPage() {
                             number — never a green "—" (mirrors front-page spec). */}
                         {round.amount_raised != null &&
                           round.amount_raised > 0 && (
-                            <span className="ml-2 font-mono text-money">
+                            <span
+                              className="ml-2 font-mono text-money"
+                              title={formatUsdExact(round.amount_raised)}
+                            >
                               {formatUsd(round.amount_raised)}
                             </span>
                           )}
