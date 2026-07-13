@@ -19,7 +19,7 @@ from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from nous.db.models import Company, CompanyInvestor, FundingRound, RawPage
+from nous.db.models import Company, CompanyInvestor, FundingRound, NewsArticle, RawPage
 
 
 class RawPageSummary(BaseModel):
@@ -57,6 +57,11 @@ class CompanyInspection(BaseModel):
     raw_pages: list[RawPageSummary] = []
     funding_round_count: int = 0
     investor_count: int = 0
+    # Sourced descriptive material (drives the structured-data-describe decision):
+    # do the news headlines actually say what the company DOES, or just recite
+    # funding? And what round facts exist to ground on?
+    funding_rounds: list[str] = []
+    news_titles: list[str] = []
 
 
 async def run_inspect_company(session: AsyncSession, *, slug: str) -> CompanyInspection:
@@ -101,6 +106,35 @@ async def run_inspect_company(session: AsyncSession, *, slug: str) -> CompanyIns
         )
     ).scalar_one()
 
+    rounds = list(
+        (
+            await session.execute(
+                select(
+                    FundingRound.round_type,
+                    FundingRound.amount_raised,
+                    FundingRound.announced_date,
+                )
+                .where(FundingRound.company_id == company.id)
+                .order_by(FundingRound.announced_date.desc().nullslast())
+            )
+        ).all()
+    )
+    funding_rounds = [
+        f"{rt or 'round'}: {('$' + format(amt, ',.0f')) if amt is not None else '—'}"
+        f" ({d.isoformat() if d else '—'})"
+        for (rt, amt, d) in rounds
+    ]
+    news_titles = list(
+        (
+            await session.execute(
+                select(NewsArticle.title)
+                .where(NewsArticle.company_id == company.id)
+                .order_by(NewsArticle.published_date.desc().nullslast())
+                .limit(20)
+            )
+        ).scalars()
+    )
+
     short = company.description_short or ""
     long_ = company.description_long or ""
     return CompanyInspection(
@@ -126,4 +160,6 @@ async def run_inspect_company(session: AsyncSession, *, slug: str) -> CompanyIns
         raw_pages=page_summaries,
         funding_round_count=funding_count,
         investor_count=investor_count,
+        funding_rounds=funding_rounds,
+        news_titles=news_titles,
     )
