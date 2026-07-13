@@ -774,3 +774,28 @@ confirmed-foreign site. The Apex husk has NULL country → documented residual
   (dispatch #172 → schema #173 → stage #174) to run a real pre-merge prod dry
   run. Worth it: the dry run caught the Apex-France collision that unit tests +
   local pgvector couldn't (real-data verification again — cf. [[nous-postgrest-ambiguous-embed]]).
+
+## PR #175 — feat(pipeline): data-quality completeness report (dashboard) (merged 2026-07-13)
+
+ROADMAP Now #2 (+ #5's internal primitive). New read-only, idempotent
+`data-quality` stage — the completeness sibling of db-stats (size) and
+pipeline-health (freshness) — emits a step-summary report over the shown cohort
+(`exclusion_reason IS NULL`):
+- **Field completeness %s** — website / description / funding / logo / people /
+  location / industry / tags / employees (one per-company Core-select round-trip
+  + a `SELECT DISTINCT people.company_id` set; computed in Python).
+- **Website provenance** — counts by `website_source` (wikidata / news_outbound /
+  legacy-`unattributed`), so #174's re-mining contribution and the wrong-site
+  proxy are visible in every run.
+- **Completeness score** — new pure `util.completeness` (weighted 0..1,
+  `FIELD_WEIGHTS` sum to 1.0, husk-defining fields dominate) aggregated into
+  mean + a 4-bucket histogram + husk (<0.25) / fully-complete (==1.0) counts.
+  Delivers Now #5 "internal first"; wiring into husk-enrichment ordering + a
+  public badge is a follow-up (no behavior change to other stages here).
+- **Duplicate rate** (shared `normalized_name`) + **enrichment staleness** buckets.
+- **Wiring:** id-free read-only cron step next to db-stats/pipeline-health (can't
+  trigger the Vercel deploy). No migration, no writes → clean single PR, no
+  schema-ordering ceremony; the report shows in the next cron's step summary.
+- **Verified:** ruff + mypy clean; full suite 1526 passed (pure score + DB-gated
+  stage: field %s, husk/complete counts, provenance, dupes, staleness); full CI
+  rollup green before merge.

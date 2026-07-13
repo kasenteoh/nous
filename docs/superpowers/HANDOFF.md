@@ -8,6 +8,22 @@ for the detail behind the Latest-update block below), then the two plan docs
 under `docs/superpowers/plans/` (2026-07-10 improvement plan; 2026-07-11
 hygiene + Wave 3). `BACKLOG.md` is annotated with what shipped.
 
+## LATEST UPDATE — data-quality dashboard shipped (2026-07-13, PR #175)
+
+ROADMAP Now **#2 done** (and #5's internal primitive). New read-only
+`data-quality` stage — the completeness sibling of db-stats (size) and
+pipeline-health (freshness) — emits a step-summary report over the shown cohort:
+field-completeness %s, **website provenance by `website_source`** (surfaces the
+#174 re-mining contribution + the wrong-site proxy), the per-company
+completeness-score distribution (new pure `util.completeness`, weighted 0..1),
+duplicate rate, staleness. Id-free cron step next to db-stats (no writes, no
+migration). **See the report in the next 3h cron run's Actions step summary** (or
+dispatch `pipeline.yml`) for the real completeness numbers — that's the instrument
+panel to watch as the remaining Now items ship. Next in the queue is **#3**
+(field normalization: `hq_state`, `formatUsd`; and re-enable "report incorrect
+data" — highest trust-per-effort). The completeness score is internal-only;
+wiring it into husk-enrichment ordering + a public trust badge is a follow-up.
+
 ## LATEST UPDATE — husk website re-mining shipped (2026-07-13, PRs #172–#174)
 
 ROADMAP Now #1 is **done**. The `resolve-website-fallback` stage resolves
@@ -168,7 +184,8 @@ Two initiatives, both complete:
   (husk re-mining, NEW #174 — drains ~25 website-less husks/run before
   resolve-homepages), scrape/enrich (+ husk rescue priority),
   `embed-companies --limit 200` (embed backlog drains ~1–2 days from
-  2026-07-12), redescribe tail, judge.
+  2026-07-12), redescribe tail, judge, then the read-only reports (db-stats,
+  `data-quality` NEW #175, pipeline-health) → Actions step summary.
 - Weekly discovery cron: VC portfolios, GitHub trending, dedup, competitors,
   `compute-themes` (TTL-gated monthly — the FIRST themes run happens on the
   next weekly run after embeddings exist).
@@ -194,19 +211,20 @@ parallel agents for design/critique.
 1. ~~**Husk website re-mining**~~ — **SHIPPED (#172/#173/#174).** See the latest-
    update block above. Live in the cron; drains ~25/run. Next data-quality item
    is now the priority.
-2. **Data-quality dashboard** — internal QC surface (extends the pipeline-
-   observability `/stats` idea, but for *completeness* not just freshness): %
-   of companies with website / description / funding / logo / people, husk-
-   count trend, duplicate rate, staleness distribution. The instrument panel
-   for the whole horizon.
+2. ~~**Data-quality dashboard**~~ — **SHIPPED (#175).** Read-only `data-quality`
+   cron report (completeness %s, website provenance, score distribution, dupes,
+   staleness). See the latest-update block above. **← this is now the priority:**
 3. **Field normalization + re-enable "report incorrect data"** — `hq_state`
    (CA↔California) normalized at enrichment time; `formatUsd` exact-dollars
    `title` tooltip; thin single-company tag-page threshold; and RE-ENABLE the
    report-incorrect-data rider in `web/app/c/[slug]/page.tsx` (now unblocked —
-   the repo is public so the prefilled GitHub-issue URL resolves).
-4. **Per-company completeness/confidence score** — from present fields +
-   `extraction_confidence`; internal first (feeds the dashboard + husk-
-   enrichment ordering), public trust badge later.
+   the repo is public so the prefilled GitHub-issue URL resolves). The
+   report-incorrect-data re-enable is the **highest trust-per-effort** item and a
+   tiny frontend change — good next slice.
+4. ~~**Per-company completeness/confidence score**~~ — **internal primitive
+   SHIPPED (#175)** (`util.completeness`, aggregated by the dashboard). Remaining:
+   wire into husk-enrichment ordering, fold in `extraction_confidence`, public
+   trust badge (Later — provenance UI).
 
 **NEXT horizon (depth, after the foundation):** the **market map
 `/map/[industry]`** (the last un-built SEO-era item — pipeline-time PCA

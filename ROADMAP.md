@@ -75,11 +75,11 @@ cleverly → make correctness visible.
    high. The re-mining principle held: no origin fetch, no evasion, every
    resolved site sourced.
 
-2. **A data-quality dashboard.** An internal report (backed by `pipeline_runs`
-   and direct counts): % of companies with website / description / funding /
-   logo / people, husk-count trend, duplicate rate, staleness distribution.
-   *You can't fix what you don't measure* — this is the instrument panel for the
-   entire horizon, and it makes every subsequent fix legible.
+2. **A data-quality dashboard.** — **SHIPPED (#175).** Read-only `data-quality`
+   stage emits a step-summary completeness report (field %s, website provenance
+   by source, completeness-score distribution, duplicate rate, staleness) — the
+   instrument panel that makes every subsequent fix legible. A web-facing
+   version is deferred to Later (provenance UI).
 
 3. **Normalize the sloppy fields.** `hq_state` (CA ↔ California), `formatUsd`
    amount collapsing, tag hygiene / thin-tag merging. Cheap, compounding wins
@@ -90,10 +90,10 @@ cleverly → make correctness visible.
    `BACKLOG.md`). Turns on the human-in-the-loop correction signal. Highest
    trust-per-unit-effort item on the board.
 
-5. **Per-company completeness / confidence score.** We already store sources and
-   `extraction_confidence` per field — compute and expose (internally first) a
-   completeness score so gaps are visible and prioritizable, and so #2 has a
-   per-row primitive to aggregate.
+5. **Per-company completeness / confidence score.** — **internal primitive
+   SHIPPED (#175)** (`util.completeness`, aggregated by the dashboard). Remaining:
+   wire it into husk-enrichment ordering, fold in `extraction_confidence`, and
+   expose a public trust badge (Later — provenance UI).
 
 ---
 
