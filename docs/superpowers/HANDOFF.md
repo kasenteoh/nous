@@ -8,6 +8,35 @@ for the detail behind the Latest-update block below), then the two plan docs
 under `docs/superpowers/plans/` (2026-07-10 improvement plan; 2026-07-11
 hygiene + Wave 3). `BACKLOG.md` is annotated with what shipped.
 
+## LATEST UPDATE — Now horizon field-normalization + report-data (2026-07-13, PRs #176/#177)
+
+ROADMAP Now **#3 and #4 done** — the data-quality "Now" horizon is now
+substantially **complete** (#1–#4 shipped; #5's internal primitive shipped).
+Built by **two agents in parallel** (pipeline in an isolated worktree + web in
+the main tree — disjoint dirs, no parallel node_modules to blow the near-full
+disk), each adversarially reviewed before merge, merged sequentially with docs
+consolidated to main after.
+- **#176 (pipeline):** `hq_state` canonicalized to the 2-letter USPS code
+  (`util/us_state.py` — 50 states + DC, non-US → None → untouched), applied at
+  the enrich write-site + a bounded idempotent `normalize-hq-state` backfill
+  (`--limit`/`--dry-run`). **Routing-safe:** the code is the only form
+  `/location/[state]` resolves (route uppercases the segment), so full-name rows
+  that 404 today start resolving. No migration, not yet cron-wired (one-shot
+  lever). **Run `nous normalize-hq-state` once** (dispatch or a cron step) to
+  drain existing ragged rows — enrichment normalizes new writes going forward.
+- **#177 (web):** per-company "Report incorrect data" `repoIssueUrl` rider on
+  `/c/[slug]`; `formatUsd` exact-dollars `title` tooltips on every individual
+  funding figure; `/tag/[tag]` `noindex` when <3 companies (lockstep with the
+  sitemap's ≥3 filter).
+
+**What's next:** the Now horizon is essentially cleared, so the frontier is the
+**NEXT horizon (depth)** — the market map `/map/[industry]` (the last un-built
+SEO-era item), momentum signals from `company_snapshots`, per-entity RSS,
+talent-flow/investor graphs. Smaller Now follow-ups remain: run the
+`normalize-hq-state` backfill once; wire `util.completeness` into
+husk-enrichment ordering; watch the `data-quality` cron report (esp. the
+website-provenance / wrong-site proxy from the husk re-mining).
+
 ## LATEST UPDATE — data-quality dashboard shipped (2026-07-13, PR #175)
 
 ROADMAP Now **#2 done** (and #5's internal primitive). New read-only
@@ -203,28 +232,25 @@ secret-free — that's the CI contract).
 
 ## Open items, in priority order
 
-The current initiative is the **ROADMAP "Now" horizon — data quality**
-(`ROADMAP.md`; `BACKLOG.md` "2026-07-13 ROADMAP 'Now' horizon" section). Earn
-trust before building depth. Build one reviewable PR at a time; leverage
-parallel agents for design/critique.
+The **ROADMAP "Now" horizon — data quality** is now substantially **COMPLETE**
+(#1–#4 shipped; #5's internal primitive shipped). Remaining Now follow-ups are
+small (below). The frontier is now the **NEXT horizon (depth)** — see `ROADMAP.md`.
 
-1. ~~**Husk website re-mining**~~ — **SHIPPED (#172/#173/#174).** See the latest-
-   update block above. Live in the cron; drains ~25/run. Next data-quality item
-   is now the priority.
-2. ~~**Data-quality dashboard**~~ — **SHIPPED (#175).** Read-only `data-quality`
-   cron report (completeness %s, website provenance, score distribution, dupes,
-   staleness). See the latest-update block above. **← this is now the priority:**
-3. **Field normalization + re-enable "report incorrect data"** — `hq_state`
-   (CA↔California) normalized at enrichment time; `formatUsd` exact-dollars
-   `title` tooltip; thin single-company tag-page threshold; and RE-ENABLE the
-   report-incorrect-data rider in `web/app/c/[slug]/page.tsx` (now unblocked —
-   the repo is public so the prefilled GitHub-issue URL resolves). The
-   report-incorrect-data re-enable is the **highest trust-per-effort** item and a
-   tiny frontend change — good next slice.
-4. ~~**Per-company completeness/confidence score**~~ — **internal primitive
-   SHIPPED (#175)** (`util.completeness`, aggregated by the dashboard). Remaining:
-   wire into husk-enrichment ordering, fold in `extraction_confidence`, public
-   trust badge (Later — provenance UI).
+1. ~~**Husk website re-mining**~~ — **SHIPPED (#172/#173/#174).** Live in the cron; drains ~25/run.
+2. ~~**Data-quality dashboard**~~ — **SHIPPED (#175).** Read-only `data-quality` cron report.
+3. ~~**Field normalization**~~ — **SHIPPED (#176/#177).** `hq_state`→USPS code (+ `normalize-hq-state` backfill), `formatUsd` exact-$ tooltips, thin-tag `noindex`.
+4. ~~**Re-enable "report incorrect data"**~~ — **SHIPPED (#177).** Per-company `repoIssueUrl` rider on `/c/[slug]`.
+5. ~~**Per-company completeness score**~~ — **internal primitive SHIPPED (#175).**
+
+**Small Now follow-ups (do opportunistically):**
+- Run `nous normalize-hq-state` once against prod to drain existing ragged
+  `hq_state` rows (needs a dispatch/cron step — the backfill isn't cron-wired).
+- Wire `util.completeness` into husk-enrichment prioritisation ordering; fold in
+  `extraction_confidence`; expose a public trust badge (Later — provenance UI).
+- Watch the `data-quality` cron report — esp. the website-provenance breakdown /
+  wrong-site proxy for the husk re-mining (the Apex-class residual).
+
+The frontier is now the **NEXT horizon (depth)**, detailed just below.
 
 **NEXT horizon (depth, after the foundation):** the **market map
 `/map/[industry]`** (the last un-built SEO-era item — pipeline-time PCA

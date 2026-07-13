@@ -81,14 +81,15 @@ cleverly → make correctness visible.
    instrument panel that makes every subsequent fix legible. A web-facing
    version is deferred to Later (provenance UI).
 
-3. **Normalize the sloppy fields.** `hq_state` (CA ↔ California), `formatUsd`
-   amount collapsing, tag hygiene / thin-tag merging. Cheap, compounding wins
-   that raise perceived quality immediately.
+3. **Normalize the sloppy fields.** — **SHIPPED (#176/#177).** `hq_state`
+   canonicalized to the USPS code at enrichment + a `normalize-hq-state` backfill
+   (routing-safe — heals broken `/location/California` links); `formatUsd` exact-
+   dollars tooltips; thin single-company tag pages `noindex`'d in lockstep with
+   the sitemap's existing ≥3 filter.
 
-4. **Re-enable "Report incorrect data."** The repo is public now, so the
-   prefilled GitHub-issue link should resolve (it was disabled while private —
-   `BACKLOG.md`). Turns on the human-in-the-loop correction signal. Highest
-   trust-per-unit-effort item on the board.
+4. **Re-enable "Report incorrect data."** — **SHIPPED (#177).** Per-company
+   `repoIssueUrl` rider restored on `/c/[slug]` (repo public → the prefilled
+   issue link resolves). The human-in-the-loop correction signal is live.
 
 5. **Per-company completeness / confidence score.** — **internal primitive
    SHIPPED (#175)** (`util.completeness`, aggregated by the dashboard). Remaining:

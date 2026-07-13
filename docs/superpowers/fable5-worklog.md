@@ -800,7 +800,7 @@ pipeline-health (freshness) — emits a step-summary report over the shown cohor
   stage: field %s, husk/complete counts, provenance, dupes, staleness); full CI
   rollup green before merge.
 
-## PR (pending) — feat(pipeline): normalize hq_state to USPS code (branch `fable5/hq-state-normalize`)
+## PR #176 — feat(pipeline): normalize hq_state to USPS code (merged 2026-07-13)
 
 BACKLOG "hq_state unnormalized (CA vs California)". `companies.hq_state` was
 stored ragged ("California" / "CA" / "ca"); location pages rendered the stored
@@ -833,3 +833,31 @@ casing and full-name `/location/California` links 404'd.
   wiring a bounded step is a trivial follow-up.
 - **Verified:** ruff + mypy clean; full suite 1560 passed (34 new: pure
   `canonical_us_state` + DB-gated backfill).
+
+## PR #177 — feat(web): report-data link, exact-$ tooltips, thin-tag noindex (merged 2026-07-13)
+
+ROADMAP Now #3 web polish (three small data-quality items), built by a parallel
+agent in the main tree (npm-verified) and adversarially reviewed (APPROVE, 0
+blocking) alongside #176.
+- **Report incorrect data (per-company):** a quiet muted link below the Sources
+  block on `/c/[slug]` via the existing `repoIssueUrl()` helper (repo is public
+  now, so the prefilled issue link resolves). Prefills `Data correction: <name>
+  (<slug>)` + a body with the page URL and a what's-wrong/correct-value/source
+  skeleton. Additive alongside the site-wide footer link (no removed block to
+  restore — `repoIssueUrl` had been added but left unused until public).
+- **formatUsd exact-dollars tooltip:** `title={formatUsdExact(amount)}` on every
+  individual company funding figure (spotlight, `/new`, `/trends`, investor
+  table, CompareTable). `formatUsd` output untouched, all null-safe. Aggregate
+  cross-company momentum sums skipped (false-precision).
+- **Thin single-company tag pages:** `/tag/[tag]` `generateMetadata` sets
+  `robots: { index:false, follow:true }` when the tag backs <3 companies —
+  `MIN_TAG_COMPANY_COUNT` kept in lockstep with `sitemap.ts`'s existing ≥3 filter
+  (the repo had already de-thinned the sitemap, so the threshold matched that
+  rather than the looser brief).
+- **Verified:** npm lint + 247 tests + build green; full CI rollup green.
+- **Orchestration note:** #176 + #177 were implemented in PARALLEL by two agents
+  (pipeline in an isolated worktree with uv; web in the main tree with npm —
+  disjoint dirs, so no conflict, and no parallel node_modules to blow the
+  near-full disk), each flowing straight into an adversarial code-reviewer agent
+  before merge. Merged sequentially (pipeline first) with docs consolidated to
+  main after, to avoid BACKLOG hunk collisions.

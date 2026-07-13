@@ -109,16 +109,16 @@ only for now).
 ### Pulled into this push — existing open entries
 Consciously scoped into the Now horizon; tracked in their home sections, listed
 here so the push is complete:
-- **"Report incorrect data" link** (Wave 1) — **now unblocked**: the repo is
-  public, so the prefilled GitHub-issue URL resolves. Re-enable the rider in
-  `web/app/c/[slug]/page.tsx`. Highest trust-per-effort item on the board.
-- **`formatUsd` rounding collapses distinct amounts** (Frontend fixes) — exact
-  dollars in a `title` tooltip.
-- **`hq_state` unnormalized (CA vs California)** — SHIPPED
-  (`fable5/hq-state-normalize`, PR pending) — canonicalized to the 2-letter USPS
-  code at enrichment write-time + a `normalize-hq-state` backfill.
-- **Tag min-companies threshold** (Frontend fixes) — thin single-company tag-page
-  hygiene.
+- **"Report incorrect data" link** (Wave 1) — **SHIPPED (#177)**: per-company
+  `repoIssueUrl` rider restored on `web/app/c/[slug]/page.tsx` (repo public → the
+  prefilled GitHub-issue link resolves).
+- **`formatUsd` rounding collapses distinct amounts** — **SHIPPED (#177)**:
+  `title={formatUsdExact(amount)}` on every individual funding figure.
+- **`hq_state` unnormalized (CA vs California)** — **SHIPPED (#176)** —
+  canonicalized to the 2-letter USPS code at enrichment write-time + a
+  `normalize-hq-state` backfill.
+- **Tag min-companies threshold** — **SHIPPED (#177)**: `/tag/[tag]` noindex when
+  <3 companies, in lockstep with the sitemap's existing ≥3 filter.
 
 ---
 
@@ -163,14 +163,17 @@ change, an article-stated cumulative total caps the displayed figure whenever
 articles state one that exceeds the sum (the tile shows max(stated, sum) —
 partial mitigation); the reconcile-merge risk itself stands.
 
-### `formatUsd` rounding collapses distinct amounts [S]
-$1.51M and $1.49M both render as "$1.5M" with no way to see exact figures.
-Show exact dollars in a `title` tooltip.
+### ~~`formatUsd` rounding collapses distinct amounts~~ [S] — SHIPPED (#177)
+$1.51M and $1.49M both rendered as "$1.5M"; now every individual funding figure
+carries a `title={formatUsdExact(amount)}` exact-dollars tooltip.
 
-### ~~`hq_state` values are unnormalized (CA vs California) — location pages render stored casing; normalize at enrichment time.~~ [S] SHIPPED (`fable5/hq-state-normalize`, PR pending)
+### ~~`hq_state` values are unnormalized (CA vs California) — location pages render stored casing; normalize at enrichment time.~~ [S] SHIPPED (#176)
 Canonical form = the 2-letter UPPERCASE USPS code (the form the `/location/[state]` route already matches on — routing-safe). Applied at the enrich-companies write site via `canonical_us_state` (`util/us_state.py`, 50 states + DC; non-US → None → left untouched) plus the bounded, idempotent `normalize-hq-state` backfill stage (`--limit` / `--dry-run`, self-bounding SELECT, per-row commit). No migration (content-only), no URL change (full-name `/location/California` links 404 today and start resolving to the working `/location/CA`).
 
-### Tag sitemap: consider a min-companies threshold for tag URLs (LLM open vocabulary → long tail of single-company thin pages), and a sitemap index before companies+tags approach the 50k-URL sitemap cap. [S]
+### Tag sitemap min-companies threshold [S] — **partly SHIPPED (#177)**
+Thin single-company tag pages: `/tag/[tag]` now `noindex` when <3 companies, and
+`sitemap.ts` already excludes tags with <3 (`listAllTags`). **Still open:** a
+sitemap *index* before companies+tags approach the 50k-URL sitemap cap.
 
 ---
 
