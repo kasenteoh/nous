@@ -330,6 +330,24 @@ class Company(Base):
     )
     embedding_text_hash: Mapped[str | None] = mapped_column(Text, nullable=True)
 
+    # Market-map coordinates (migration 0038): the compute-map-positions stage
+    # fits PCA(n_components=2) over this company's industry_group cohort's
+    # embeddings, projects to 2D, pins a deterministic sign, and min-max
+    # normalizes each axis to [0, 1] WITHIN the industry. The web renders a
+    # static SVG scatter at /map/[industry] from these. NULL = not positioned
+    # (industry below MIN_MAP_COMPANIES, or no embedding yet) — the web draws no
+    # node. Coords are only comparable within the company's own industry_group
+    # (each industry has its own PCA basis; that cohort key is industry_group
+    # above). map_computed_at is the per-company freshness stamp the stage's
+    # per-industry TTL gate reads as MAX(...) to skip fresh industries.
+    # Un-indexed: never a selective WHERE key — the web reads WHERE
+    # industry_group = $1 AND map_x IS NOT NULL (industry_group already indexed).
+    map_x: Mapped[float | None] = mapped_column(Float, nullable=True)
+    map_y: Mapped[float | None] = mapped_column(Float, nullable=True)
+    map_computed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
 
 class RawPage(Base):
     """Scraped-page cache for homepage / about / product pages.

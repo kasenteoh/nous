@@ -410,6 +410,65 @@ def compute_themes(limit: int, ttl_days: int, force: bool) -> None:
     asyncio.run(_run())
 
 
+@cli.command("compute-map-positions")
+@click.option(
+    "--ttl-days",
+    type=int,
+    default=25,
+    show_default=True,
+    help=(
+        "Skip an industry whose coords were computed fewer than N days ago — "
+        "the per-industry monthly gate for the weekly discovery workflow."
+    ),
+)
+@click.option(
+    "--force",
+    is_flag=True,
+    default=False,
+    help="Bypass the per-industry TTL gate (manual rebuilds / determinism checks).",
+)
+def compute_map_positions(ttl_days: int, force: bool) -> None:
+    """Project company embeddings to 2D map coords per industry_group (PCA).
+
+    Requires the optional ``embeddings`` group for scikit-learn
+    (``uv sync --group embeddings``) — the PCA import below fails cleanly without
+    it. $0: local CPU, no LLM. Idempotent: unchanged embeddings re-project to
+    byte-identical coords; the per-industry TTL gate keeps the cadence monthly.
+    """
+    import asyncio
+    from datetime import UTC, datetime
+
+    from nous.db.session import AsyncSessionLocal
+    from nous.observability import record_pipeline_run
+    from nous.pipeline.compute_map_positions import (
+        PCAProjector,
+        run_compute_map_positions,
+    )
+
+    # Constructed eagerly (outside _run) so a missing scikit-learn fails loudly
+    # before any DB session is opened.
+    projector = PCAProjector()
+
+    async def _run() -> None:
+        started = datetime.now(UTC)
+        async with AsyncSessionLocal() as session:
+            summary = await run_compute_map_positions(
+                session, projector, ttl_days=ttl_days, force=force
+            )
+            click.echo(summary.model_dump_json(indent=2))
+        # flag_empty off: an all-fresh / all-below-threshold catalog is the
+        # steady state, not a silent failure.
+        await record_pipeline_run(
+            "compute-map-positions",
+            started_at=started,
+            inputs_seen=summary.industries_seen,
+            rows_written=summary.companies_positioned,
+            summary=summary,
+        )
+
+    asyncio.run(_run())
+
+
 @cli.command("refresh-vc-portfolios")
 @click.option(
     "--firm",
