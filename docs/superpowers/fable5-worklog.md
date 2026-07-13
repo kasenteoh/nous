@@ -799,3 +799,37 @@ pipeline-health (freshness) — emits a step-summary report over the shown cohor
 - **Verified:** ruff + mypy clean; full suite 1526 passed (pure score + DB-gated
   stage: field %s, husk/complete counts, provenance, dupes, staleness); full CI
   rollup green before merge.
+
+## PR (pending) — feat(pipeline): normalize hq_state to USPS code (branch `fable5/hq-state-normalize`)
+
+BACKLOG "hq_state unnormalized (CA vs California)". `companies.hq_state` was
+stored ragged ("California" / "CA" / "ca"); location pages rendered the stored
+casing and full-name `/location/California` links 404'd.
+- **Canonical form = 2-letter UPPERCASE USPS code.** Chosen because the web
+  location route (`web/app/location/[state]/page.tsx`) resolves a segment by
+  `decodeURIComponent(seg).toUpperCase()` and `queries.ts` does
+  `q.eq("hq_state", state)` — the code is the ONLY form that resolves. Full
+  names were unreachable (route uppercases to "CALIFORNIA", nothing stored that
+  way). So normalizing full names → "CA" is strictly routing-safe: every
+  `/location/CA` that resolves today keeps resolving, and broken full-name links
+  start pointing at the working code URL. No web change needed (the `stateAbbrev`
+  display helper in `web/lib/format.ts` already collapsed both forms for render).
+- **New pure map** `util/us_state.py` — `canonical_us_state(value) -> str | None`
+  over the 50 states + DC; case/whitespace tolerant; returns None for foreign /
+  territory / garbage so callers never clobber a non-US value. Unit-tested
+  (`test_us_state.py`).
+- **Write-site** enrich-companies now stores `canonical_us_state(hq_state) or
+  raw`, so NEW US data is normalized while non-US strings pass through. Downstream
+  of the LLM call → no `PROMPT_VERSION` bump, golden set untouched (the eval
+  already `.upper()`s both sides).
+- **Backfill** `normalize-hq-state` stage + CLI (`--limit`, `--dry-run`). SELECT
+  filters entirely in SQL to rows whose `hq_state` is a US-state spelling ≠ its
+  canonical code (self-bounding so `--limit` bounds real work; non-US never
+  matches), per-row commit with `StaleDataError` skip (mirrors embed-companies),
+  idempotent. Records no new source (pure format op). DB-gated test
+  (`test_normalize_hq_state_db.py`).
+- **No migration** (content-only; `hq_state` column + index already exist,
+  head stays 0037). Not yet wired into cron — backfill is a one-shot lever;
+  wiring a bounded step is a trivial follow-up.
+- **Verified:** ruff + mypy clean; full suite 1560 passed (34 new: pure
+  `canonical_us_state` + DB-gated backfill).

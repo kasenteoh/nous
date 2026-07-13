@@ -1334,6 +1334,56 @@ def name_quality_cmd(limit: int | None, dry_run: bool) -> None:
     asyncio.run(_run())
 
 
+@cli.command("normalize-hq-state")
+@click.option(
+    "--limit",
+    type=int,
+    default=None,
+    help="Maximum number of rows to normalize (for bounded / partial runs).",
+)
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    default=False,
+    help="Log intended hq_state rewrites without writing.",
+)
+def normalize_hq_state_cmd(limit: int | None, dry_run: bool) -> None:
+    """Canonicalize companies.hq_state to the 2-letter UPPERCASE USPS code (zero LLM).
+
+    Rewrites mixed US-state spellings ("California", "ca", "CA ") to their code
+    ("CA") — the form the web location route already matches on, so it heals
+    full-name /location links without changing any URL that resolves today.
+    Selects only rows that differ from canonical (self-bounding, so --limit
+    bounds real work); non-US / territory / garbage values are left untouched.
+    One commit per row. Idempotent: a second full run rewrites nothing. Records
+    no new source — pure format normalization, no schema change.
+    """
+    import asyncio
+    from datetime import UTC, datetime
+
+    from nous.db.session import AsyncSessionLocal
+    from nous.observability import record_pipeline_run
+    from nous.pipeline.normalize_hq_state import run_normalize_hq_state
+
+    async def _run() -> None:
+        started = datetime.now(UTC)
+        async with AsyncSessionLocal() as session:
+            summary = await run_normalize_hq_state(
+                session, limit=limit, dry_run=dry_run
+            )
+            click.echo(summary.model_dump_json(indent=2))
+        if not dry_run:
+            await record_pipeline_run(
+                "normalize-hq-state",
+                started_at=started,
+                inputs_seen=summary.companies_seen,
+                rows_written=summary.normalized,
+                summary=summary,
+            )
+
+    asyncio.run(_run())
+
+
 @cli.command("resolve-website-fallback")
 @click.option(
     "--limit",

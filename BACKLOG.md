@@ -114,8 +114,9 @@ here so the push is complete:
   `web/app/c/[slug]/page.tsx`. Highest trust-per-effort item on the board.
 - **`formatUsd` rounding collapses distinct amounts** (Frontend fixes) — exact
   dollars in a `title` tooltip.
-- **`hq_state` unnormalized (CA vs California)** (Frontend fixes) — normalize at
-  enrichment time.
+- **`hq_state` unnormalized (CA vs California)** — SHIPPED
+  (`fable5/hq-state-normalize`, PR pending) — canonicalized to the 2-letter USPS
+  code at enrichment write-time + a `normalize-hq-state` backfill.
 - **Tag min-companies threshold** (Frontend fixes) — thin single-company tag-page
   hygiene.
 
@@ -166,7 +167,8 @@ partial mitigation); the reconcile-merge risk itself stands.
 $1.51M and $1.49M both render as "$1.5M" with no way to see exact figures.
 Show exact dollars in a `title` tooltip.
 
-### `hq_state` values are unnormalized (CA vs California) — location pages render stored casing; normalize at enrichment time. [S]
+### ~~`hq_state` values are unnormalized (CA vs California) — location pages render stored casing; normalize at enrichment time.~~ [S] SHIPPED (`fable5/hq-state-normalize`, PR pending)
+Canonical form = the 2-letter UPPERCASE USPS code (the form the `/location/[state]` route already matches on — routing-safe). Applied at the enrich-companies write site via `canonical_us_state` (`util/us_state.py`, 50 states + DC; non-US → None → left untouched) plus the bounded, idempotent `normalize-hq-state` backfill stage (`--limit` / `--dry-run`, self-bounding SELECT, per-row commit). No migration (content-only), no URL change (full-name `/location/California` links 404 today and start resolving to the working `/location/CA`).
 
 ### Tag sitemap: consider a min-companies threshold for tag URLs (LLM open vocabulary → long tail of single-company thin pages), and a sitemap index before companies+tags approach the 50k-URL sitemap cap. [S]
 
