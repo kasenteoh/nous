@@ -620,3 +620,24 @@ shipped (#91), and `/vs` inherited it as a 404 (`loadVs` saw <2 listed).
 - **Gotcha for next time:** a PostgREST/supabase-js embed of a table with ≥2 FKs
   to the same parent is ambiguous and 400s the ENTIRE request — always hint
   `child!fk_column(...)`. Silent because the helper swallows the error to `[]`.
+
+## PR #169 — `/feed.xml` RSS feed (merged 2026-07-13)
+
+SEO growth-engine **slice 4a** (the RSS half of "RSS + `/c` timeline"; the
+timeline half is a separate PR because it destructively redesigns `/c`).
+
+- **Surface:** `/feed.xml` — an RSS 2.0 firehose of the catalog's newest events,
+  funding rounds + news articles interleaved newest-first, capped 40. On-site
+  only (email deferred this quarter — owner's call).
+- **New code:** `lib/rss.ts` (pure, unit-tested — `buildRssFeed`, `xmlEscape`,
+  `toRfc822` RFC-822 dates); `lib/queries.ts` `listRecentNews` (non-excluded,
+  dated, newest-first) paired with the existing `listRecentFundings`;
+  `app/feed.xml/route.ts` (route handler, 6h ISR, `application/rss+xml`,
+  empty-but-valid feed without Supabase — never 500s). RSS auto-discovery
+  `<link rel="alternate">` in the layout head + a footer link.
+- **Proportionate review:** small, additive, well-tested (escaping,
+  excluded-company filtering, feed validity all under test) — shipped without a
+  subagent review pass, unlike the data-correctness/destructive slices.
+- **Verified:** lint + 244 unit tests (+7 rss) + webpack build (`/feed.xml`
+  static@6h) + `check:bundle` + e2e (19, +1 smoke: 200 + content-type + valid
+  envelope). Full rollup all-green before merge.
