@@ -71,6 +71,12 @@ jobs:
       - name: Install dependencies
         run: uv sync
 
+      - name: Apply migrations
+        # The stage reads the website_source / website_fallback_checked_at
+        # columns (migration 0037), so ensure prod is at head before running.
+        # Safe: only migrations already merged to the default branch exist here.
+        run: uv run alembic upgrade head
+
       - name: Run resolve-website-fallback
         env:
           OP_DRY_RUN: ${{ inputs.dry_run }}
