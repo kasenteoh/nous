@@ -406,6 +406,22 @@ jobs:
 
       # ----- Descriptions (backlog drain + new companies) ---------------------
 
+      - name: Resolve website fallback (husk re-mining)
+        id: resolve_fallback
+        # Route around the Cloudflare-403 that blocks the origin homepage scrape:
+        # resolve website-less husks from sources that were never the origin site
+        # (Wikidata "official website" + outbound links in already-sourced news),
+        # recording a provenance source per resolved website. Runs BEFORE
+        # resolve-homepages so marquee husks get a sourced website before the
+        # blind TLD-guess resolver, and scrape-homepages picks them up the same
+        # run. Self-bounding on its own website_fallback_checked_at stamp; $0
+        # (Wikidata + news re-fetch are free). No dispatch knob — the 25-input
+        # cap is full; the manual resolve-website-fallback.yml lever covers
+        # bounded backfills / dry runs.
+        timeout-minutes: 6
+        continue-on-error: true
+        run: uv run nous resolve-website-fallback --limit 25 --max-runtime-minutes 3
+
       - name: Resolve homepages
         id: resolve
         if: ${{ inputs.skip_resolve != true }}

@@ -62,18 +62,18 @@ on-brand, doesn't rot.
 The data foundation. Priority horizon. Measure quality → fix the biggest hole
 cleverly → make correctness visible.
 
-1. **Kill the husks by re-mining, not re-scraping.** Resolve the ~890 missing
-   websites via, in order of preference:
-   - **Outbound links in `news_articles`** we've already scraped (articles link
-     the company site in-body) — zero new requests.
-   - **VC portfolio pages** we already scrape into `raw_pages` (they link
-     portfolio companies directly).
-   - **Wikidata / Wikipedia** "official website" — free, un-Cloudflared API, and
-     prominent companies are exactly who's indexed there.
-   - **Common Crawl** — look a domain up in the index without hitting the origin.
-
-   Ships as a new idempotent pipeline stage (e.g. `resolve-website-fallback`),
-   $0, self-bounding on the husk population.
+1. **Kill the husks by re-mining, not re-scraping.** — **SHIPPED (#172/#173/#174).**
+   The `resolve-website-fallback` stage resolves website-less husks from
+   non-origin sources ($0, idempotent, in the 3h cron, provenance recorded):
+   **Wikidata "official website"** (P856, name + org-type + country matched) and
+   **outbound links in already-sourced news article bodies** (re-fetching the
+   article, not the origin). A 30-husk prod dry run resolved 37% at ~10/11
+   precision, 0 conflicts. The two sources the roadmap first named that weren't
+   built: VC-portfolio (`raw_pages` is company-scoped, not portfolio pages, and
+   the portfolio adapters already capture the URL at discovery — redundant) and
+   Common Crawl (weak for name→domain); revisit only if the husk count stays
+   high. The re-mining principle held: no origin fetch, no evasion, every
+   resolved site sourced.
 
 2. **A data-quality dashboard.** An internal report (backed by `pipeline_runs`
    and direct counts): % of companies with website / description / funding /

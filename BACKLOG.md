@@ -65,24 +65,29 @@ trusted before building depth. Sequence: measure quality → fix the biggest hol
 detailed below; existing open entries pulled into this push are cross-referenced
 at the end.
 
-### Resolve husk websites by re-mining, not re-scraping [M] — P1
-The ~890 husk companies have no resolvable website because homepage scrapes get
-Cloudflare-403'd from Actions datacenter IPs. Do **not** fight Cloudflare —
-proxy/evasion is rejected on principle (ROADMAP "route around, don't evade": it
-contradicts the sourcing moat, it rots on Cloudflare updates, and it's
-unnecessary). Resolve from sources that were never the origin site, in
-preference order:
-1. Outbound links in already-scraped `news_articles` bodies (the company site is
-   often linked in-article) — zero new requests.
-2. VC portfolio pages already cached in `raw_pages` (they link portfolio
-   companies directly).
-3. Wikidata / Wikipedia "official website" property — free, un-Cloudflared API;
-   prominent companies (which husks are) are exactly who's indexed there.
-4. Common Crawl domain lookup — index hit, never touches the origin.
-
-New idempotent stage `resolve-website-fallback`, self-bounding on husks
-(`website IS NULL`), $0. Wire into the 3h cron's shared concurrency group. Record
-a source for every resolved website (sourcing moat: no unattributed data).
+### Resolve husk websites by re-mining, not re-scraping [M] — P1 — SHIPPED (#172/#173/#174)
+New idempotent `resolve-website-fallback` stage resolves website-less husks from
+non-origin sources, first accepted candidate wins, `$0`, self-bounding on
+`website IS NULL` + its own `website_fallback_checked_at` stamp, wired into the
+3h cron before resolve-homepages (drains ~25/run). Provenance recorded per
+resolved site (`website_source` + `website_source_url`, migration 0037).
+- **wikidata** — Wikidata "official website" (P856) for a name + org-type +
+  country matched entity (three precision gates; a conservative country
+  cross-check rejects confirmed-foreign same-name collisions). **Highest yield +
+  precision.**
+- **news_outbound** — the company's homepage link in an already-sourced news
+  article body, re-fetching the *article* (not the origin) and matching by
+  domain-label / anchor name.
+- **Dry run (30 prominent husks):** 11 resolved (37%), 0 conflicts, ~10/11
+  correct, `$0`. wikidata 9, news_outbound 2 (disjoint).
+- **Not built:** VC-portfolio source (the roadmap assumed `raw_pages` caches
+  portfolio pages — it doesn't; it's company-scoped, and portfolio adapters
+  already capture `entry.website` at discovery, so it's redundant for
+  portfolio-discovered husks). Common Crawl (weak for name→domain). Revisit only
+  if the dashboard shows the residual husk count stays high.
+- **Follow-up:** the faster-backfill lever (`resolve-website-fallback.yml`
+  dispatch, `dry_run=false`) can drain the ~890 backlog quicker than 25/run if
+  the gradual cron drain proves too slow.
 
 ### Data-quality dashboard [M] — P1
 Internal QC surface — extends the "Pipeline observability" `/stats` work
