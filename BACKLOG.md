@@ -1,5 +1,9 @@
 # Backlog
 
+> **Strategic layer:** [`ROADMAP.md`](ROADMAP.md) holds the *why / what order*
+> (Now / Next / Later bets); this file is the tactical *what next* queue. A
+> roadmap bet becoming concrete work lands here as an entry.
+
 > **2026-07-12 status sweep:** the `fable5/*` series (PRs #131–#155, see
 > `docs/superpowers/fable5-worklog.md`) shipped large parts of this backlog:
 > all P2 pipeline cleanups, the frontend fixes, slug aliases + 301s (Wave 2),
@@ -50,6 +54,61 @@ automatically.
 **Still open from the review:** news-list de-dup/ranking (E2); a deliberate non-US
 backfill drain (V2 — eligibility now rejects on entry, but existing foreign rows
 like Mistral/Clio need a sweep); mobile-responsiveness pass (P3).
+
+---
+
+## 2026-07-13 ROADMAP "Now" horizon — data-quality foundation
+
+Strategic context: [ROADMAP.md](ROADMAP.md) (Now horizon). Earn the right to be
+trusted before building depth. Sequence: measure quality → fix the biggest hole
+(husks) by re-mining not re-scraping → make correctness visible. New items are
+detailed below; existing open entries pulled into this push are cross-referenced
+at the end.
+
+### Resolve husk websites by re-mining, not re-scraping [M] — P1
+The ~890 husk companies have no resolvable website because homepage scrapes get
+Cloudflare-403'd from Actions datacenter IPs. Do **not** fight Cloudflare —
+proxy/evasion is rejected on principle (ROADMAP "route around, don't evade": it
+contradicts the sourcing moat, it rots on Cloudflare updates, and it's
+unnecessary). Resolve from sources that were never the origin site, in
+preference order:
+1. Outbound links in already-scraped `news_articles` bodies (the company site is
+   often linked in-article) — zero new requests.
+2. VC portfolio pages already cached in `raw_pages` (they link portfolio
+   companies directly).
+3. Wikidata / Wikipedia "official website" property — free, un-Cloudflared API;
+   prominent companies (which husks are) are exactly who's indexed there.
+4. Common Crawl domain lookup — index hit, never touches the origin.
+
+New idempotent stage `resolve-website-fallback`, self-bounding on husks
+(`website IS NULL`), $0. Wire into the 3h cron's shared concurrency group. Record
+a source for every resolved website (sourcing moat: no unattributed data).
+
+### Data-quality dashboard [M] — P1
+Internal QC surface — extends the "Pipeline observability" `/stats` work
+(Ops & quality hardening) but for *completeness*, not just freshness: % of
+companies with website / description / funding / logo / people, husk-count
+trend, duplicate rate, staleness distribution. The instrument panel for this
+whole horizon — makes every subsequent fix measurable. Direct counts +
+`pipeline_runs`.
+
+### Per-company completeness / confidence score [S] — P2
+Compute a per-row completeness score from present fields + `extraction_confidence`.
+Expose internally first (feeds the dashboard and husk-enrichment prioritisation
+ordering), publicly later as a trust badge (ROADMAP Later horizon — provenance UI).
+
+### Pulled into this push — existing open entries
+Consciously scoped into the Now horizon; tracked in their home sections, listed
+here so the push is complete:
+- **"Report incorrect data" link** (Wave 1) — **now unblocked**: the repo is
+  public, so the prefilled GitHub-issue URL resolves. Re-enable the rider in
+  `web/app/c/[slug]/page.tsx`. Highest trust-per-effort item on the board.
+- **`formatUsd` rounding collapses distinct amounts** (Frontend fixes) — exact
+  dollars in a `title` tooltip.
+- **`hq_state` unnormalized (CA vs California)** (Frontend fixes) — normalize at
+  enrichment time.
+- **Tag min-companies threshold** (Frontend fixes) — thin single-company tag-page
+  hygiene.
 
 ---
 
