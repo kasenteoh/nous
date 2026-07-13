@@ -3099,6 +3099,58 @@ export async function getCompaniesForCompare(
   });
 }
 
+/**
+ * Whether a RESOLVED competitor edge links the two companies in EITHER
+ * direction — i.e. one lists the other as a competitor and that competitor was
+ * matched to the other's company row (`competitor_company_id`, not just a
+ * free-text name). This is the SEO-quality gate for /vs/[a]/[b]: only an edge
+ * pair (with real funding on ≥1 side, checked page-side) is worth indexing;
+ * arbitrary pairs render but stay `noindex`. Two lookups — slugs→ids, then a
+ * single edge probe — both cheap and ISR-cached. Returns false on missing env,
+ * error, or either slug being absent/excluded-away (an unmatched id).
+ */
+export async function areCompetitorsBySlug(
+  slugA: string,
+  slugB: string,
+): Promise<boolean> {
+  if (slugA === slugB) return false;
+  const supabase = supabaseOrNull("areCompetitorsBySlug");
+  if (!supabase) return false;
+
+  const { data: idRows, error: idError } = await supabase
+    .from("companies")
+    .select("id, slug")
+    .in("slug", [slugA, slugB]);
+
+  if (idError || !idRows || idRows.length < 2) {
+    if (idError) {
+      console.error("[areCompetitorsBySlug] id lookup failed:", idError.message);
+    }
+    return false;
+  }
+
+  const idBySlug = new Map(
+    (idRows as { id: string; slug: string }[]).map((r) => [r.slug, r.id]),
+  );
+  const idA = idBySlug.get(slugA);
+  const idB = idBySlug.get(slugB);
+  if (!idA || !idB) return false;
+
+  const { data, error } = await supabase
+    .from("competitors")
+    .select("company_id")
+    .or(
+      `and(company_id.eq.${idA},competitor_company_id.eq.${idB}),and(company_id.eq.${idB},competitor_company_id.eq.${idA})`,
+    )
+    .limit(1);
+
+  if (error) {
+    console.error("[areCompetitorsBySlug] edge probe failed:", error.message);
+    return false;
+  }
+  return (data ?? []).length > 0;
+}
+
 // ─── Co-investor signal (Task C5) ─────────────────────────────────────────────
 
 // Cap on the "frequently co-invests with" firms surfaced on an investor page.

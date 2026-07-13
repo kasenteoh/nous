@@ -14,6 +14,7 @@ import type { AlternativesData } from "@/lib/types";
 import { CompanyCard } from "@/components/CompanyCard";
 import { JsonLd } from "@/components/JsonLd";
 import { siteOrigin } from "@/lib/site";
+import { vsPath } from "@/lib/vs";
 
 type Props = {
   params: Promise<{ slug: string }>;
@@ -209,6 +210,16 @@ export default async function AlternativesPage({ params }: Props) {
                   ) : (
                     sourceLabel(c.source)
                   )}
+                </p>
+                {/* Head-to-head compare link — the crawl path to the /vs pair
+                    (indexable only when it's a funded competitor edge). */}
+                <p className="mt-1 px-1 text-xs">
+                  <Link
+                    href={vsPath(company.slug, c.slug)}
+                    className="text-accent underline underline-offset-2 decoration-accent/40 hover:decoration-accent"
+                  >
+                    Compare {company.name} vs {c.name} →
+                  </Link>
                 </p>
               </div>
             ))}
