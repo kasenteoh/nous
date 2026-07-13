@@ -13,7 +13,9 @@ import {
   listAllStates,
   listAllThemeSlugs,
   listAlternativesCompanySlugs,
+  listCanonicalIndustries,
 } from "@/lib/queries";
+import { industryToSlug } from "@/lib/industry";
 import { siteOrigin } from "@/lib/site";
 
 export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
@@ -25,10 +27,11 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
     { url: `${origin}/investors` },
     { url: `${origin}/new` },
     { url: `${origin}/themes` },
+    { url: `${origin}/industry` },
     { url: `${origin}/about` },
   ];
 
-  const [companies, investors, tags, states, alternatives, themes] =
+  const [companies, investors, tags, states, alternatives, themes, industries] =
     await Promise.all([
       listAllCompanySlugs(),
       listAllInvestorSlugs(),
@@ -36,6 +39,7 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
       listAllStates(),
       listAlternativesCompanySlugs(),
       listAllThemeSlugs(),
+      listCanonicalIndustries(),
     ]);
 
   const companyEntries: MetadataRoute.Sitemap = companies.map((c) => ({
@@ -76,6 +80,15 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
     lastModified: t.updated_at ?? undefined,
   }));
 
+  // `industries` is the canonical bucket list (≥ MIN_INDUSTRY_COMPANY_COUNT
+  // companies each), the same gate the routes enforce, so no arbitrary
+  // freeform-label page is listed. A rare industry with no funding AND no
+  // sub-themes self-noindexes at the page level (its generateMetadata sets
+  // robots.index=false), which Google honors over sitemap inclusion.
+  const industryEntries: MetadataRoute.Sitemap = industries.map((i) => ({
+    url: `${origin}/industry/${industryToSlug(i.group)}`,
+  }));
+
   return [
     ...staticEntries,
     ...companyEntries,
@@ -84,5 +97,6 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
     ...locationEntries,
     ...alternativesEntries,
     ...themeEntries,
+    ...industryEntries,
   ];
 }

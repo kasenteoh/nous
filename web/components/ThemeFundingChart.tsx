@@ -28,8 +28,7 @@ export function ThemeFundingChart({ buckets }: Props) {
   if (buckets.length === 0 || max === 0) {
     return (
       <p className="text-sm text-ink-muted">
-        No dated funding recorded for this theme&apos;s companies in the last{" "}
-        {buckets.length || 8} quarters.
+        No dated funding recorded in the last {buckets.length || 8} quarters.
       </p>
     );
   }
@@ -46,7 +45,7 @@ export function ThemeFundingChart({ buckets }: Props) {
       viewBox={`0 0 ${CHART_WIDTH} ${CHART_HEIGHT}`}
       className="w-full"
       role="img"
-      aria-label={`Funding raised by member companies per quarter. ${summary}.`}
+      aria-label={`Funding raised per quarter. ${summary}.`}
     >
       {/* Baseline */}
       <line

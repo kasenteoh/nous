@@ -87,6 +87,48 @@ function quarterFirstMonth(month: number): number {
   return 3 * Math.floor((month - 1) / 3) + 1;
 }
 
+/** `${year}-${paddedFirstMonth}` — the internal bucket key for a quarter. */
+function quarterKey(year: number, month: number): string {
+  return `${year}-${String(month).padStart(2, "0")}`;
+}
+
+/**
+ * The `quarters` most recent calendar quarters ending with the one containing
+ * `now`, oldest first. Shared by every by-quarter series so they all span the
+ * same INCLUDING-the-current-quarter window (the current quarter is partial —
+ * a display concern the growth metrics handle separately by comparing only
+ * complete quarters).
+ */
+function quarterWindow(
+  quarters: number,
+  now: Date,
+): { year: number; month: number }[] {
+  let year = now.getUTCFullYear();
+  let month = quarterFirstMonth(now.getUTCMonth() + 1);
+  const keys: { year: number; month: number }[] = [];
+  for (let i = 0; i < quarters; i++) {
+    keys.unshift({ year, month });
+    month -= 3;
+    if (month < 1) {
+      month += 12;
+      year -= 1;
+    }
+  }
+  return keys;
+}
+
+/** Project a windowed total map onto QuarterBucket[] (oldest first, gaps → 0). */
+function bucketsFromWindow(
+  keys: { year: number; month: number }[],
+  totals: Map<string, number>,
+): QuarterBucket[] {
+  return keys.map((k) => ({
+    label: `Q${Math.floor((k.month - 1) / 3) + 1} ${k.year}`,
+    start: `${quarterKey(k.year, k.month)}-01`,
+    totalUsd: totals.get(quarterKey(k.year, k.month)) ?? 0,
+  }));
+}
+
 /**
  * Bucket funding rounds into the `quarters` most recent calendar quarters
  * (oldest first), INCLUDING the in-progress current quarter — this is a
@@ -104,36 +146,73 @@ export function bucketFundingByQuarter(
   quarters = 8,
   now: Date = new Date(),
 ): QuarterBucket[] {
-  // Build the window of (year, firstMonth) quarter keys, oldest first.
-  let year = now.getUTCFullYear();
-  let month = quarterFirstMonth(now.getUTCMonth() + 1);
-  const keys: { year: number; month: number }[] = [];
-  for (let i = 0; i < quarters; i++) {
-    keys.unshift({ year, month });
-    month -= 3;
-    if (month < 1) {
-      month += 12;
-      year -= 1;
-    }
-  }
-
+  const keys = quarterWindow(quarters, now);
   const totals = new Map<string, number>();
-  const keyOf = (y: number, m: number): string =>
-    `${y}-${String(m).padStart(2, "0")}`;
-  for (const k of keys) totals.set(keyOf(k.year, k.month), 0);
+  for (const k of keys) totals.set(quarterKey(k.year, k.month), 0);
 
   for (const round of rounds) {
     if (round.announced_date == null || round.amount_raised == null) continue;
     const match = /^(\d{4})-(\d{2})/.exec(round.announced_date);
     if (!match) continue;
-    const key = keyOf(Number(match[1]), quarterFirstMonth(Number(match[2])));
+    const key = quarterKey(Number(match[1]), quarterFirstMonth(Number(match[2])));
     if (!totals.has(key)) continue; // outside the window
     totals.set(key, (totals.get(key) ?? 0) + Number(round.amount_raised));
   }
 
-  return keys.map((k) => ({
-    label: `Q${Math.floor((k.month - 1) / 3) + 1} ${k.year}`,
-    start: `${keyOf(k.year, k.month)}-01`,
-    totalUsd: totals.get(keyOf(k.year, k.month)) ?? 0,
-  }));
+  return bucketsFromWindow(keys, totals);
+}
+
+/** A pre-aggregated quarter total, as the funding_by_quarter RPC (0036) emits. */
+export interface QuarterTotal {
+  /** ISO date (YYYY-MM-DD) of the quarter's first day — `date_trunc('quarter', …)`. */
+  quarter_start: string;
+  /** Sum of round amounts announced that quarter, USD (numeric may arrive as string). */
+  total_usd: number | string | null;
+}
+
+/**
+ * Like {@link bucketFundingByQuarter}, but for data ALREADY grouped per quarter
+ * by the `funding_by_quarter` SQL function (migration 0036) — the per-industry
+ * and /trends charts pull pre-bucketed rows from the RPC because a flat select
+ * of every round would blow PostgREST's silent 1000-row cap on the largest
+ * industries. The gap-filling + windowing that bucketFundingByQuarter does over
+ * raw rounds happens here over the RPC rows instead: quarters the RPC omitted
+ * (none dated+funded) fill with 0 so the time axis has no silent gaps, and rows
+ * outside the window are ignored. Same oldest-first, current-quarter-included
+ * contract. Date math is on the ISO string's year/month (time-zone-proof).
+ */
+export function quarterBucketsFromTotals(
+  totals: readonly QuarterTotal[],
+  quarters = 8,
+  now: Date = new Date(),
+): QuarterBucket[] {
+  const keys = quarterWindow(quarters, now);
+  const windowed = new Map<string, number>();
+  for (const k of keys) windowed.set(quarterKey(k.year, k.month), 0);
+
+  for (const row of totals) {
+    if (row.total_usd == null) continue;
+    const match = /^(\d{4})-(\d{2})/.exec(row.quarter_start);
+    if (!match) continue;
+    // quarter_start is already a quarter boundary, but normalize defensively.
+    const key = quarterKey(Number(match[1]), quarterFirstMonth(Number(match[2])));
+    if (!windowed.has(key)) continue; // outside the window
+    windowed.set(key, (windowed.get(key) ?? 0) + Number(row.total_usd));
+  }
+
+  return bucketsFromWindow(keys, windowed);
+}
+
+/**
+ * Trailing-window funding growth: (recent − prior) / prior, or null when there
+ * is no prior-window funding to divide by (an undefined rate — the caller
+ * renders it as "new" when recent > 0). Single source of truth for the
+ * /industry momentum figure, matching how the pipeline derives theme growth.
+ */
+export function fundingGrowth(
+  recent: number,
+  prior: number,
+): number | null {
+  if (prior <= 0) return null;
+  return (recent - prior) / prior;
 }

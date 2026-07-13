@@ -126,6 +126,27 @@ test.describe("structural smoke (no data required — CI contract)", () => {
     ).toBeVisible();
   });
 
+  test("/industry renders the industries index (200)", async ({ page }) => {
+    // Secret-free CI has no industry data; the page must render its empty
+    // state (not 500), and the chrome must mount — same contract as /themes.
+    const res = await page.goto("/industry");
+    expect(res?.status(), "GET /industry status").toBe(200);
+    await expectSiteChrome(page);
+    await expect(
+      page.getByRole("heading", { level: 1, name: "Industries" }),
+    ).toBeVisible();
+  });
+
+  test("/industry/<non-canonical-slug> returns 404", async ({ page }) => {
+    // Slugs are gated to canonical buckets (listCanonicalIndustries); an
+    // unknown slug — and every slug when Supabase is unconfigured — 404s.
+    const res = await page.goto("/industry/definitely-not-an-industry-zzz");
+    expect(res?.status(), "GET /industry/<unknown> status").toBe(404);
+    await expect(
+      page.getByRole("heading", { level: 1, name: /not found/i }),
+    ).toBeVisible();
+  });
+
   test("/surprise resolves to a 200 page (redirect target)", async ({
     page,
   }) => {
