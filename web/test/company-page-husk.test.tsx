@@ -119,9 +119,9 @@ describe("company page husk placeholder", () => {
     expect(
       screen.queryByText(/built a full profile yet/),
     ).not.toBeInTheDocument();
-    // The funding section renders instead.
+    // The timeline (funding rounds + news) renders instead.
     expect(
-      screen.getByRole("heading", { name: "Funding History" }),
+      screen.getByRole("heading", { name: "Timeline" }),
     ).toBeInTheDocument();
   });
 

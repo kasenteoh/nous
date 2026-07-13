@@ -1,7 +1,7 @@
 import { render, screen, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { Competitors } from "@/components/Competitors";
-import { FundingHistory } from "@/components/FundingHistory";
+import { EventTimeline } from "@/components/EventTimeline";
 import { Investors } from "@/components/Investors";
 import { RelatedCompanies } from "@/components/RelatedCompanies";
 import { Sources } from "@/components/Sources";
@@ -10,6 +10,7 @@ import type {
   CompanyInvestorRow,
   CompetitorWithResolved,
   FundingRoundWithInvestors,
+  NewsArticleRow,
   RelatedCompany,
   SimilarCompany,
 } from "@/lib/types";
@@ -173,23 +174,38 @@ describe("Competitors", () => {
   });
 });
 
-// ─── FundingHistory ───────────────────────────────────────────────────────────
+// ─── EventTimeline ────────────────────────────────────────────────────────────
 
-describe("FundingHistory", () => {
-  it("renders the empty state when there are no rounds", () => {
-    render(<FundingHistory rounds={[]} />);
+function newsArticle(
+  overrides: Partial<NewsArticleRow> = {},
+): NewsArticleRow {
+  fixtureSeq += 1;
+  return {
+    id: `news-${fixtureSeq}`,
+    url: `https://example.test/article-${fixtureSeq}`,
+    title: `Article ${fixtureSeq}`,
+    source: "techcrunch.com",
+    published_date: "2026-02-01",
+    ...overrides,
+  };
+}
+
+describe("EventTimeline", () => {
+  it("renders the empty state when there are no rounds or news", () => {
+    render(<EventTimeline rounds={[]} news={[]} />);
     expect(
-      screen.getByText("No funding rounds recorded yet."),
+      screen.getByText("No funding rounds or news recorded yet."),
     ).toBeInTheDocument();
   });
 
   it("marks only low-confidence rounds with the warning pill", () => {
     render(
-      <FundingHistory
+      <EventTimeline
         rounds={[
           round({ round_type: "Seed", extraction_confidence: "low" }),
           round({ round_type: "Series B", extraction_confidence: "high" }),
         ]}
+        news={[]}
       />,
     );
     const pills = screen.getAllByText("low confidence");
@@ -198,20 +214,26 @@ describe("FundingHistory", () => {
       "title",
       "Extracted with low confidence — treat as unverified",
     );
-    // The pill sits in the Seed row, not the Series B row.
-    expect(pills[0].closest("tr")).toHaveTextContent("Seed");
+    // The pill sits in the Seed entry, not the Series B entry.
+    expect(pills[0].closest("li")).toHaveTextContent("Seed");
   });
 
   it("shows the rounded amount with the exact dollars in the title attribute", () => {
-    render(<FundingHistory rounds={[round({ amount_raised: 15_100_000 })]} />);
+    render(
+      <EventTimeline
+        rounds={[round({ amount_raised: 15_100_000 })]}
+        news={[]}
+      />,
+    );
     const amount = screen.getByText("$15.1M");
     expect(amount).toHaveAttribute("title", "$15,100,000");
   });
 
   it("shows the post-money valuation with its exact-dollar title", () => {
     render(
-      <FundingHistory
+      <EventTimeline
         rounds={[round({ valuation_post_money: 1_500_000_000 })]}
+        news={[]}
       />,
     );
     const valuation = screen.getByText("$1.5B");
@@ -220,22 +242,48 @@ describe("FundingHistory", () => {
 
   it("truncates long other-investor lists to three names and a count", () => {
     render(
-      <FundingHistory
+      <EventTimeline
         rounds={[
           round({
             otherInvestors: ["Alpha", "Beta", "Gamma", "Delta", "Epsilon"],
           }),
         ]}
+        news={[]}
       />,
     );
     expect(
-      screen.getByText("Alpha, Beta, Gamma and 2 more"),
+      screen.getByText(/Alpha, Beta, Gamma and 2 more/),
     ).toBeInTheDocument();
   });
 
-  it("renders the freshness rider from asOf", () => {
-    render(<FundingHistory rounds={[round()]} asOf="2026-03-01" />);
-    expect(screen.getByText("latest round March 1, 2026")).toBeInTheDocument();
+  it("links news entries out to the source article", () => {
+    render(
+      <EventTimeline
+        rounds={[]}
+        news={[newsArticle({ title: "Big raise coverage", url: "https://news.test/x" })]}
+      />,
+    );
+    const link = screen.getByRole("link", { name: "Big raise coverage" });
+    expect(link).toHaveAttribute("href", "https://news.test/x");
+    expect(link).toHaveAttribute("target", "_blank");
+  });
+
+  it("interleaves funding + news newest-first by date", () => {
+    render(
+      <EventTimeline
+        rounds={[round({ round_type: "Series A", announced_date: "2026-03-10" })]}
+        news={[
+          newsArticle({ title: "Older news", published_date: "2026-01-05" }),
+          newsArticle({ title: "Newest news", published_date: "2026-05-20" }),
+        ]}
+      />,
+    );
+    const items = screen.getAllByRole("listitem");
+    expect(items).toHaveLength(3);
+    // Order: Newest news (May) → Series A (Mar) → Older news (Jan).
+    expect(items[0]).toHaveTextContent("Newest news");
+    expect(items[1]).toHaveTextContent("Series A");
+    expect(items[2]).toHaveTextContent("Older news");
   });
 });
 
