@@ -104,3 +104,21 @@ Before considering any task complete: run `ruff check`, `mypy src`, and `pytest`
 - Work on feature branches. Never push directly to `main`.
 - Write migrations **by hand** — never `--autogenerate`. Autogenerate cannot model the trigram/partial/unique indexes this schema depends on and silently drops them (see the docstring warning repeated in every migration from 0015 on). Chain the revision off the current head and write both `upgrade()` and `downgrade()`.
 - When unsure about a design decision, check `nous-technical-spec.md` before improvising.
+
+## Keeping the docs current
+
+Doc upkeep is part of "done." Before a task — or a group of related tasks — is
+complete, update the doc(s) the work touched. A change that ships code but
+leaves these stale is not finished.
+
+| Doc | Update when | How |
+|-----|-------------|-----|
+| `BACKLOG.md` (root) | Every task / PR | Annotate shipped items `SHIPPED (#PR)`; close by deleting; add newly-discovered work at the bottom of the right section |
+| `ROADMAP.md` (root) | A strategic bet ships or is reprioritised, or direction shifts — **not** per task | Move items between Now / Next / Later; annotate with PR#; delete once fully absorbed |
+| `docs/superpowers/HANDOFF.md` | End of a work session or group of tasks | Refresh current prod state, in-flight work, and gotchas for the next agent |
+| `docs/superpowers/fable5-worklog.md` | Each PR in a series | Append the PR entry in the existing worklog format |
+| `CLAUDE.md` / `README.md` / `nous-technical-spec.md` | Conventions, commands, architecture, or a design decision change | Edit the affected section |
+
+Roadmap vs backlog when in doubt: **roadmap = why / what order (bets),
+backlog = what next (tasks).** A roadmap bet becoming concrete work means a new
+`BACKLOG.md` entry, not roadmap detail.
