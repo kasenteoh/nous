@@ -20,7 +20,10 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from nous.db.models import Company
-from nous.pipeline.resolve_homepages import run_resolve_homepages
+from nous.pipeline.resolve_homepages import (
+    _RESOLVER_GENERATION_SINCE,
+    run_resolve_homepages,
+)
 from nous.sources.homepage import FetchResult, HomepageClient
 
 # ---------------------------------------------------------------------------
@@ -156,6 +159,30 @@ async def test_stale_website_resolved_at_is_reprocessed(db: AsyncSession) -> Non
 
     client = MockHomepageClient({"stale": "https://stale.com/"})
     summary = await run_resolve_homepages(db, client, refetch_after_days=90)
+
+    assert summary.companies_seen >= 1
+
+
+async def test_pre_generation_cutoff_husk_is_redrained(db: AsyncSession) -> None:
+    """A website-less company resolved by the weak pre-curl_cffi resolver
+    (website_resolved_at < the generation cutoff) is re-attempted even when the
+    standing refetch window would NOT re-admit it — the one-shot re-drain term.
+
+    The huge refetch_after_days guarantees the normal 90-day cutoff cannot be
+    what selects it, so a hit here isolates the generation-cutoff OR term.
+    """
+    company = _make_company(
+        name="Redrain Inc.",
+        slug="redrain-cohort",
+        website=None,
+        website_resolved_at=_RESOLVER_GENERATION_SINCE - timedelta(days=1),
+    )
+    db.add(company)
+    await db.flush()
+    await db.commit()
+
+    client = MockHomepageClient({})  # resolution can miss; we assert it was SEEN
+    summary = await run_resolve_homepages(db, client, refetch_after_days=36500)
 
     assert summary.companies_seen >= 1
 

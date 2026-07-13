@@ -33,6 +33,17 @@ from nous.util.url import is_storable_website
 
 logger = logging.getLogger(__name__)
 
+# The curl_cffi Chrome-impersonation Cloudflare bypass (PR #132) landed
+# 2026-07-10. Shown companies resolved BEFORE it that hit a 403 on every TLD
+# candidate were stamped website_resolved_at with a null website by the weaker
+# resolver, and the 90-day window won't retry them for months (~890 companies;
+# see db-stats website_null_shown). This generation cutoff re-admits that stuck
+# cohort for ONE re-attempt with the stronger resolver. Self-bounding: a
+# re-resolve (hit or miss) re-stamps website_resolved_at to "now" (>= this
+# date), so the row leaves the band and is never re-hammered by this term —
+# a genuine miss then falls back to the standing 90-day cadence.
+_RESOLVER_GENERATION_SINCE: datetime = datetime(2026, 7, 10, tzinfo=UTC)
+
 # How many companies to resolve over the network at once. Homepage resolution
 # is network-bound (several TLD probes + an optional DuckDuckGo fallback per
 # company, ~13s of wall clock), and distinct companies use distinct domains, so
@@ -136,6 +147,9 @@ async def run_resolve_homepages(
             or_(
                 Company.website_resolved_at.is_(None),
                 Company.website_resolved_at < cutoff,
+                # One-shot re-drain of the pre-curl_cffi cohort (see the constant):
+                # resolved by the weaker resolver, still inside the 90-day window.
+                Company.website_resolved_at < _RESOLVER_GENERATION_SINCE,
             ),
         )
         # Prominence-first: when --limit only admits a slice of the backlog,
