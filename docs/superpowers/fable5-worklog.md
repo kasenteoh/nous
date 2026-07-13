@@ -521,3 +521,39 @@ SEO growth-engine **slice 1**, built on the `0036` momentum RPCs.
   `statusCheckRollup` green (secrets/pipeline/web/Vercel) before merge.
 - **Next in the SEO program:** `/trends` dashboard (reuses the same `0036` RPCs
   + `ThemeFundingChart`), then `/vs/[a]/[b]`, RSS + `/c` timeline, market map.
+
+## PR #166 — `/trends` funding dashboard (merged 2026-07-13)
+
+SEO growth-engine **slice 2**, on the `0036` momentum RPCs.
+
+- **Surface:** `/trends` = catalog-wide funding-by-quarter chart (12-quarter
+  macro view, reuses `ThemeFundingChart` via `fundingByQuarter(12)` with no
+  industry scope) + **hottest industries** by trailing-2-quarter growth + a
+  **biggest-recent-rounds** board. Deliberate split: `/trends` ranks industries
+  by *growth* ("what's heating up") while `/industry` ranks by *absolute recent
+  funding* (a browse order), so the two SEO surfaces never say the same thing.
+- **New code:** `web/lib/queries.ts` `listBiggestRecentRounds(limit, sinceDays)`
+  — largest dated+amounted rounds in the last 180d for non-excluded companies,
+  **de-duped on `(company, round_type, amount)`** (the per-company key from
+  `dedupedRoundsTotal` extended with the slug) so a re-reported round can't fill
+  the board with copies of one mega-round; over-fetches `limit*4` then trims.
+  Mirrors the `listRecentFundings` join pattern. `web/app/trends/page.tsx` (new).
+- **404 guard:** hottest industries are intersected with the canonical bucket
+  set (`listCanonicalIndustries`) before linking, so a funded-but-sub-canonical
+  industry (which has no `/industry` page) is never linked.
+- **Review-cleanup refactor:** the growth-chip tone helper was copy-pasted in
+  `/themes`, `/industry`, `/trends`; extracted to `lib/format.ts` as
+  `growthToneClass` (unit-tested) and imported from all three.
+- **Review lane:** independent adversarial pass → APPROVE, 0 critical/high/
+  medium; its two LOWs (the dup helper above; an imprecise dedup-key docstring)
+  fixed before merge.
+- **CI infra note (not code):** the PR's first `lint`-workflow runs failed at
+  GitHub's **"Set up job"** runner-provisioning step — `secrets` in one run,
+  `pipeline` in the other, each passing in the sibling run; `web` green in both.
+  Pure runner-allocation flake (distinct from the `onnxruntime-node` nuget
+  `ETIMEDOUT` install flake seen on #165's docs commit). `gh run rerun --failed`
+  on both → full rollup all-green, THEN merged. Verified the complete rollup
+  JSON (never grep/tail) — a "Set up job" red is easy to mistake for a real
+  failure and equally easy to mistake a masked one for green.
+- **Verified:** lint + 233 unit tests (+3 `growthToneClass`) + webpack `build`
+  (`/trends` static@6h) + `check:bundle` (no leaks) + `test:e2e` (16, +1 smoke).
