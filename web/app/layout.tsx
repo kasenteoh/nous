@@ -136,6 +136,14 @@ export default function RootLayout({
                   </li>
                   <li>
                     <Link
+                      href="/trends"
+                      className="hover:text-ink transition-colors"
+                    >
+                      Trends
+                    </Link>
+                  </li>
+                  <li>
+                    <Link
                       href="/surprise"
                       className="hover:text-ink transition-colors whitespace-nowrap"
                     >
@@ -182,6 +190,9 @@ export default function RootLayout({
               </Link>
               <Link href="/industry" className="hover:text-ink transition-colors">
                 Industries
+              </Link>
+              <Link href="/trends" className="hover:text-ink transition-colors">
+                Trends
               </Link>
               <Link href="/new" className="hover:text-ink transition-colors">
                 New this week

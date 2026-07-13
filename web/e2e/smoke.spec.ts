@@ -147,6 +147,19 @@ test.describe("structural smoke (no data required — CI contract)", () => {
     ).toBeVisible();
   });
 
+  test("/trends renders the funding trends dashboard (200)", async ({
+    page,
+  }) => {
+    // Secret-free CI has no funding data; the page must render (empty chart +
+    // omitted sections), not 500, with the chrome mounted.
+    const res = await page.goto("/trends");
+    expect(res?.status(), "GET /trends status").toBe(200);
+    await expectSiteChrome(page);
+    await expect(
+      page.getByRole("heading", { level: 1, name: "Funding trends" }),
+    ).toBeVisible();
+  });
+
   test("/surprise resolves to a 200 page (redirect target)", async ({
     page,
   }) => {

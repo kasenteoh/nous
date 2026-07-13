@@ -743,6 +743,87 @@ export async function listRecentFundings(
   });
 }
 
+/** One "Biggest recent rounds" row on /trends. */
+export interface BiggestRoundRow {
+  companySlug: string;
+  companyName: string;
+  round_type: string | null;
+  amount_raised: number;
+  announced_date: string;
+}
+
+/**
+ * The largest funding rounds announced in the last `sinceDays` days, biggest
+ * first, joined to the company — the /trends "biggest recent rounds" board.
+ * Only dated, amounted rounds for non-excluded companies (excluded companies'
+ * rounds never surface, matching every other funding surface).
+ *
+ * De-duplicated on (company, round_type, amount): the historical news backfill
+ * could re-report ONE round from several articles (Helion's $465M Series G was
+ * stored 5×; see lib/funding.ts), which would otherwise fill the board with
+ * copies of a single mega-round. Same per-company key as
+ * {@link dedupedRoundsTotal}, extended with the company slug since this query
+ * spans all companies — so two genuinely distinct rounds a company raised in
+ * the window still both show, and two companies' equal-sized rounds never merge.
+ * Over-fetches then trims to `limit` after the dedup. Returns [] on missing env
+ * or error.
+ */
+export async function listBiggestRecentRounds(
+  limit = 10,
+  sinceDays = 180,
+): Promise<BiggestRoundRow[]> {
+  const supabase = supabaseOrNull("listBiggestRecentRounds");
+  if (!supabase) return [];
+
+  const cutoff = new Date(Date.now() - sinceDays * 86400e3)
+    .toISOString()
+    .slice(0, 10); // announced_date is a DATE column (YYYY-MM-DD).
+
+  const { data, error } = await supabase
+    .from("funding_rounds")
+    .select("round_type, amount_raised, announced_date, companies!inner(name, slug)")
+    .is("companies.exclusion_reason", null)
+    .not("announced_date", "is", null)
+    .not("amount_raised", "is", null)
+    .gte("announced_date", cutoff)
+    .order("amount_raised", { ascending: false })
+    .limit(limit * 4);
+
+  if (error) {
+    console.error("[listBiggestRecentRounds] query failed:", error.message);
+    return [];
+  }
+
+  type Row = {
+    round_type: string | null;
+    amount_raised: number | string | null;
+    announced_date: string;
+    companies: NestedFundingCompany | NestedFundingCompany[] | null;
+  };
+
+  const seen = new Set<string>();
+  const rounds: BiggestRoundRow[] = [];
+  for (const row of (data ?? []) as Row[]) {
+    if (row.amount_raised == null) continue;
+    const company = Array.isArray(row.companies)
+      ? row.companies[0]
+      : row.companies;
+    if (!company?.name || !company.slug) continue;
+    const key = `${company.slug}::${row.round_type ?? ""}::${row.amount_raised}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    rounds.push({
+      companySlug: company.slug,
+      companyName: company.name,
+      round_type: row.round_type,
+      amount_raised: Number(row.amount_raised),
+      announced_date: row.announced_date,
+    });
+    if (rounds.length >= limit) break;
+  }
+  return rounds;
+}
+
 /** One "New on nous" margin-note row on the front page. */
 export interface NewCompanyRow {
   slug: string;
