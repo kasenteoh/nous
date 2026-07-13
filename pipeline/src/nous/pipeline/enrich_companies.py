@@ -70,6 +70,7 @@ from nous.llm.prompts.company_description_long import (
 from nous.util.industry import normalize_industry
 from nous.util.tags import canonicalize_tags
 from nous.util.text import extract_visible_text, truncate_to_chars
+from nous.util.us_state import canonical_us_state
 
 logger = logging.getLogger(__name__)
 
@@ -447,7 +448,11 @@ async def run_enrich_companies(
         if description.hq_city and not company.hq_city:
             company.hq_city = description.hq_city
         if description.hq_state and not company.hq_state:
-            company.hq_state = description.hq_state
+            # Canonicalize US states to the USPS code at write time (the form the
+            # web location route matches on); leave a non-US / unrecognized value
+            # (canonical_us_state -> None) as the raw LLM string rather than
+            # nulling it. See nous.util.us_state.
+            company.hq_state = canonical_us_state(description.hq_state) or description.hq_state
         if description.industry and (not company.industry_group or backfill_missing_taxonomy):
             # In backfill mode the write-once guard is deliberately bypassed so
             # that companies with NULL industry_group receive a taxonomy label
