@@ -8,6 +8,31 @@ for the detail behind the Latest-update block below), then the two plan docs
 under `docs/superpowers/plans/` (2026-07-10 improvement plan; 2026-07-11
 hygiene + Wave 3). `BACKLOG.md` is annotated with what shipped.
 
+## LATEST UPDATE — roadmap + data-quality pivot (2026-07-13, PR #171)
+
+The **SEO growth engine** (the initiative in the older "Open items" list) is
+now SHIPPED end-to-end on the `0036` RPC foundation (#164): industry pages
+(#165), `/trends` (#166), `/vs` + shared `CompareTable` (#167, competitors-embed
+fix #168), `/feed.xml` RSS (#169), and the unified `/c` event timeline (#170).
+Only the **market map** (old item 5) was left un-built.
+
+A product-strategy pass with the owner then reset direction and added a living
+roadmap (#171):
+- **`ROADMAP.md` (new, repo root)** — the strategic layer above `BACKLOG.md`, as
+  Now / Next / Later horizons. **North star is now DATA QUALITY FIRST, then
+  depth** — a deliberate pivot from pure SEO/distribution toward earning trust
+  before adding surfaces.
+- **"Route around, don't evade"** — the ~890 husk companies (Cloudflare-403'd
+  from Actions IPs) get resolved from sources that were never the origin
+  homepage (news/portfolio outbound links → Wikidata → Common Crawl). Proxy/
+  account/evasion tactics are **rejected on principle** (contradict the sourcing
+  moat, rot on Cloudflare updates, unnecessary since husks are prominent).
+- **`CLAUDE.md`** gained a **"Keeping the docs current"** convention (doc upkeep
+  is part of "done": backlog / roadmap / handoff / worklog).
+- **The market map is demoted to the Next horizon;** the data-quality Now horizon
+  is the priority. See the reordered "Open items" below and `BACKLOG.md`'s
+  "2026-07-13 ROADMAP 'Now' horizon" section.
+
 ## LATEST UPDATE — Opus 4.8 session (2026-07-12 → 07-13, ~PRs #157–#164)
 
 Wave 3 is now genuinely LIVE and the next initiative (the SEO growth engine)
@@ -122,35 +147,43 @@ secret-free — that's the CI contract).
 
 ## Open items, in priority order
 
-The current initiative is the **SEO growth engine** (owner-approved order:
-SEO surface first, drop "A", market map last). Build one reviewable PR at a
-time; leverage parallel agents for design/critique.
+The current initiative is the **ROADMAP "Now" horizon — data quality**
+(`ROADMAP.md`; `BACKLOG.md` "2026-07-13 ROADMAP 'Now' horizon" section). Earn
+trust before building depth. Build one reviewable PR at a time; leverage
+parallel agents for design/critique.
 
-1. **Industry pages** — `web/lib/industry.ts` (slug↔label from
-   `listIndustryGroups()`), `/industry/[group]` + `/industry` index consuming
-   the `0036` RPCs. **On-demand ISR, NOT `generateStaticParams`** (no route
-   uses it; it would couple `next build` to the DB). Gate to the ~30 canonical
-   `industry_group` buckets; hard-guard thin pages (sub-themes + the funding
-   chart are the only net-new content vs `/companies?industry=X`).
-2. **`/trends`** dashboard (funding momentum over time, hottest industries,
-   biggest recent rounds) — reuses the `0036` RPCs + `ThemeFundingChart`.
-3. **`/vs/[a]/[b]` compare pages** — conservative indexing: only
-   competitor-edge pairs with real funding on ≥1 side; `noindex` the long
-   tail. Extract a shared `CompareTable` from `/compare`.
-4. **RSS feed + `/c` event timeline** — frontend-only; the timeline must
-   REPLACE the existing FundingHistory/News sections on `/c/[slug]`, not
-   duplicate them. RSS + on-site only (email deferred — the first cost item).
-5. **Market map `/map/[industry]`** — pipeline-time PCA projection of the
-   embeddings → static server SVG; land the migration early (coords fill on
-   the ~monthly compute-themes cadence); keep onnx/transformers OFF the web
-   function (the #157 lesson).
+1. **Husk website re-mining** — new idempotent `resolve-website-fallback`
+   stage. Resolve the ~890 website-less companies WITHOUT fighting Cloudflare,
+   in source-preference order: `news_articles` outbound links (already scraped)
+   → `raw_pages` VC-portfolio links → Wikidata/Wikipedia "official website"
+   (free, un-Cloudflared) → Common Crawl domain lookup. Record a source per
+   resolved site (sourcing moat). Start with a ~30-company dry run to measure
+   per-source yield + wrong-site rate, then wire the stage into the 3h cron's
+   shared concurrency group. **Biggest data-quality win; $0.**
+2. **Data-quality dashboard** — internal QC surface (extends the pipeline-
+   observability `/stats` idea, but for *completeness* not just freshness): %
+   of companies with website / description / funding / logo / people, husk-
+   count trend, duplicate rate, staleness distribution. The instrument panel
+   for the whole horizon.
+3. **Field normalization + re-enable "report incorrect data"** — `hq_state`
+   (CA↔California) normalized at enrichment time; `formatUsd` exact-dollars
+   `title` tooltip; thin single-company tag-page threshold; and RE-ENABLE the
+   report-incorrect-data rider in `web/app/c/[slug]/page.tsx` (now unblocked —
+   the repo is public so the prefilled GitHub-issue URL resolves).
+4. **Per-company completeness/confidence score** — from present fields +
+   `extraction_confidence`; internal first (feeds the dashboard + husk-
+   enrichment ordering), public trust badge later.
 
-Verify along the way: `/themes` should populate after the weekly discovery
-cron (Mon 02:00 UTC) — confirm it; the husk re-drain and `0036` auto-apply on
-the next 3-hourly pipeline cron. Deferred: the structured-describe fallback
-("A", with its three required fixes — see the worklog), and anchoring the
-judge/funding golden floors with `--update-baseline` after a live
-`eval-record` run.
+**NEXT horizon (depth, after the foundation):** the **market map
+`/map/[industry]`** (the last un-built SEO-era item — pipeline-time PCA
+projection of embeddings → static server SVG; land the migration early, coords
+fill on the ~monthly compute-themes cadence; keep onnx/transformers OFF the web
+function, the #157 lesson), momentum signals from `company_snapshots`,
+per-entity RSS, and talent-flow + investor graphs. Full detail in `ROADMAP.md`.
+
+Deferred (unchanged): the structured-describe fallback ("A", with its three
+required fixes — see the worklog), and anchoring the judge/funding golden
+floors with `--update-baseline` after a live `eval-record` run.
 
 ## Key architecture pointers
 
