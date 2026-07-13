@@ -8,6 +8,41 @@ for the detail behind the Latest-update block below), then the two plan docs
 under `docs/superpowers/plans/` (2026-07-10 improvement plan; 2026-07-11
 hygiene + Wave 3). `BACKLOG.md` is annotated with what shipped.
 
+## LATEST UPDATE — husk website re-mining shipped (2026-07-13, PRs #172–#174)
+
+ROADMAP Now #1 is **done**. The `resolve-website-fallback` stage resolves
+website-less husks from sources that were never the origin homepage — **Wikidata
+"official website"** (P856, name + org-type + country matched) and **outbound
+links in already-sourced news article bodies** (re-fetching the article, not the
+Cloudflare-origin) — $0, idempotent, provenance recorded per site
+(`website_source` + `website_source_url`). **Migration head is now 0037** (also
+adds `website_fallback_checked_at`, the stage's own rotation stamp, separate from
+resolve-homepages' `website_resolved_at`). It's **live in the 3h cron** (id'd
+step before resolve-homepages, `--limit 25`), so prod drains ~25 husks/run
+(gradual = safe first application). A **30-husk prod dry run** resolved 37% at
+~10/11 precision, 0 conflicts (via `resolve-website-fallback.yml`, the dispatch
+lever — dry-run default, also a faster-backfill knob).
+
+Gotchas learned this session:
+- **`workflow_dispatch` must be on the default branch to be triggerable**, and a
+  migration whose file is absent from the branch the cron runs would crash its
+  `alembic upgrade head`. Those two together forced a **3-PR split** (dispatch
+  workflow #172 → schema/migration #173 → stage #174) to run a real *pre-merge*
+  prod dry run. Keep that ordering for any future stage that needs a pre-merge
+  prod measurement + a new migration.
+- **`news_articles.raw_content` / `raw_pages.content` store visible TEXT, not
+  HTML** — no `<a href>` survives, so link-mining re-fetches the article live.
+  And `raw_pages` is company-scoped (not VC-portfolio pages); the portfolio
+  adapters already capture `entry.website` at discovery — so a VC-portfolio
+  re-mining source is redundant and wasn't built.
+- **Residual precision risk:** a NULL-`hq_country` husk with a generic name can
+  still match a same-named *foreign* company on Wikidata (the dry run's "Apex
+  Technologies" → French "APEX Technologies" case). The country cross-check only
+  fires on a *confirmed* conflict (won't drop correct foreign matches like
+  Taxfix→.de). Every write is sourced + reversible; the re-enabled "report
+  incorrect data" link (Now #4) is the human catch. Watch the wrong-site rate on
+  the data-quality dashboard (Now #2).
+
 ## LATEST UPDATE — roadmap + data-quality pivot (2026-07-13, PR #171)
 
 The **SEO growth engine** (the initiative in the older "Open items" list) is
@@ -115,8 +150,10 @@ Two initiatives, both complete:
 - **Actions is the only prod lever.** `pipeline.yml` (3-hourly; at GitHub's
   25-input cap — a new input must displace one; prefer new behavior riding
   existing steps/flags), `discovery.yml` (weekly), `backfill-discovery.yml`,
-  `ops.yml` (exclude/unexclude by slug), `eval-record.yml` (live golden-set
-  re-recording → pushes a branch; repo settings forbid Actions-created PRs).
+  `ops.yml` (exclude/unexclude by slug), `resolve-website-fallback.yml` (husk
+  re-mining dry-run/backfill lever, dry-run default), `eval-record.yml` (live
+  golden-set re-recording → pushes a branch; repo settings forbid
+  Actions-created PRs).
 - **Concurrency displacement:** DB-writing workflows share one concurrency
   group; GitHub keeps only the newest PENDING run — queued dispatches
   displace each other and the cron. Batch loops must re-dispatch on
@@ -127,9 +164,11 @@ Two initiatives, both complete:
 
 ## Autonomous processes currently running (no babysitting required)
 
-- The 3-hourly pipeline cron: news/funding/scrape/enrich (+ husk rescue
-  priority), `embed-companies --limit 200` (embed backlog drains ~1–2 days
-  from 2026-07-12), redescribe tail, judge.
+- The 3-hourly pipeline cron: news/funding, `resolve-website-fallback --limit 25`
+  (husk re-mining, NEW #174 — drains ~25 website-less husks/run before
+  resolve-homepages), scrape/enrich (+ husk rescue priority),
+  `embed-companies --limit 200` (embed backlog drains ~1–2 days from
+  2026-07-12), redescribe tail, judge.
 - Weekly discovery cron: VC portfolios, GitHub trending, dedup, competitors,
   `compute-themes` (TTL-gated monthly — the FIRST themes run happens on the
   next weekly run after embeddings exist).
@@ -152,14 +191,9 @@ The current initiative is the **ROADMAP "Now" horizon — data quality**
 trust before building depth. Build one reviewable PR at a time; leverage
 parallel agents for design/critique.
 
-1. **Husk website re-mining** — new idempotent `resolve-website-fallback`
-   stage. Resolve the ~890 website-less companies WITHOUT fighting Cloudflare,
-   in source-preference order: `news_articles` outbound links (already scraped)
-   → `raw_pages` VC-portfolio links → Wikidata/Wikipedia "official website"
-   (free, un-Cloudflared) → Common Crawl domain lookup. Record a source per
-   resolved site (sourcing moat). Start with a ~30-company dry run to measure
-   per-source yield + wrong-site rate, then wire the stage into the 3h cron's
-   shared concurrency group. **Biggest data-quality win; $0.**
+1. ~~**Husk website re-mining**~~ — **SHIPPED (#172/#173/#174).** See the latest-
+   update block above. Live in the cron; drains ~25/run. Next data-quality item
+   is now the priority.
 2. **Data-quality dashboard** — internal QC surface (extends the pipeline-
    observability `/stats` idea, but for *completeness* not just freshness): %
    of companies with website / description / funding / logo / people, husk-

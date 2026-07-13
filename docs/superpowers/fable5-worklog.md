@@ -695,3 +695,82 @@ lead/other investors, low-confidence pill). Deleted `FundingHistory.tsx` +
   data, thin-tag hygiene) instead of duplicating them.
 - **Verified:** docs-only, no code paths; full CI rollup (pipeline / web /
   secrets / Vercel) green before squash-merge.
+
+## PR #172 — ci: resolve-website-fallback dispatch workflow (merged 2026-07-13)
+
+Enabling infra for #174. `workflow_dispatch` requires a workflow to exist on the
+default branch before it can be triggered, so the dispatch lever (dry-run
+default + backfill) landed on main first — letting the pre-merge dry run be
+triggered against the feature branch's code via `--ref`. Inert until dispatched;
+shares the `nous-pipeline-db` concurrency group. Verified: full CI rollup green.
+
+## PR #173 — feat(db): migration 0037 website provenance + fallback rotation stamp (merged 2026-07-13)
+
+Prerequisite schema for #174, landed on main ahead of the stage. **Why split:**
+a migration whose file is absent from the branch the 3h cron runs would crash
+its `alembic upgrade head` ("can't locate revision 0037"), so in this
+Actions-only-prod repo the migration must reach main before prod gets it — and
+the pre-merge dry run needs the columns it queries.
+- `companies.website_source` + `website_source_url` — per-website provenance
+  (mirrors the `status_source_url` / `total_raised_source_url` sibling-column
+  convention). NULL for the legacy cohort; the first per-website provenance the
+  schema has carried.
+- `companies.website_fallback_checked_at` (indexed) — the fallback resolver's
+  own rotation/back-off stamp, deliberately separate from `website_resolved_at`
+  (resolve-homepages') so the two resolvers rotate independently.
+- Also gave the dispatch workflow its own "Apply migrations" step.
+- **Verified:** up/down/re-up against a local pgvector container; full CI rollup
+  green (DB-gated suite runs against CI's pgvector with 0037 applied).
+
+## PR #174 — feat(pipeline): resolve-website-fallback husk re-mining (merged 2026-07-13)
+
+ROADMAP Now #1. Resolves website-less husks from non-origin sources instead of
+fighting Cloudflare. New idempotent `resolve-website-fallback` stage, first
+accepted candidate wins:
+- **wikidata** — Wikidata "official website" (P856) for a name + org-type +
+  country matched entity. Three precision gates so a name collision self-rejects
+  (validated live: the "Clay" family-name and "Hebbia" no-website entities
+  correctly yield nothing). Robots: the JSON API at `/w/api.php` is treated as
+  robots-exempt narrowly (Wikimedia's sanctioned programmatic interface;
+  contact-UA + 1 req/sec still honored), mirroring the Google-News-RSS exemption.
+- **news_outbound** — the company's own homepage link in the body of an
+  already-sourced news article, re-fetching the *article* (not the origin) and
+  matching by domain-label or anchor name.
+- **Data-reality correction:** `news_articles.raw_content` and `raw_pages.content`
+  store extracted **visible text, not HTML** (models.py), so sources (a)/(b) as
+  the roadmap first framed them ("read cached outbound links") can't read hrefs
+  from stored rows — the stage re-fetches the article live (still non-origin).
+  And VC-portfolio pages aren't cached in `raw_pages` (it's company-scoped), and
+  the portfolio adapters already capture `entry.website` at discovery time — so
+  a portfolio source is largely redundant for portfolio-discovered husks; not
+  built. Common Crawl deferred (weak for name→domain).
+- **Provenance, no fetch-validation:** the origin is unreachable by design, so a
+  candidate is accepted on its source's entity match (not by fetching it) and
+  recorded with `website_source` + `website_source_url`. Every resolution is
+  auditable + reversible (repair-wrong-websites + `rejected_urls`, respected
+  here). On a hit: website + provenance + `website_resolved_at` +
+  `website_fallback_checked_at`. On a miss: only the fallback stamp. $0.
+
+**Dry run (30 prominent husks, prod):** 11 resolved (37%), 0 conflicts, 0
+errors, $0. wikidata 9/30, news_outbound 2/30 (disjoint, net +2). 10/11
+unambiguously correct (incl. Taxfix→.de, Proxima Fusion→.com — correct foreign
+matches; Kraken Technology Group, NOT kraken.com the exchange). One collision:
+US-focused "Apex Technologies" matched Wikidata "APEX Technologies (France)".
+**Threshold fix from the dry run:** conservative **country cross-check** — reject
+a Wikidata candidate only when the company's known `hq_country` and the entity's
+mapped P17 country both exist and conflict. Never drops a NULL-country husk (so
+Taxfix/Proxima survive); a US company with a known country won't take a
+confirmed-foreign site. The Apex husk has NULL country → documented residual
+(sourced + reversible), not fixed by dropping correct foreign matches.
+
+- **Wiring:** bounded id'd `pipeline.yml` step before resolve-homepages
+  (`--limit 25 --max-runtime-minutes 3`, no new dispatch input — 25-cap full);
+  prod drains ~25/run via the cron (gradual = safe first application), the
+  dispatch is the faster-backfill lever.
+- **Verified:** ruff + mypy clean; full suite 1520 passed (pure selection cores
+  + DB-gated stage); two green prod dry runs; full CI rollup green before merge.
+- **Lesson:** the GitHub `workflow_dispatch`-must-be-on-default-branch rule plus
+  the Actions-only-prod migration-ordering constraint forced a 3-PR split
+  (dispatch #172 → schema #173 → stage #174) to run a real pre-merge prod dry
+  run. Worth it: the dry run caught the Apex-France collision that unit tests +
+  local pgvector couldn't (real-data verification again — cf. [[nous-postgrest-ambiguous-embed]]).
