@@ -166,6 +166,63 @@ def test_no_name_match_rejected() -> None:
     assert select_official_website("Perplexity", ["Q1"], entities) is None
 
 
+def test_country_conflict_rejected() -> None:
+    """A US company must not adopt a confirmed-French same-named entity's site."""
+    entities = _payload(
+        {
+            "Q30262164": {
+                "labels": {"en": {"value": "Apex Technologies"}},
+                "aliases": {"en": []},
+                "claims": {
+                    "P31": [{"mainsnak": {"datavalue": {"value": {"id": "Q4830453"}}}}],
+                    "P17": [{"mainsnak": {"datavalue": {"value": {"id": "Q142"}}}}],
+                    "P856": [{"mainsnak": {"datavalue": {"value": "http://www.apex-t.com/"}}}],
+                },
+            }
+        }
+    )
+    # Company known to be US → the French entity is rejected.
+    assert (
+        select_official_website(
+            "Apex Technologies", ["Q30262164"], entities, company_country="US"
+        )
+        is None
+    )
+    # Unknown company country → conservative gate does not fire, still resolves.
+    assert (
+        select_official_website("Apex Technologies", ["Q30262164"], entities)
+        is not None
+    )
+    # Matching country → resolves.
+    assert (
+        select_official_website(
+            "Apex Technologies", ["Q30262164"], entities, company_country="FR"
+        )
+        is not None
+    )
+
+
+def test_country_gate_noop_when_entity_country_unmapped() -> None:
+    """An entity whose P17 we can't map is treated as no country signal."""
+    entities = _payload(
+        {
+            "Q1": {
+                "labels": {"en": {"value": "Widgets"}},
+                "aliases": {"en": []},
+                "claims": {
+                    "P31": [{"mainsnak": {"datavalue": {"value": {"id": "Q4830453"}}}}],
+                    "P17": [{"mainsnak": {"datavalue": {"value": {"id": "Q99999999"}}}}],
+                    "P856": [{"mainsnak": {"datavalue": {"value": "https://widgets.example/"}}}],
+                },
+            }
+        }
+    )
+    assert (
+        select_official_website("Widgets", ["Q1"], entities, company_country="US")
+        is not None
+    )
+
+
 def test_origin_canonicalization() -> None:
     assert _origin("https://www.perplexity.ai/hub/") == "https://www.perplexity.ai/"
     assert _origin("https://mistral.ai/fr") == "https://mistral.ai/"

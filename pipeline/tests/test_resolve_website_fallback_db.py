@@ -54,7 +54,7 @@ def _fake_wikidata(mapping: dict[str, str | None]) -> type:
             return None
 
         async def official_website(
-            self, name: str, *, limit: int = 5
+            self, name: str, *, company_country: str | None = None, limit: int = 5
         ) -> WikidataMatch | None:
             website = mapping.get(name)
             if not website:

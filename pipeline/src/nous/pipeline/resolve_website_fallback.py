@@ -108,7 +108,9 @@ class _Candidate(BaseModel):
 async def _wikidata_candidate(
     client: WikidataClient, company: Company
 ) -> _Candidate | None:
-    match = await client.official_website(company.name)
+    match = await client.official_website(
+        company.name, company_country=company.hq_country
+    )
     if match is None:
         return None
     return _Candidate(

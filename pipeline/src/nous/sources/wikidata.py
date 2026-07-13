@@ -50,6 +50,43 @@ logger = logging.getLogger(__name__)
 _API_URL = "https://www.wikidata.org/w/api.php"
 _ENTITY_BASE = "https://www.wikidata.org/wiki/"
 
+# Wikidata country (P17) QID → ISO-3166 alpha-2, for the country cross-check.
+# Only common countries need mapping: the check is conservative (it fires only
+# when BOTH the company's hq_country and the entity's mapped country are known),
+# so an unmapped country QID simply means "no country signal" — never a wrong
+# rejection. hq_country is stored as alpha-2 (enrich/judge/infer stages).
+_COUNTRY_QID_TO_ISO2: dict[str, str] = {
+    "Q30": "US",  # United States
+    "Q145": "GB",  # United Kingdom
+    "Q183": "DE",  # Germany
+    "Q142": "FR",  # France
+    "Q16": "CA",  # Canada
+    "Q801": "IL",  # Israel
+    "Q668": "IN",  # India
+    "Q55": "NL",  # Netherlands
+    "Q34": "SE",  # Sweden
+    "Q39": "CH",  # Switzerland
+    "Q408": "AU",  # Australia
+    "Q334": "SG",  # Singapore
+    "Q27": "IE",  # Ireland
+    "Q29": "ES",  # Spain
+    "Q38": "IT",  # Italy
+    "Q33": "FI",  # Finland
+    "Q35": "DK",  # Denmark
+    "Q20": "NO",  # Norway
+    "Q17": "JP",  # Japan
+    "Q884": "KR",  # South Korea
+    "Q155": "BR",  # Brazil
+    "Q159": "RU",  # Russia
+    "Q148": "CN",  # People's Republic of China
+    "Q212": "UA",  # Ukraine
+    "Q40": "AT",  # Austria
+    "Q31": "BE",  # Belgium
+    "Q45": "PT",  # Portugal
+    "Q233": "MT",  # Malta
+    "Q191": "EE",  # Estonia
+}
+
 # P31 (instance-of) QIDs that mark an entity as a company / organization. Curated
 # and generous: the name-match + P856 gates do the real precision work, so this
 # only needs to admit the common company subtypes and reject non-orgs (people,
@@ -116,6 +153,24 @@ def _extract_instance_of(claims: dict[str, Any]) -> set[str]:
     return out
 
 
+def _extract_countries(claims: dict[str, Any]) -> set[str]:
+    """ISO-3166 alpha-2 codes from P17 (country) statements we can map.
+
+    Unmapped country QIDs are dropped (treated as no signal), so the cross-check
+    never rejects on a country it doesn't recognize.
+    """
+    out: set[str] = set()
+    for stmt in claims.get("P17", []):
+        try:
+            qid = stmt["mainsnak"]["datavalue"]["value"]["id"]
+        except (KeyError, TypeError):
+            continue
+        iso = _COUNTRY_QID_TO_ISO2.get(qid)
+        if iso is not None:
+            out.add(iso)
+    return out
+
+
 def _extract_official_websites(claims: dict[str, Any]) -> list[str]:
     """Raw P856 (official website) string values, in statement order."""
     out: list[str] = []
@@ -146,14 +201,22 @@ def select_official_website(
     company_name: str,
     search_ids: list[str],
     entities: dict[str, Any],
+    *,
+    company_country: str | None = None,
 ) -> WikidataMatch | None:
     """Pure selection core (no I/O): pick the best P856 match, or None.
 
     ``search_ids`` are candidate QIDs in Wikidata search-relevance order;
     ``entities`` is the ``wbgetentities`` ``{"entities": {...}}`` payload. The
-    first candidate passing all three gates (name / org-type / P856) wins, so
-    search relevance breaks ties.
+    first candidate passing all gates (name / org-type / country / P856) wins,
+    so search relevance breaks ties. ``company_country`` is the company's stored
+    ISO-3166 alpha-2 ``hq_country`` (or None); the country gate is conservative —
+    it rejects a candidate only when both that and the entity's mapped P17
+    country are known and conflict, so a US-focused directory never adopts a
+    confirmed-foreign same-named company's site (the Apex-France case), while a
+    NULL-country husk still resolves.
     """
+    want_country = (company_country or "").strip().upper() or None
     ent_map = entities.get("entities", {})
     for qid in search_ids:
         entity = ent_map.get(qid)
@@ -173,7 +236,13 @@ def select_official_website(
         if not (_extract_instance_of(claims) & ORG_TYPE_QIDS):
             continue
 
-        # Gate 3: a usable official website.
+        # Gate 3: country cross-check (conservative — only on a known conflict).
+        if want_country is not None:
+            entity_countries = _extract_countries(claims)
+            if entity_countries and want_country not in entity_countries:
+                continue
+
+        # Gate 4: a usable official website.
         website: str | None = None
         for raw in _extract_official_websites(claims):
             origin = _origin(raw)
@@ -276,13 +345,19 @@ class WikidataClient:
         )
 
     async def official_website(
-        self, company_name: str, *, limit: int = 5
+        self,
+        company_name: str,
+        *,
+        company_country: str | None = None,
+        limit: int = 5,
     ) -> WikidataMatch | None:
         """Resolve ``company_name`` to a confirmed official website, or None.
 
-        Two API calls: search then get-entities. Returns None on no match or on
-        any transport/parse failure (the caller treats it as "this source had
-        nothing"), never raising for an ordinary miss.
+        Two API calls: search then get-entities. ``company_country`` (the
+        company's ISO-3166 alpha-2 ``hq_country``) drives the conservative
+        country cross-check. Returns None on no match or on any transport/parse
+        failure (the caller treats it as "this source had nothing"), never
+        raising for an ordinary miss.
         """
         try:
             ids = await self._search(company_name, limit)
@@ -295,4 +370,6 @@ class WikidataClient:
         except (ValueError, KeyError, TypeError) as exc:
             logger.info("wikidata payload parse failed for %r: %s", company_name, exc)
             return None
-        return select_official_website(company_name, ids, entities)
+        return select_official_website(
+            company_name, ids, entities, company_country=company_country
+        )
