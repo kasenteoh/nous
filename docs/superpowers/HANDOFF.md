@@ -21,9 +21,9 @@ consolidated to main after.
   the enrich write-site + a bounded idempotent `normalize-hq-state` backfill
   (`--limit`/`--dry-run`). **Routing-safe:** the code is the only form
   `/location/[state]` resolves (route uppercases the segment), so full-name rows
-  that 404 today start resolving. No migration, not yet cron-wired (one-shot
-  lever). **Run `nous normalize-hq-state` once** (dispatch or a cron step) to
-  drain existing ragged rows — enrichment normalizes new writes going forward.
+  that 404 today start resolving. No migration. **Now wired into the 3h cron**
+  (`normalize-hq-state --limit 500`, id'd, after normalize-taxonomy) so prod
+  drains automatically then no-ops; enrichment normalizes new writes too.
 - **#177 (web):** per-company "Report incorrect data" `repoIssueUrl` rider on
   `/c/[slug]`; `formatUsd` exact-dollars `title` tooltips on every individual
   funding figure; `/tag/[tag]` `noindex` when <3 companies (lockstep with the
@@ -243,8 +243,6 @@ small (below). The frontier is now the **NEXT horizon (depth)** — see `ROADMAP
 5. ~~**Per-company completeness score**~~ — **internal primitive SHIPPED (#175).**
 
 **Small Now follow-ups (do opportunistically):**
-- Run `nous normalize-hq-state` once against prod to drain existing ragged
-  `hq_state` rows (needs a dispatch/cron step — the backfill isn't cron-wired).
 - Wire `util.completeness` into husk-enrichment prioritisation ordering; fold in
   `extraction_confidence`; expose a public trust badge (Later — provenance UI).
 - Watch the `data-quality` cron report — esp. the website-provenance breakdown /
