@@ -1,11 +1,49 @@
-# Handoff — state of the world as of 2026-07-12
+# Handoff — state of the world as of 2026-07-13
 
 Written for the next agent (any model) picking this project up cold. Read
 this, then root `CLAUDE.md` (conventions), then the worklog
 (`docs/superpowers/fable5-worklog.md` — one entry per merged PR, the
-authoritative history), then the two plan docs under
-`docs/superpowers/plans/` (2026-07-10 improvement plan; 2026-07-11 hygiene +
-Wave 3). `BACKLOG.md` is annotated with what shipped.
+authoritative history; **read its "Opus 4.8 pickup — 2026-07-12" section**
+for the detail behind the Latest-update block below), then the two plan docs
+under `docs/superpowers/plans/` (2026-07-10 improvement plan; 2026-07-11
+hygiene + Wave 3). `BACKLOG.md` is annotated with what shipped.
+
+## LATEST UPDATE — Opus 4.8 session (2026-07-12 → 07-13, ~PRs #157–#164)
+
+Wave 3 is now genuinely LIVE and the next initiative (the SEO growth engine)
+is underway. What changed since the "as of 2026-07-12" body below:
+
+- **Frozen-prod recovery (the fire):** prod had been frozen ~a day at the
+  pre-E-2 commit — every Vercel build failed because the `/companies`
+  serverless function hit Vercel's 250MB limit (415MB). Root cause: Vercel's
+  **Turbopack builder ignores `outputFileTracingExcludes`**. Fixed by pinning
+  the web build to `next build --webpack` (#157) AND setting
+  **`VERCEL_SUPPORT_LARGE_FUNCTIONS=1`** on the Vercel project — **both are now
+  REQUIRED; a fresh project/clone must have the env var or deploys fail.**
+  Semantic search is finally live (it had never actually deployed).
+- **Perplexity / website-less-husk arc (#158–#163):** root-caused two layers —
+  no `website` (resolved before the curl_cffi Cloudflare bypass PR #132) AND
+  the scrape is **Cloudflare-403'd from Actions datacenter IPs** (both httpx
+  and curl_cffi; a 403 short-circuits before the Playwright render). Shipped
+  reusable `nous inspect-company` + `nous reresolve-company` (via `ops.yml`),
+  db-stats cohort counts (**890 website-less shown companies, 882 re-drainable
+  now**), and a self-bounding **re-drain of the pre-#132 cohort** (in flight
+  over the crons). The structured-data describe fallback ("A") was designed +
+  validated but **deferred** (marginal + an off-page `description_short`
+  compliance gap).
+- **Product roadmap designed** (multi-agent workflows + adversarial critique),
+  owner-approved: **SEO growth engine first, drop A, market map last.** Shipped
+  **migration `0036`** — the `funding_by_quarter` + `industry_funding_momentum`
+  RPCs (the foundation the industry pages / `/trends` need; verified against a
+  local pgvector container, full 1489-test DB suite green). **Migration head is
+  now 0036.**
+- **New gotcha — local DB verification:** OrbStack is installed and
+  `pgvector/pgvector:pg15` is cached. For migration/RPC work, spin one up
+  (`docker run -d --name nous-pg -e POSTGRES_PASSWORD=postgres -e
+  POSTGRES_DB=nous_test -p 55432:5432 pgvector/pgvector:pg15`;
+  `DATABASE_URL="postgresql+psycopg://postgres:postgres@localhost:55432/nous_test"`;
+  `uv run alembic upgrade head`; `uv run pytest -q` runs all ~1489 DB-gated
+  tests) and verify for real instead of round-tripping through CI.
 
 ## What just happened (25 merged PRs, #131–#155)
 
@@ -84,28 +122,35 @@ secret-free — that's the CI contract).
 
 ## Open items, in priority order
 
-1. **Wave 3 activation check (~a day out):** once the embed backlog drains —
-   verify on the live site: semantic extras + disclosure on
-   `/companies?q=ai+for+logistics`; similar-companies sections render;
-   Perplexity (and other rescued husks) have profiles; first themes run
-   populates `/themes` after the weekly discovery cron. Also confirm the
-   Vercel build log showed `[download-model] bundled …; probe ok (384
-   dims)` and the `/companies` function size (~58–92MB) — the E-2 PR (#155)
-   body carries the full checklist.
-2. **Golden floors for judge/funding prompts** are still conservative
-   hand-set values; after the next live `eval-record` run, anchor them with
-   `--update-baseline` like the long-description prompt already is.
-3. **Known small follow-ups:** gitleaks-action flaked once on a PR
-   ("stderr is not empty" — infra, not a leak; pin/retry if it recurs);
-   fastembed model download in web CI is fail-soft-unverified per run (check
-   the prebuild log line if semantic search ever silently degrades);
-   retired theme slugs get no aliases (accepted; revisit if themes URLs get
-   shared widely).
-4. **Next product waves (user decides):** Wave 4 habit loop (weekly digest +
-   RSS, momentum signals, `company_events` timeline), industry pages +
-   `/trends` (both ride existing data), X-vs-Y compare pages, market map.
-   The 2026-07-11 plan's "not committed scope" section and BACKLOG.md hold
-   the details.
+The current initiative is the **SEO growth engine** (owner-approved order:
+SEO surface first, drop "A", market map last). Build one reviewable PR at a
+time; leverage parallel agents for design/critique.
+
+1. **Industry pages** — `web/lib/industry.ts` (slug↔label from
+   `listIndustryGroups()`), `/industry/[group]` + `/industry` index consuming
+   the `0036` RPCs. **On-demand ISR, NOT `generateStaticParams`** (no route
+   uses it; it would couple `next build` to the DB). Gate to the ~30 canonical
+   `industry_group` buckets; hard-guard thin pages (sub-themes + the funding
+   chart are the only net-new content vs `/companies?industry=X`).
+2. **`/trends`** dashboard (funding momentum over time, hottest industries,
+   biggest recent rounds) — reuses the `0036` RPCs + `ThemeFundingChart`.
+3. **`/vs/[a]/[b]` compare pages** — conservative indexing: only
+   competitor-edge pairs with real funding on ≥1 side; `noindex` the long
+   tail. Extract a shared `CompareTable` from `/compare`.
+4. **RSS feed + `/c` event timeline** — frontend-only; the timeline must
+   REPLACE the existing FundingHistory/News sections on `/c/[slug]`, not
+   duplicate them. RSS + on-site only (email deferred — the first cost item).
+5. **Market map `/map/[industry]`** — pipeline-time PCA projection of the
+   embeddings → static server SVG; land the migration early (coords fill on
+   the ~monthly compute-themes cadence); keep onnx/transformers OFF the web
+   function (the #157 lesson).
+
+Verify along the way: `/themes` should populate after the weekly discovery
+cron (Mon 02:00 UTC) — confirm it; the husk re-drain and `0036` auto-apply on
+the next 3-hourly pipeline cron. Deferred: the structured-describe fallback
+("A", with its three required fixes — see the worklog), and anchoring the
+judge/funding golden floors with `--update-baseline` after a live
+`eval-record` run.
 
 ## Key architecture pointers
 
