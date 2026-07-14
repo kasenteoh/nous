@@ -11,23 +11,7 @@
 // nowhere would betray the very trust this feature sells, so uncertain → omit.
 
 import type { ReactElement } from "react";
-
-/**
- * The display hostname for an http(s) URL — lowercased, `www.`-stripped — or
- * null when the value is not a parseable http(s) URL. Stricter than a bare
- * `new URL()` (rejects `mailto:` etc.) so the affordance only ever links to a
- * real web source.
- */
-function sourceHost(url: string): string | null {
-  try {
-    const u = new URL(url);
-    if (u.protocol !== "http:" && u.protocol !== "https:") return null;
-    const host = u.hostname.toLowerCase();
-    return host.startsWith("www.") ? host.slice(4) : host;
-  } catch {
-    return null;
-  }
-}
+import { httpHost } from "@/lib/url";
 
 interface Props {
   /** The figure's recorded source URL. Absent/unparseable → the affordance
@@ -41,7 +25,7 @@ interface Props {
 
 export function SourceLink({ url, label }: Props): ReactElement | null {
   if (!url) return null;
-  const host = sourceHost(url);
+  const host = httpHost(url);
   if (!host) return null;
 
   return (

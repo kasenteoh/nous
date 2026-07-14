@@ -237,16 +237,21 @@ Thin single-company tag pages: `/tag/[tag]` now `noindex` when <3 companies, and
 `sitemap.ts` already excludes tags with <3 (`listAllTags`). **Still open:** a
 sitemap *index* before companies+tags approach the 50k-URL sitemap cap.
 
-### `text-ink-faint` de-emphasized text is below WCAG AA contrast [S] — P2
-Surfaced by the #193 provenance review: `--ink-faint` (#d4d4d4 on the #fafafa
-light canvas ≈ **1.42:1**; 1.82:1 dark) is used in ~30 places for de-emphasized
-supplementary text (footers, ranks, `app/page.tsx:253` "+N more", the
-`· includes semantic matches` note, etc.) — well below SC 1.4.3's 4.5:1 for text
-(and 3:1 for interactive controls). #193 fixed the two trust-critical provenance
-instances (the source `↗` glyph + the source-type tag → `text-ink-muted`). Do a
-system-wide pass: audit `text-ink-faint` sites, bump readable/interactive ones to
-a token ≥AA, or lift `--ink-faint`'s value. Token-level change — verify no
-regression in the intentionally-quiet spots.
+### De-emphasized text/controls below WCAG AA contrast (`text-ink-faint`/`-muted`) [S] — P2
+Surfaced by the #193 + #194 reviews: `--ink-faint` (#d4d4d4 on the #fafafa light
+canvas ≈ **1.42:1**; 1.82:1 dark) AND `--ink-muted` (#8a8a8a ≈ **3.3:1** light /
+3.1:1 dark) are used pervasively (~30 places) for de-emphasized supplementary text
+(footers, ranks, `app/page.tsx:253` "+N more", the source-type tags + host links
+in `Sources`, the timeline coverage disclosure summary + article links in
+`EventTimeline`) — below SC 1.4.3's 4.5:1 for text (`-muted` clears only the 3:1
+large-text / non-text floor). #193 fixed the two trust-critical instances (the
+source `↗` glyph → `text-ink-muted`). Also: the `EventTimeline` coverage
+`<summary>` (and `FilterPanel`) use a 40%-opacity `focus-visible:ring-accent/40`,
+fainter than the site-wide `outline: 2px solid var(--accent)` (which only targets
+`a/button/input/[tabindex]`, not `summary`). Do a system-wide pass: audit
+`text-ink-faint`/`-muted` sites, bump readable/interactive ones to a token ≥AA (or
+lift the token values), and normalize disclosure focus rings to the global
+standard. Token-level change — verify no regression in the intentionally-quiet spots.
 
 ---
 

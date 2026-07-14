@@ -8,6 +8,21 @@ for the detail behind the Latest-update block below), then the two plan docs
 under `docs/superpowers/plans/` (2026-07-10 improvement plan; 2026-07-11
 hygiene + Wave 3). `BACKLOG.md` is annotated with what shipped.
 
+## LATEST UPDATE — Timeline coverage grouping (2026-07-14, PR #194)
+
+Owner-flagged `/c/[slug]` **Timeline clutter** fixed: because `ingest-news` only
+ingests funding announcements, the "news" IS the funding coverage, so one
+well-covered round rendered as N near-duplicate news rows. New pure
+`web/lib/timeline.ts` `buildTimeline` clusters each article UNDER the round it
+covers (nearest `announced_date` within ±14d; a round's `primary_news_url` is
+PINNED to that round by canonical URL, before nearest-clustering, so a neighbor
+round can't steal it and it can't double-render); `EventTimeline` renders ≥2
+sources as a collapsed `<details>` "Covered by {outlets} +N more" (every article
+one click away — trust-preserving). Read-time only (no migration/pipeline change).
+Consolidated the http(s) host parse into `web/lib/url.ts` `httpHost` (SourceLink /
+Sources / timeline). **Follow-up:** if the date-proximity mapping proves accurate,
+persist a `news_articles.funding_round_id` link for exact grouping.
+
 ## LATEST UPDATE — Provenance UI MVP COMPLETE (2026-07-14, PRs #191–#193)
 
 ROADMAP **Later #1 (Provenance UI)** — the owner-approved 3-PR MVP is **SHIPPED**:
