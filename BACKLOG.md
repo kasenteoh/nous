@@ -329,9 +329,22 @@ deliberately deferred (first true cost item).
 "My companies" with new-round badges since last visit. No accounts, no backend.
 
 ### Momentum signals [M]
-Headcount and job-posting growth charts from `company_snapshots` (Wave 1 started
-recording). "Headcount up 40% since January" is the most VC-shaped datapoint we
-can add. News-cadence sparkline from `news_articles` dates is free.
+**Pipeline half SHIPPED — PR #PENDING (fable5).** `compute-momentum` stage +
+migration 0039 score every shown company's weekly "heating up" momentum into
+`companies.momentum_score` (`[0,1]`, 0.5=flat, NULL=insufficient data; partial
+DESC-indexed for the leaderboard read), `momentum_computed_at`, and
+`momentum_why` (pre-worded chips the web joins with " · "). Score = a
+weight-renormalized mean over the PRESENT of news acceleration (0.50,
+`company_snapshots.news_count_30d` recent-vs-baseline, +K smoothed & `[¼,4]`
+clipped), funding recency (0.35, `latest_round_date` exp-decay τ=180d), and
+headcount growth (0.15, snapshot midpoints). Anchored to `as_of_week` for
+determinism; runs weekly in `discovery.yml` after Snapshot companies (NOT
+TTL-gated). $0 — pure arithmetic, no LLM/network. Launch reality: until ~6
+weekly snapshots accrue, most scores are funding-recency-driven and the news
+component is ABSENT; it self-enriches as history builds.
+_Still open:_ the web `/trending` leaderboard + "heating up" badge (ranks
+`momentum_score DESC WHERE IS NOT NULL`, badge ~0.65), and the per-company
+headcount / news-cadence charts from `company_snapshots`.
 
 ### `company_events` unified timeline [L]
 Generalize funding extraction into event extraction: funding, acquisition,

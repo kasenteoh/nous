@@ -64,6 +64,17 @@ class Company(Base):
         # operators, hence the explicit GIN here rather than ``index=True`` on
         # the column. See migration 0030.
         Index("ix_companies_tags", "tags", postgresql_using="gin"),
+        # Partial DESC btree over momentum_score (migration 0039): the web
+        # /trending leaderboard reads WHERE momentum_score IS NOT NULL ORDER BY
+        # momentum_score DESC. The partial predicate keeps the index to only
+        # the scored minority (NULL = unscored), and DESC matches the sort so
+        # the read is an index-order scan. A plain ``index=True`` can't express
+        # either the DESC or the partial WHERE, hence the explicit Index here.
+        Index(
+            "ix_companies_momentum_score",
+            text("momentum_score DESC"),
+            postgresql_where=text("momentum_score IS NOT NULL"),
+        ),
     )
 
     name: Mapped[str]
@@ -346,6 +357,32 @@ class Company(Base):
     map_y: Mapped[float | None] = mapped_column(Float, nullable=True)
     map_computed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
+    )
+
+    # Momentum / "heating up" score (migration 0039), (re)written weekly by the
+    # compute-momentum stage: a weight-renormalized mean over the PRESENT of
+    # three components — news acceleration (company_snapshots.news_count_30d
+    # recent-vs-trailing-baseline), funding recency (latest_round_date
+    # exp-decay), headcount growth (snapshot employee midpoints). Range [0, 1]:
+    # 0.5 = flat/neutral, higher = accelerating. NULL = insufficient data (no
+    # present component) — a low-confidence state we never fabricate a number
+    # for. Every processed shown company is (re)written each run (value OR NULL)
+    # so one that loses its signal does not keep a stale high score. INDEXED
+    # (partial, DESC — see ix_companies_momentum_score in __table_args__)
+    # because the web /trending leaderboard filters IS NOT NULL and ORDER BYs it
+    # DESC; unlike map_x/map_y this IS a selective WHERE + ORDER BY key.
+    momentum_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    momentum_computed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    # Pre-worded "why it's heating up" chips, e.g. {"news +180%", "raised 3wks
+    # ago", "+40% team"} — the compute-momentum stage renders these strings and
+    # the web just joins them with " · ", never re-computing. text[] (not JSONB)
+    # because it is a flat display list, never queried into. NULL never occurs
+    # in practice: the server_default '{}' backfills existing rows and the stage
+    # always writes an explicit list ([] for an unscored company).
+    momentum_why: Mapped[list[str] | None] = mapped_column(
+        ARRAY(String), nullable=True, server_default=text("'{}'")
     )
 
 

@@ -469,6 +469,57 @@ def compute_map_positions(ttl_days: int, force: bool) -> None:
     asyncio.run(_run())
 
 
+@cli.command("compute-momentum")
+@click.option(
+    "--as-of-week",
+    type=str,
+    default=None,
+    help=(
+        "Anchor week YYYY-MM-DD (normalized to its ISO-week Monday). Default: "
+        "the current ISO week. Anchors the news windows + funding decay for "
+        "determinism; use for backfill / idempotency checks."
+    ),
+)
+def compute_momentum(as_of_week: str | None) -> None:
+    """Score every shown company's weekly "heating up" momentum.
+
+    A weight-renormalized mean over the present of news acceleration
+    (company_snapshots), funding recency (latest_round_date), and headcount
+    growth (snapshots). $0, local, deterministic: pure arithmetic anchored to
+    the as-of ISO week, no LLM / network / scikit-learn. Idempotent — a same-week
+    re-run overwrites with byte-identical momentum_score (re-stamping only
+    momentum_computed_at).
+    """
+    import asyncio
+    from datetime import UTC, datetime
+    from datetime import date as _date
+
+    from nous.db.session import AsyncSessionLocal
+    from nous.observability import record_pipeline_run
+    from nous.pipeline.compute_momentum import run_compute_momentum
+
+    parsed: _date | None = (
+        _date.fromisoformat(as_of_week) if as_of_week is not None else None
+    )
+
+    async def _run() -> None:
+        started = datetime.now(UTC)
+        async with AsyncSessionLocal() as session:
+            summary = await run_compute_momentum(session, as_of_week=parsed)
+            click.echo(summary.model_dump_json(indent=2))
+        # flag_empty off: a young catalog legitimately scores few companies
+        # (mostly funding-driven until snapshot history accrues) — not a failure.
+        await record_pipeline_run(
+            "compute-momentum",
+            started_at=started,
+            inputs_seen=summary.companies_seen,
+            rows_written=summary.companies_scored,
+            summary=summary,
+        )
+
+    asyncio.run(_run())
+
+
 @cli.command("refresh-vc-portfolios")
 @click.option(
     "--firm",
