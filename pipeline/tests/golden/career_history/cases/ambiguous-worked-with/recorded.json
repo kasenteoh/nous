@@ -1,6 +1,26 @@
 {
-  "provenance": "simulated",
+  "provenance": "deepseek",
+  "model": "deepseek-chat",
+  "recorded_at": "2026-07-14T07:54:05+00:00",
   "response": {
-    "people": []
+    "people": [
+      {
+        "name": "Nora Adeyemi",
+        "prior_roles": [
+          {
+            "company": "Google",
+            "role": null,
+            "start_year": null,
+            "end_year": null
+          },
+          {
+            "company": "Microsoft",
+            "role": null,
+            "start_year": null,
+            "end_year": null
+          }
+        ]
+      }
+    ]
   }
 }
