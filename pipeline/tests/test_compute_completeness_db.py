@@ -9,7 +9,9 @@ Covers, against a real Postgres (schema from ``alembic upgrade head``):
 - has_people wiring: adding a Person lifts the score by its 0.10 weight;
 - a funding-only company (no description) is shown via funding and scores 0.15;
 - shown-only: an excluded company is never processed (stays unscored/unstamped);
-- ``--limit`` caps the run to the first N shown companies;
+- exited-cohort clearing: a previously-scored company that loses both description
+  and funding is reset to NULL (no stale "documented" badge can render);
+- ``--limit`` caps the run to the first N shown companies (and skips clearing);
 - idempotence/determinism: a same-DB-state re-run rewrites byte-identical
   completeness_score (only completeness_computed_at advances);
 - the CLI records a pipeline_runs row and persists across sessions.
@@ -193,18 +195,69 @@ async def test_excluded_company_is_skipped(db: AsyncSession) -> None:
 
 
 # ---------------------------------------------------------------------------
-# --limit caps the run
+# Exited-cohort clearing: a scored company that loses both signals -> NULL
 # ---------------------------------------------------------------------------
 
 
-async def test_limit_caps_the_run(db: AsyncSession) -> None:
+async def test_exited_cohort_score_is_cleared(db: AsyncSession) -> None:
+    # Was scored 0.70 in a prior, richer run; then stripped to a husk (no
+    # description, no funding) — e.g. repair_catalog parking a dead domain — so it
+    # exits the shown cohort. The stage must reset it to NULL so no stale
+    # "documented" badge survives.
+    co = _company("comp-exit", website="https://exit.example/")
+    co.completeness_score = 0.70
+    co.completeness_computed_at = NOW - timedelta(days=7)
+    db.add(co)
+    await db.flush()
+    co.description_short = None  # website alone does NOT make it shown
+    co.funding_round_count = 0
+    db.add(co)
+    await db.commit()
+
+    summary = await run_compute_completeness(db, now=NOW)
+    assert summary.companies_cleared >= 1
+
+    db.expire_all()
+    got = await _reload(db, "comp-exit")
+    assert got.completeness_score is None
+    assert got.completeness_computed_at is None
+
+
+async def test_shown_company_is_not_cleared(db: AsyncSession) -> None:
+    # A currently-shown scored company must never be swept by the clear-stale pass.
+    co = _company("comp-kept", website="https://kept.example/")  # shown (desc)
+    db.add(co)
+    await db.commit()
+
+    await run_compute_completeness(db, now=NOW)
+    db.expire_all()
+    got = await _reload(db, "comp-kept")
+    assert got.completeness_score == 0.40  # website + description
+    assert got.completeness_computed_at == NOW
+
+
+# ---------------------------------------------------------------------------
+# --limit caps the run (and skips the global clear-stale pass)
+# ---------------------------------------------------------------------------
+
+
+async def test_limit_caps_the_run_and_skips_clearing(db: AsyncSession) -> None:
     db.add_all([_company("comp-lim-a"), _company("comp-lim-b")])
+    # A previously-scored, now-exited company that a FULL run would clear.
+    exited = _company("comp-lim-exited", description_short=None, funding_round_count=0)
+    exited.completeness_score = 0.55
+    exited.completeness_computed_at = NOW - timedelta(days=7)
+    db.add(exited)
     await db.commit()
 
     summary = await run_compute_completeness(db, limit=1, now=NOW)
     # Exactly one company processed regardless of how many are shown.
     assert summary.companies_seen == 1
     assert summary.companies_scored == 1
+    # A bounded run does NOT do global cleanup: the exited company keeps its score.
+    assert summary.companies_cleared == 0
+    db.expire_all()
+    assert (await _reload(db, "comp-lim-exited")).completeness_score == 0.55
 
 
 # ---------------------------------------------------------------------------
