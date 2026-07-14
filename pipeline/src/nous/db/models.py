@@ -776,6 +776,78 @@ class CompanyRelationship(Base):
     )
 
 
+class CareerMove(Base):
+    """A founder/exec's PRIOR employer, extracted from a company's scraped bios.
+
+    The talent-flow "founder background / notable alumni" rider: one row per
+    (a company's founder/exec, a prior employer) edge — e.g. "SambaNova's Rodrigo
+    Liang was previously at Oracle". Populated replace-style per company by
+    extract-career-history (DELETE by company_id, then INSERT the freshly
+    extracted set) from a bounded DeepSeek pass over ``raw_pages``. The #184
+    career-history-probe found named pedigrees are thin (~13-18%), so most
+    companies contribute zero rows — extraction returns empty rather than
+    fabricate (CLAUDE.md moat rule).
+
+    Deliberately NOT FK'd to ``people.id``: the people table is wiped and
+    re-inserted every enrich run, so an FK there would cascade-delete these rows
+    on every enrichment. Keying to ``company_id`` + ``person_normalized_name``
+    decouples this table from that churn; ``person_name`` keeps the display form.
+
+    ``prior_company_id`` is the in-catalog graph edge — set when the verbatim
+    ``prior_company_name`` resolves to a company in our DB (derived like
+    ``company_relationships``), NULL when the prior employer isn't catalogued
+    (Intel, IBM, a defunct startup). ON DELETE SET NULL (not CASCADE): deleting
+    the prior company must drop only the internal link, never the biographical
+    fact. Every rendered fact is sourced — ``source_url`` is the scraped page the
+    pedigree came from; ``extraction_prompt_version`` stamps the prompt revision
+    so the stage can version-gate re-extraction.
+    """
+
+    __tablename__ = "career_moves"
+
+    company_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("companies.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    person_name: Mapped[str] = mapped_column(String, nullable=False)
+    # Match key (lowercase, suffix-stripped via util.slugify.normalize_name) —
+    # decouples from people churn and backs the cross-company "repeat founders"
+    # lookup (same normalized name across ≥2 companies). Indexed for that WHERE.
+    person_normalized_name: Mapped[str] = mapped_column(
+        String, nullable=False, index=True
+    )
+    # The prior employer's name, copied verbatim from the scraped text.
+    prior_company_name: Mapped[str] = mapped_column(String, nullable=False)
+    # In-catalog graph edge: set when prior_company_name resolves to one of our
+    # companies, else NULL. SET NULL on delete (see docstring). Indexed for the
+    # reverse "who came from company X" read + as an FK.
+    prior_company_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("companies.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    prior_role: Mapped[str | None] = mapped_column(String, nullable=True)
+    start_year: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)
+    end_year: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)
+    # Provenance (every rendered fact needs a source): the scraped page URL.
+    source_url: Mapped[str | None] = mapped_column(String, nullable=True)
+    # Prompt revision that produced this row — version-gated re-extraction keys
+    # on it (NULL or < current PROMPT_VERSION → re-extract).
+    extraction_prompt_version: Mapped[str] = mapped_column(String, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "company_id",
+            "person_normalized_name",
+            "prior_company_name",
+            name="uq_career_moves_company_person_prior",
+        ),
+    )
+
+
 class Theme(Base):
     """A named market segment: one embedding cluster within an industry_group.
 
