@@ -110,18 +110,15 @@ Built on top of the now-trustworthy foundation.
    Follow-ups: interactive client renderer + theme coloring + a global
    theme-level meta-graph (BACKLOG).
 
-2. **Momentum signals — the "open it every morning" hook.** `company_snapshots`
-   already records weekly headcount + news velocity. Build detection on top:
-   *accelerating* companies (hiring + news + funding cadence), "heating up this
-   week." The single feature most likely to create a repeat power-user habit.
-   **Web surface landed (branch `fable5/momentum-web`):** `/trending` ("Heating
-   up") ranks by a `companies.momentum_score` the web only reads, with a
-   `🔥 Heating up` badge (threshold `MOMENTUM_BADGE_THRESHOLD = 0.65`), a
-   pipeline-authored "why" line, nav + footer + sitemap links; it degrades to an
-   empty state until the scorer ships. **Still pending:** the pipeline half —
-   migration 0039 (`momentum_score` + index, `momentum_computed_at`,
-   `momentum_why text[]`) and the detection stage that computes the score. The
-   page and badge light up automatically on the next revalidate once scores land.
+2. **Momentum signals — the "open it every morning" hook.** — **SHIPPED (#181
+   pipeline, #182 web).** `compute-momentum` scores every shown company's weekly
+   acceleration (news recent-vs-baseline + funding recency + headcount growth,
+   weight-renormalized to `momentum_score ∈ [0,1]`, NULL when insufficient data,
+   $0, deterministic) into `companies.momentum_score`; `/trending` ("Heating up")
+   ranks by it with a `🔥 Heating up` badge + a pipeline-worded "why" line. Scores
+   populate on the weekly `discovery.yml` run once migration 0039 reaches prod;
+   the page degrades to an empty-state until then. Follow-ups: homepage strip,
+   badge calibration, per-industry scoping, a snapshot sparkline (BACKLOG).
 
 3. **Per-entity RSS/feeds — alerts without accounts.** Feeds scoped to an
    industry, an investor, or a single company — the existing `/feed.xml` pattern

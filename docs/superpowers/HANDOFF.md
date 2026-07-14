@@ -8,6 +8,31 @@ for the detail behind the Latest-update block below), then the two plan docs
 under `docs/superpowers/plans/` (2026-07-10 improvement plan; 2026-07-11
 hygiene + Wave 3). `BACKLOG.md` is annotated with what shipped.
 
+## LATEST UPDATE — momentum signals shipped (2026-07-13, PRs #181/#182)
+
+ROADMAP **Next #2 (momentum / "heating up") done** — the "open it every morning"
+hook. Same 6-agent, two-workflow pattern (scout → implement → review), pipeline +
+web in parallel, both adversarially reviewed (0 blocking).
+- **#181 (pipeline):** `compute-momentum` — weekly `momentum_score ∈ [0,1]`
+  (0.5=flat, NULL=insufficient data) as a **weight-renormalized mean over the
+  PRESENT components**: news acceleration (0.50, `company_snapshots.news_count_30d`
+  recent-vs-baseline), funding recency (0.35, `latest_round_date` exp-decay),
+  headcount growth (0.15). Migration **0039** (`momentum_score` partial-DESC
+  indexed, `momentum_computed_at`, `momentum_why` text[]). Deterministic
+  (anchored to `as_of_week`), $0, weekly in `discovery.yml` after Snapshot
+  companies. `--as-of-week` for backfill.
+- **#182 (web):** `/trending` ("Heating up") ranked grid + `🔥 Heating up` badge
+  (threshold 0.65) + pipeline-worded "why" line. Migration-order-free (empty-state
+  until scores land), so independent of #181.
+- **Populates:** on the weekly `discovery.yml` run once 0039 reaches prod (next
+  pipeline cron applies it). **Launch reality:** `company_snapshots` is new, so
+  early scores are funding-recency-dominated until ~6 weekly rows accrue per
+  company (self-enriches; no code change).
+- **Gotcha logged:** a parallel main-tree agent's branch got reset to main on
+  origin mid-run; the work commit survived locally and was restored by
+  fast-forward push. Re-verify branch tips (`git ls-remote`) after a main-tree
+  agent finishes.
+
 ## LATEST UPDATE — market map shipped (2026-07-13, PRs #179/#180)
 
 ROADMAP **Next #1 (market map) done** — the first depth feature after the Now
@@ -55,10 +80,10 @@ consolidated to main after.
   funding figure; `/tag/[tag]` `noindex` when <3 companies (lockstep with the
   sitemap's ≥3 filter).
 
-**What's next:** the Now horizon is cleared and the market map (Next #1) shipped
-(#179/#180), so the frontier is the rest of the **NEXT horizon (depth)** —
-momentum signals from `company_snapshots`, per-entity RSS, talent-flow/investor
-graphs. Smaller Now follow-ups remain: run the
+**What's next:** the Now horizon is cleared and Next #1 (market map, #179/#180)
+and Next #2 (momentum, #181/#182) shipped, so the frontier is the rest of the
+**NEXT horizon (depth)** — **per-entity RSS/feeds** (#3), **talent-flow** (#4),
+**investor depth** (#5). Smaller Now follow-ups remain: run the
 `normalize-hq-state` backfill once; wire `util.completeness` into
 husk-enrichment ordering; watch the `data-quality` cron report (esp. the
 website-provenance / wrong-site proxy from the husk re-mining).
@@ -276,12 +301,11 @@ small (below). The frontier is now the **NEXT horizon (depth)** — see `ROADMAP
 
 The frontier is now the **NEXT horizon (depth)**, detailed just below.
 
-**NEXT horizon (depth, after the foundation):** the **market map
-`/map/[industry]`** SHIPPED (#179/#180, see the top update block). Remaining Next
-bets: **momentum signals** from `company_snapshots` (the "open it every morning"
-hook — accelerating companies), **per-entity RSS/feeds** (industry/investor/
-company-scoped, fanning out `/feed.xml`), **talent-flow** from `people`, and
-**investor depth** (co-investment networks). Full detail in `ROADMAP.md`.
+**NEXT horizon (depth, after the foundation):** the **market map** (#179/#180)
+and **momentum signals** (#181/#182) SHIPPED (see the top update blocks).
+Remaining Next bets: **per-entity RSS/feeds** (industry/investor/company-scoped,
+fanning out `/feed.xml`), **talent-flow** from `people`, and **investor depth**
+(co-investment networks). Full detail in `ROADMAP.md`.
 
 Deferred (unchanged): the structured-describe fallback ("A", with its three
 required fixes — see the worklog), and anchoring the judge/funding golden

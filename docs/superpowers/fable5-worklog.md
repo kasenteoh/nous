@@ -947,12 +947,12 @@ component, and critically no ML in the Vercel function (the #157 lesson).
   tree, npm) were scouted, implemented, and reviewed by 6 agents across two
   workflows (2 scout → 2 implement → 2 review), merged sequentially.
 
-## PR #PENDING — feat(pipeline): momentum ("heating up") score (compute-momentum) (fable5)
+## PR #181 — feat(pipeline): momentum ("heating up") score (compute-momentum) (merged 2026-07-13)
 
-Pipeline side of the "Momentum signals" backlog bet: score every shown company's
-weekly "heating up" momentum so the web can rank a `/trending` leaderboard and
-light a "heating up" badge off flat columns (no compute in the Vercel function).
-Web side (`/trending` + badge) is a paired follow-up against the same contract.
+Pipeline side of the "Momentum signals" bet (ROADMAP Next #2): score every shown
+company's weekly "heating up" momentum so the web can rank a `/trending`
+leaderboard and light a "heating up" badge off flat columns (no compute in the
+Vercel function). Web side (`/trending` + badge) shipped in parallel as #182.
 - **Migration 0039** (hand-written, chains off 0038): three columns on
   `companies` — `momentum_score` (double precision, `[0,1]`; 0.5=flat,
   higher=accelerating, NULL=insufficient data), `momentum_computed_at`
@@ -990,3 +990,30 @@ Web side (`/trending` + badge) is a paired follow-up against the same contract.
   most, so early scores are funding-recency-dominated and self-enrich as history
   builds (no code change needed). Populates on the next `discovery.yml` run once
   0039 reaches prod.
+
+## PR #182 — feat(web): /trending "Heating up" momentum surface (merged 2026-07-13)
+
+Web side of momentum (ROADMAP Next #2), paired with #181; built by a parallel
+agent (main tree, npm-verified) and adversarially reviewed (APPROVE, 0 blocking).
+The web only READS the pipeline-computed `momentum_score` — no computation.
+- **`/trending`** ("Heating up") — a ranked `CompanyCard` grid ordered by
+  `momentum_score` desc, each with a pipeline-worded "why" line, "Momentum as of"
+  rider, on-demand ISR, empty-state.
+- **`🔥 Heating up` badge** (`MomentumBadge`, `MOMENTUM_BADGE_THRESHOLD=0.65` on
+  the `[0,1]` score) on `CompanyCard` + the company detail header. Badge threshold
+  and query floor are separate documented calibratable constants.
+- **`listHeatingUpCompanies`** — shown-cohort + scored-only, migration-order-free
+  (explicit `momentum_score` select → pre-migration 400 → `[]` → empty-state), so
+  #182 was independent of #181. Momentum-specific naming throughout (NOT the
+  existing spotlight `TrendingCompany`/`getTrendingCompanies`). Optional
+  `CompanyCard` props → zero regression on the 8 other card call sites (tested).
+- Nav + footer + sitemap links.
+- **Verified:** npm lint + 292 tests + build green; full CI rollup green.
+- **Note:** `/trending` + badges light up automatically on the next ISR
+  revalidate once migration 0039 reaches prod and the first weekly
+  `compute-momentum` run scores companies.
+- **Git incident:** the web branch (main-tree agent) got reset to main on origin
+  mid-run; the work commit `a05fbca` survived locally and was restored by
+  fast-forward push before the PR — a reminder to re-verify branch tips after a
+  parallel main-tree agent finishes. The 1wk-grammar review nit on #181 was fixed
+  in a follow-up commit before merge.

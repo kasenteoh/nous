@@ -328,23 +328,26 @@ deliberately deferred (first true cost item).
 ### Watchlists via localStorage [M]
 "My companies" with new-round badges since last visit. No accounts, no backend.
 
-### Momentum signals [M]
-**Pipeline half SHIPPED — PR #PENDING (fable5).** `compute-momentum` stage +
-migration 0039 score every shown company's weekly "heating up" momentum into
-`companies.momentum_score` (`[0,1]`, 0.5=flat, NULL=insufficient data; partial
-DESC-indexed for the leaderboard read), `momentum_computed_at`, and
-`momentum_why` (pre-worded chips the web joins with " · "). Score = a
-weight-renormalized mean over the PRESENT of news acceleration (0.50,
-`company_snapshots.news_count_30d` recent-vs-baseline, +K smoothed & `[¼,4]`
-clipped), funding recency (0.35, `latest_round_date` exp-decay τ=180d), and
-headcount growth (0.15, snapshot midpoints). Anchored to `as_of_week` for
-determinism; runs weekly in `discovery.yml` after Snapshot companies (NOT
-TTL-gated). $0 — pure arithmetic, no LLM/network. Launch reality: until ~6
-weekly snapshots accrue, most scores are funding-recency-driven and the news
-component is ABSENT; it self-enriches as history builds.
-_Still open:_ the web `/trending` leaderboard + "heating up" badge (ranks
-`momentum_score DESC WHERE IS NOT NULL`, badge ~0.65), and the per-company
-headcount / news-cadence charts from `company_snapshots`.
+### Momentum signals [M] — SHIPPED (#181 pipeline, #182 web)
+**Pipeline (#181):** `compute-momentum` stage + migration 0039 score every shown
+company's weekly "heating up" momentum into `companies.momentum_score` (`[0,1]`,
+0.5=flat, NULL=insufficient data; partial DESC-indexed), `momentum_computed_at`,
+`momentum_why` (pre-worded chips). Score = weight-renormalized mean over the
+PRESENT of news acceleration (0.50, `company_snapshots.news_count_30d`
+recent-vs-baseline, +K smoothed & `[¼,4]` clipped), funding recency (0.35,
+`latest_round_date` exp-decay τ=180d), headcount growth (0.15). Anchored to
+`as_of_week` (deterministic); weekly in `discovery.yml` after Snapshot companies
+(not TTL-gated). $0. Launch reality: until ~6 weekly snapshots accrue, scores
+are funding-recency-driven (news component ABSENT); self-enriches as history
+builds.
+**Web (#182):** `/trending` ("Heating up") ranked CompanyCard grid by
+`momentum_score` desc + `🔥 Heating up` badge (`MOMENTUM_BADGE_THRESHOLD=0.65`) on
+cards/company header + a pipeline-worded "why" line; nav/footer/sitemap. ISR,
+migration-order-free (empty-state until scores land).
+_Follow-ups (deferred):_ homepage "Heating up this week" strip (after the
+"Trending now" naming-coherence call); badge-threshold calibration once the
+score distribution is known; per-industry `/trending` scoping; a momentum
+sparkline from `company_snapshots` history.
 
 ### `company_events` unified timeline [L]
 Generalize funding extraction into event extraction: funding, acquisition,
@@ -408,33 +411,6 @@ signal for readers).
 ### Vitest + one Playwright smoke test for `web/` [M]
 Zero web tests today; `npm run build` typechecks but misses render-time bugs.
 One happy-path "/c/[slug] renders" test is high-leverage.
-
----
-
-## 2026-07-13 momentum / "heating up" (ROADMAP Next #2)
-
-Web read-surface for the momentum signal, on branch `fable5/momentum-web`
-(mirrors the `/map` split: web ships the reader, pipeline owns the compute).
-
-- ✅ `/trending` page ("Heating up") — ranked CompanyCard grid by
-  `companies.momentum_score` desc, ISR 6h, empty-state pre-migration, "Momentum
-  as of" rider. `listHeatingUpCompanies` → `MomentumCompany[]` (explicit select
-  → pre-migration 400 → [] → empty state, no feature flag, mirrors
-  `listIndustryMapNodes`). `MomentumBadge` (`🔥 Heating up`,
-  `MOMENTUM_BADGE_THRESHOLD = 0.65`) on cards + the `/c/[slug]` header;
-  `formatMomentumWhy` joins the pipeline's pre-worded breakdown. Nav + footer +
-  sitemap entries. Tests: queries mapping + pre-migration error path, formatter,
-  badge threshold + card gating, page smoke.
-- ⏳ **Blocked on pipeline (separate work):** migration **0039** adding
-  `momentum_score double precision NULL` (indexed — WHERE/ORDER column),
-  `momentum_computed_at timestamptz NULL`, `momentum_why text[] NULL DEFAULT
-  '{}'`, plus the detection stage that computes the score in [0,1] (0.5 = flat)
-  and writes the pre-worded `momentum_why` strings. Until then `/trending` shows
-  its empty state and no badge lights.
-- Follow-ups (deferred): homepage "Heating up this week" strip reusing
-  `listHeatingUpCompanies` (after the "Trending now" naming-coherence call);
-  badge-threshold calibration once the score distribution is known; per-industry
-  `/trending` scoping; a momentum sparkline from `company_snapshots` history.
 
 ---
 
