@@ -152,13 +152,18 @@ this" without accounts, `$0`, works immediately against existing data:
   guids stable across regenerations. Follow-up: an on-page "how to subscribe"
   hint / feed hub, and email delivery (explicitly out this quarter).
 
-### Talent-flow "founder background" rider [M] — QUEUED (owner-approved)
-Feasibility-gated by the `#184` `career-history-probe` (named prior-employer
-~13-18%, thin → rider not graph). Build the per-company "founder background /
-notable alumni" rider via a bounded LLM career-history extraction (dry-run first,
-~$0.05; ~$6.50 one-time backfill — a NEW DeepSeek line, owner-approved). Full
-design (prompt, migration 0040 `career_moves`, dry-run stage + dispatch, golden
-gating, web rider): **`docs/superpowers/plans/2026-07-13-talent-flow-rider-and-investor-depth.md`**.
+### Talent-flow "founder background" rider [M] — SHIPPED (#185/#186/#187/#188, recordings #189)
+Per-company "founder background / notable alumni" rider via a bounded DeepSeek
+career-history extraction, built on the thin #184 signal (rider not graph). The
+$0.05 dry run cleared the gate (#185: 50% of top-funded yield ≥1 named prior, **0
+fabrication**), then migration 0040 `career_moves` (#186), the version-gated +
+idempotent apply stage + golden set (#187, migration 0041 stamp so empties aren't
+re-billed), and the `/c/[slug]` web rider (#188). Live golden re-record #189
+(grounding 1.0). Cost: **~$0.0013/company** (measured) → full backfill well under
+the ~$6.50 estimate. Design: `docs/superpowers/plans/2026-07-13-talent-flow-rider-and-investor-depth.md`.
+Follow-ups (BACKLOG, low-priority): a catalog-level "repeat founders" index
+(co-membership by `person_normalized_name`, $0 but low-precision — no person
+disambiguator); re-extract as scrape coverage grows (prompt bump re-selects).
 
 ### Investor depth [M] — QUEUED
 Co-investment graph + "who's leading rounds in X now" + portfolio momentum (reuse

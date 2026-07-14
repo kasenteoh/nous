@@ -1068,3 +1068,87 @@ employers. Built + reviewed by 2 agents; dispatched once against prod.
   measurement first, LLM spend only if the number clears the bar. It didn't
   clearly clear (~15% vs the ~30% green-light), so the LLM extraction was NOT
   built pending an owner value/cost call.
+
+## PR #185 — feat(pipeline): extract-career-history dry-run (talent-flow founder-background gate) (merged 2026-07-14)
+
+Owner approved building the talent-flow **"founder background" rider** (ROADMAP
+Next #4-lite) despite the thin #184 signal, accepting the new DeepSeek line. This
+is the husk-style evidence gate before the full pipeline: a bounded DeepSeek
+extraction that, per shown company with a leadership roster + scraped pages,
+pulls each founder/exec's PRIOR employers — empty-not-fabricate for the ~85%.
+- New `career_history` prompt (PROMPT_VERSION, PriorRole/PersonCareer/
+  CareerHistoryExtraction, hardened roster-attributed template, validators that
+  drop pedigree-less/off-roster noise; a null prior company drops only that role,
+  never the whole company's extraction).
+- `extract-career-history --limit --dry-run` stage + `extract-career-history.yml`
+  dispatch (DEEPSEEK_API_KEY, dry_run default true, limit default 20). Dry-run
+  roster-matches, renders a yield table (off-roster + self-reference fabrication
+  proxies, example moves) + the $ via emit_run_telemetry, writes nothing.
+- Adversarially reviewed (4 lenses → verify): 3 confirmed yield-fidelity defects
+  fixed (self-reference inflation, duplicate-people double-count, null-company
+  fatal parse). Verified: ruff+mypy, 1138 passed; full CI green.
+- **Prod dry run (20 top-funded):** 50% with ≥1 named prior, 34 people, 69 edges,
+  **0 off-roster, 0 self-ref, 0 errors, $0.0253** — clean named employers
+  (Rodrigo Liang → Sun/Oracle/HP, Tom Mueller → SpaceX, Drew Durbin → Sendwave).
+  Cleared the gate → full build greenlit.
+
+## PR #186 — feat(db): migration 0040 career_moves + CareerMove model (merged 2026-07-14)
+
+Schema-only PR landing the `career_moves` table ahead of the writer (the 3-PR
+husk split: dispatch workflow #185 → this migration → apply stage), so a
+migration absent from main can't crash the cron's `alembic upgrade head`.
+- `career_moves`: company_id FK CASCADE (indexed), person_name +
+  person_normalized_name (indexed; NO FK to people.id — people is wiped every
+  enrich run, so keying to company_id + normalized name decouples from that
+  churn), prior_company_name (verbatim), prior_company_id FK companies ON DELETE
+  SET NULL (the in-catalog graph edge; SET NULL so deleting the prior company
+  drops only the link, never the fact), prior_role, start/end_year (SmallInt),
+  source_url, extraction_prompt_version. UNIQUE (company_id,
+  person_normalized_name, prior_company_name) — the replace-style idempotency key.
+- Verified on a pgvector:pg15 container: upgrade/downgrade round-trip, `\d`
+  confirms columns/indexes/FKs, DB suite 1691 passed. New DB-gated tests cover
+  the unique key + CASCADE-vs-SET-NULL delete semantics.
+
+## PR #187 — feat(pipeline): extract-career-history apply path + golden set (merged 2026-07-14)
+
+Turns the #185 dry-run stage into the persisting pipeline, gated by a new golden
+set.
+- **Apply path:** version-gated selection (career_extracted_prompt_version IS
+  NULL OR < PROMPT_VERSION) + --limit; replace-style per company (DELETE
+  career_moves → INSERT edges → stamp → commit). The per-company stamp
+  (**migration 0041**, indexed) makes the ~85% empty-bio companies idempotent —
+  career_moves rows alone can't tell "never extracted" from "extracted, empty",
+  so without it every run would re-bill DeepSeek for the empties. prior_company_id
+  resolved by EXACT unique normalized-name match (high precision). Edges collapsed
+  to one per (person, prior company). record_pipeline_run (flag_empty=False).
+- **Prompt** 2026-07-13.2: named-company-or-null (drops the #185 descriptive-phrase
+  tail) + a schema length-cap.
+- **Golden set:** career_history PromptSpec + scorer gating empty_accuracy (the
+  empty-not-fabricate dial), people/moves P/R, and a DEDICATED per-token grounder
+  (the shared grounding_fraction skips each fragment's first word — blind to
+  short/leading names). 16 hard-case fixtures; CaseSpec gains a roster.
+- Adversarially reviewed (4 lenses → verify): 2 confirmed defects fixed — a
+  post-rollback MissingGreenlet crash (rollback expires the identity map → the
+  loop now drives off ids + re-get; regression-tested) and the vacuous grounding.
+  Verified on pgvector:pg15: migration round-trip, DB suite 1697 passed.
+- **Live golden re-record (#189, eval-record.yml):** replaced the simulated
+  recordings with real deepseek-chat — `parse_rate 1.0, empty_accuracy 0.937,
+  people_precision 0.928/recall 1.0, moves_precision 0.894/recall 1.0,
+  grounding 1.0` (zero fabrication live). Baseline strengthened to reality.
+
+## PR #188 — feat(web): founder-background rider on /c/[slug] (merged 2026-07-14)
+
+The web surface: a "Founder background" section listing where each founder
+worked BEFORE this company, grouped by person, linking to /c/[prior_slug] when
+the prior employer resolves to a shown catalog company.
+- `getCareerMoves` reads career_moves with the REQUIRED FK-hint embed
+  `companies!prior_company_id(...)` (two FKs to companies → un-hinted 400s
+  "ambiguous"). Migration-order-free: error → [] → hidden until the table lands.
+  Excluded prior companies keep their name as text, drop the link.
+- `FounderBackground` server component (omit-when-empty; ~1-in-6 pages render
+  anything, by design). Tenure renders honestly — a prior employer with an
+  unknown end year shows "from 2005", never "2005–present" (that would fabricate
+  an unsourced current-employment claim).
+- Adversarially reviewed (2 lenses → verify): 1 confirmed defect fixed (the
+  "present"/"?" tenure fabrication), regression-tested. Verified: npm lint +
+  test (328 passed) + build.

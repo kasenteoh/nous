@@ -1,4 +1,4 @@
-# Handoff — state of the world as of 2026-07-13
+# Handoff — state of the world as of 2026-07-14
 
 Written for the next agent (any model) picking this project up cold. Read
 this, then root `CLAUDE.md` (conventions), then the worklog
@@ -7,6 +7,45 @@ authoritative history; **read its "Opus 4.8 pickup — 2026-07-12" section**
 for the detail behind the Latest-update block below), then the two plan docs
 under `docs/superpowers/plans/` (2026-07-10 improvement plan; 2026-07-11
 hygiene + Wave 3). `BACKLOG.md` is annotated with what shipped.
+
+## LATEST UPDATE — talent-flow "founder background" rider SHIPPED (2026-07-14, PRs #185–#189)
+
+ROADMAP Next **#4 (talent-flow) is BUILT** — as the evidence-gated per-company
+**"founder background / notable alumni" rider**, not the graph (the #184 probe
+found named pedigrees too thin/non-catalog for a graph). Five PRs, husk-style
+(measure → gate → build):
+- **#185** — `extract-career-history --dry-run` + the `career_history` prompt
+  (hardened, empty-not-fabricate). **Prod dry run (20 top-funded): 50% yield, 0
+  fabrication, $0.025** → cleared the gate.
+- **#186** — migration **0040** `career_moves` (schema only; the 3-PR husk split).
+- **#187** — the persisting apply path + golden set. Version-gated + idempotent
+  (**migration 0041** `career_extracted_prompt_version` stamp so the ~85% empty
+  bios aren't re-billed); replace-style writes; `prior_company_id` by exact
+  unique normalized-name match. 16-fixture golden gate.
+- **#188** — the `/c/[slug]` **Founder background** web rider (grouped by person,
+  links to in-catalog priors, omit-when-empty, honest tenure).
+- **#189** — live DeepSeek golden re-recording (grounding **1.0**, empty_accuracy
+  0.937 — the gate now reflects reality).
+
+**Prod data:** the apply path is proven (20 + 500 companies backfilled so far →
+**~1,365 career_moves rows, ~180 in-catalog links, 0 persisted fabrication,
+~$0.71**). A **backfill drain loop is running** (dispatch `extract-career-history.yml
+-f dry_run=false -f limit=500` repeatedly until `companies_seen < 500`);
+prominence-ordered, so marquee companies are done first. Steady-state re-extraction
+is **dispatch-only** (no cron wiring, deliberately — a bump of `PROMPT_VERSION`
+re-selects everyone; empties are stamped so they don't re-bill). Cost is
+~$0.0013/company — the full cohort lands well under the ~$6.50 estimate.
+**To finish/resume the backfill:** dispatch more `-f dry_run=false -f limit=500`
+batches until a run reports `companies_seen < 500`. The web section appears on
+each `/c/[slug]` after the 6h ISR revalidation once its rows exist.
+
+**Gotcha logged (career_moves apply):** a per-company `session.rollback()`
+expires the WHOLE identity map (independent of `expire_on_commit`), so the loop
+drives off company IDs and re-`session.get`s each — never touch a preloaded ORM
+object after a sibling rollback (it fires sync IO → `MissingGreenlet` and crashes
+the run). Post-rollback logs use a captured slug local.
+
+**Remaining Next bet: investor depth (#5).**
 
 ## LATEST UPDATE — talent-flow feasibility gate (2026-07-13, PR #184)
 

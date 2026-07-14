@@ -130,19 +130,18 @@ Built on top of the now-trustworthy foundation.
    every entity page. Follow-up (BACKLOG): a subscribe hint / feed hub; email
    delivery stays out this quarter.
 
-4. **Talent-flow graph.** — **feasibility-gated (#184 probe): thin, graph
-   deferred.** A $0 read-only prevalence probe over prod found career-history
-   *prose* is common (69.5% of companies with pages have a bio section) but
-   **named** prior employers are thin: ~18% SQL upper bound / ~13–15% after
-   noise-filtering, concentrated in prominent companies, and many named orgs
-   (Intel, IBM, NVIDIA…) are non-catalog non-startups → a rich "Stripe → founders
-   → companies" graph is **not** well-supported by current scrape data. What IS
-   feasible: a per-company "founder background / notable alumni" rider on the
-   ~1-in-6 pages that name a pedigree, via a bounded LLM extraction (~$6.50
-   one-time backfill). Repeat-founders via internal name-matching is $0 but
-   low-precision (no person disambiguator). **Owner-approved (2026-07-13): build
-   the rider** (dry-run first) — plan +
-   design: `docs/superpowers/plans/2026-07-13-talent-flow-rider-and-investor-depth.md`.
+4. **Talent-flow — "founder background" rider.** — **SHIPPED (#185 dry-run gate,
+   #186 schema, #187 pipeline+golden, #188 web; #189 live recordings).** The #184
+   probe found the rich "Stripe → founders → companies" *graph* isn't supported
+   (named prior employers thin, ~13–18%, mostly non-catalog orgs), so the built
+   bet is the per-company **"founder background / notable alumni" rider**: a
+   bounded DeepSeek extraction of each founder's PRIOR employers →
+   `career_moves`, rendered on `/c/[slug]` (linked when the prior employer is
+   in-catalog). Evidence-gated husk-style — a $0.05 prod dry run cleared first
+   (50% of top-funded yield ≥1 named prior, **0 fabrication**); empty-not-fabricate
+   for the ~85% with no pedigree; golden-gated (grounding 1.0 live). **~$0.0013/
+   company** measured (full backfill well under the ~$6.50 estimate). Follow-up
+   (BACKLOG): a $0 low-precision "repeat founders" co-membership index.
 
 5. **Investor depth.** Co-investment networks, portfolio momentum, "who's leading
    rounds in X right now" — turn the investor directory from a list into a lens.
