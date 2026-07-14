@@ -227,7 +227,7 @@ export default function RootLayout({
 
             {/* Browse-by-location entry point — these pages exist and are
                 paginated but were otherwise unreachable by clicking. */}
-            <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-ink-faint">
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-ink-muted">
               <span className="text-ink-muted">Hubs:</span>
               <Link href="/location/CA" className="hover:text-ink-soft transition-colors">California</Link>
               <Link href="/location/NY" className="hover:text-ink-soft transition-colors">New York</Link>
@@ -254,7 +254,7 @@ export default function RootLayout({
               .
             </p>
 
-            <p className="text-ink-faint">© 2026 {SITE_NAME}</p>
+            <p className="text-ink-muted">© 2026 {SITE_NAME}</p>
           </div>
         </footer>
 

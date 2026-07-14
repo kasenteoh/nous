@@ -115,7 +115,7 @@ export default async function VsPage({ params }: Props) {
       {/* ── Header ──────────────────────────────────────────────────────────── */}
       <header className="mb-8">
         <h1 className="text-4xl font-semibold tracking-tight text-ink">
-          {first.name} <span className="text-ink-faint">vs</span> {second.name}
+          {first.name} <span className="text-ink-muted">vs</span> {second.name}
         </h1>
         <p className="mt-3 text-sm text-ink-muted max-w-2xl">
           {data.isCompetitorEdge

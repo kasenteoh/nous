@@ -224,7 +224,7 @@ export default async function FrontPage() {
                     {company.oneLiner}
                   </span>
                   {company.facts.length > 0 && (
-                    <span className="mt-2 block font-mono text-xs text-ink-faint">
+                    <span className="mt-2 block font-mono text-xs text-ink-muted">
                       {company.facts.join(" · ")}
                     </span>
                   )}
@@ -250,7 +250,7 @@ export default async function FrontPage() {
           {industries.moreCount > 0 && (
             <Link
               href="/companies"
-              className="text-ink-faint hover:text-ink-muted transition-colors"
+              className="text-ink-muted hover:text-ink transition-colors"
             >
               +{industries.moreCount} more
             </Link>

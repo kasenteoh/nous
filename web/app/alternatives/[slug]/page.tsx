@@ -197,7 +197,7 @@ export default async function AlternativesPage({ params }: Props) {
                     {c.reasoning || c.description}
                   </p>
                 )}
-                <p className="mt-1 px-1 font-mono text-xs text-ink-faint">
+                <p className="mt-1 px-1 font-mono text-xs text-ink-muted">
                   {c.source === "techcrunch" && c.source_url ? (
                     <a
                       href={c.source_url}
@@ -241,7 +241,7 @@ export default async function AlternativesPage({ params }: Props) {
               >
                 <header className="flex items-baseline gap-2">
                   <span className="font-semibold text-ink">{c.name}</span>
-                  <span className="ml-auto text-xs text-ink-faint">#{c.rank}</span>
+                  <span className="ml-auto text-xs text-ink-muted">#{c.rank}</span>
                 </header>
 
                 {c.source === "techcrunch" && c.source_url ? (

@@ -167,7 +167,7 @@ export function CompanyCard({
             with the site's " · " separator (mirrors the homepage strip). Shown
             only on /trending, where momentumWhy is supplied. */}
         {momentumWhy && momentumWhy.length > 0 && (
-          <p className="mt-3 font-mono text-xs text-ink-faint">
+          <p className="mt-3 font-mono text-xs text-ink-muted">
             {formatMomentumWhy(momentumWhy)}
           </p>
         )}

@@ -46,7 +46,7 @@ export default async function TrendingPage() {
           momentum from recent hiring, news, and funding activity. Updated a few
           times a day.
           {asOf && (
-            <span className="text-ink-faint">
+            <span className="text-ink-muted">
               {" "}
               Momentum as of {formatDate(asOf)}.
             </span>

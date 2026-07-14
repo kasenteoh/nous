@@ -88,7 +88,7 @@ export function EventTimeline({ rounds, news }: Props) {
                     isFunding ? "bg-money" : "bg-ink-faint"
                   }`}
                 />
-                <p className="font-mono text-xs text-ink-faint">
+                <p className="font-mono text-xs text-ink-muted">
                   {dateLabel} · {isFunding ? "Funding" : "News"}
                 </p>
 
@@ -191,7 +191,7 @@ function CoverageDisclosure({ coverage }: { coverage: CoverageLink[] }) {
   const extra = outlets.length - shown.length;
   return (
     <details className="group mt-1.5">
-      <summary className="flex w-fit cursor-pointer list-none items-center gap-1.5 text-sm text-ink-muted hover:text-ink focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 [&::-webkit-details-marker]:hidden">
+      <summary className="flex w-fit cursor-pointer list-none items-center gap-1.5 text-sm text-ink-muted hover:text-ink [&::-webkit-details-marker]:hidden">
         <svg
           viewBox="0 0 20 20"
           fill="none"
@@ -205,7 +205,7 @@ function CoverageDisclosure({ coverage }: { coverage: CoverageLink[] }) {
         <span>
           Covered by {shown.join(", ")}
           {extra > 0 && (
-            <span className="text-ink-faint">
+            <span className="text-ink-muted">
               {" "}
               +{extra} more source{extra === 1 ? "" : "s"}
             </span>
@@ -224,7 +224,7 @@ function CoverageDisclosure({ coverage }: { coverage: CoverageLink[] }) {
               {c.title ?? c.host}
             </a>
             {c.title && (
-              <span className="ml-1.5 text-xs text-ink-faint">· {c.host}</span>
+              <span className="ml-1.5 text-xs text-ink-muted">· {c.host}</span>
             )}
           </li>
         ))}

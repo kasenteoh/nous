@@ -92,7 +92,7 @@ export default async function ThemesPage() {
         </ul>
       )}
 
-      <p className="mt-8 text-xs text-ink-faint leading-relaxed max-w-2xl">
+      <p className="mt-8 text-xs text-ink-muted leading-relaxed max-w-2xl">
         Themes are computed monthly by clustering company descriptions;
         growth figures are derived from funding rounds recorded from public
         announcements and may be incomplete.

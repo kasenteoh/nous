@@ -190,7 +190,7 @@ export default async function IndustryPage({ params }: Props) {
           Funding by quarter
         </h2>
         <ThemeFundingChart buckets={buckets} />
-        <p className="mt-2 text-xs text-ink-faint">
+        <p className="mt-2 text-xs text-ink-muted">
           Total raised by companies in this industry per quarter, derived from
           funding rounds recorded from public announcements; undated rounds are
           not charted and coverage may be incomplete.

@@ -37,7 +37,7 @@ export default async function AboutPage() {
             {coverage.withFunding.toLocaleString("en-US")} of{" "}
             {coverage.shown.toLocaleString("en-US")} listed companies have
             funding data{" "}
-            <span className="text-ink-faint">
+            <span className="text-ink-muted">
               · catalog refreshed every 6 hours
               {coverage.asOf && <> · last updated {formatDate(coverage.asOf)}</>}
             </span>

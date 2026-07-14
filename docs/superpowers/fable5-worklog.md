@@ -1326,3 +1326,27 @@ article again PLUS every outlet's near-duplicate article, each a separate entry
   real build, persist a `news_articles.funding_round_id` link (pipeline
   classification) for exact grouping; the a11y token/focus-ring pass now also
   covers the disclosure.
+
+## PR #195 — a11y: lift de-emphasized text to WCAG AA contrast (merged 2026-07-14)
+
+The system-wide a11y pass the #193/#194 reviews flagged (owner-requested).
+De-emphasized text tokens were below WCAG AA (4.5:1) for text.
+- **Lifted `--ink-muted`** to AA in both modes (light #8a8a8a→#6d6d6d = 4.96:1 on
+  the #fafafa canvas; dark #5f5f5f→#808080 = 5.01:1 on #0a0a0a) — one token change
+  fixing every readable `text-ink-muted` site (host links, source tags, timeline
+  coverage, secondary meta) at once. Darkening (light) / lightening (dark) only
+  IMPROVES contrast, so no regression.
+- **Reclassified 31 readable `text-ink-faint` → `text-ink-muted`** (captions,
+  footers, meta, "+N more", "#rank", chart labels), leaving **15 WCAG-exempt**
+  untouched: `aria-hidden` decoration, disabled pagination (`cursor-default`), and
+  `—` empty-value placeholders.
+- **Normalized disclosure focus rings:** added `summary` to the global
+  `:focus-visible` outline rule and dropped the 40%-opacity custom
+  `focus-visible:ring-accent/40` from `EventTimeline`/`FilterPanel`, so
+  disclosures get the site-standard 2px accent outline.
+- `--ink-faint`'s value is deliberately left (now only on decorative/disabled/`—`
+  uses); the brand `--accent` as link text (~4.36:1, marginally under) is a
+  separate deferred token decision (BACKLOG). Verified: lint + 393 tests + build;
+  the diff was reviewed line-by-line (all 15 KEEPs confirmed untouched, no
+  border/`--edge`/`--accent` change). **A visual change tests can't verify — the
+  owner reviewed the Vercel preview and approved before merge.**

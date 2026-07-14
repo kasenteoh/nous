@@ -63,7 +63,7 @@ export function FilterPanel({
       className="rounded-md border border-edge bg-canvas"
     >
       <summary
-        className="flex cursor-pointer list-none items-center gap-2 px-3 py-2 text-sm text-ink-soft hover:text-ink focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 [&::-webkit-details-marker]:hidden"
+        className="flex cursor-pointer list-none items-center gap-2 px-3 py-2 text-sm text-ink-soft hover:text-ink [&::-webkit-details-marker]:hidden"
         // `list-none` + the webkit rule above hide the default disclosure
         // triangle so we can render our own chevron consistently.
       >

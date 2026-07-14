@@ -72,7 +72,7 @@ export function FounderBackground({ careerMoves }: Props) {
                     ) : (
                       <span className="text-ink">{move.priorCompanyName}</span>
                     )}
-                    {span ? <span className="text-ink-faint"> ({span})</span> : null}
+                    {span ? <span className="text-ink-muted"> ({span})</span> : null}
                   </li>
                 );
               })}

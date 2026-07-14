@@ -64,7 +64,7 @@ export function Competitors({ competitors, alternativesSlug }: Props) {
                   {c.competitor_name}
                 </span>
               )}
-              <span className="ml-auto text-xs text-ink-faint">#{c.rank}</span>
+              <span className="ml-auto text-xs text-ink-muted">#{c.rank}</span>
             </header>
 
             {/* Provenance, comment-style: TechCrunch-grounded vs LLM-inferred

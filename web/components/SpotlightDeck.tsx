@@ -72,7 +72,7 @@ export function SpotlightDeck({ spotlights }: Props) {
     >
       <p className="text-[11px] font-medium uppercase tracking-[0.14em] text-ink-muted">
         Today&rsquo;s spotlight{" "}
-        <span className="text-ink-faint">
+        <span className="text-ink-muted">
           · {index + 1}/{count}
         </span>
       </p>

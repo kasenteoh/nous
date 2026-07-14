@@ -237,7 +237,19 @@ Thin single-company tag pages: `/tag/[tag]` now `noindex` when <3 companies, and
 `sitemap.ts` already excludes tags with <3 (`listAllTags`). **Still open:** a
 sitemap *index* before companies+tags approach the 50k-URL sitemap cap.
 
-### De-emphasized text/controls below WCAG AA contrast (`text-ink-faint`/`-muted`) [S] — P2
+### De-emphasized text/controls below WCAG AA contrast (`text-ink-faint`/`-muted`) [S] — SHIPPED (#195)
+**#195 did the system-wide pass:** lifted `--ink-muted` to AA (#8a8a8a→#6d6d6d
+light = 4.96:1; #5f5f5f→#808080 dark = 5.01:1) — fixing every readable
+`text-ink-muted` site at once; reclassified the 31 readable `text-ink-faint` uses
+→ `text-ink-muted` (leaving 15 WCAG-exempt: aria-hidden, disabled pagination, `—`
+placeholders); and normalized disclosure focus rings (added `summary` to the
+global `:focus-visible` outline; dropped the 40%-opacity custom rings from
+`EventTimeline`/`FilterPanel`). **Remaining (minor, optional):** `--ink-faint`'s
+value stays 1.4:1 but now only on decorative/disabled/`—` uses (exempt); the
+brand `--accent` as link text is ~4.36:1 (marginally under 4.5) — a separate,
+brand-loaded token change, deferred.
+
+<!-- original writeup, kept for context:
 Surfaced by the #193 + #194 reviews: `--ink-faint` (#d4d4d4 on the #fafafa light
 canvas ≈ **1.42:1**; 1.82:1 dark) AND `--ink-muted` (#8a8a8a ≈ **3.3:1** light /
 3.1:1 dark) are used pervasively (~30 places) for de-emphasized supplementary text
@@ -252,6 +264,7 @@ fainter than the site-wide `outline: 2px solid var(--accent)` (which only target
 `text-ink-faint`/`-muted` sites, bump readable/interactive ones to a token ≥AA (or
 lift the token values), and normalize disclosure focus rings to the global
 standard. Token-level change — verify no regression in the intentionally-quiet spots.
+-->
 
 ---
 

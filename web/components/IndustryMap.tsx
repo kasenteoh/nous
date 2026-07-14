@@ -32,7 +32,7 @@ export function IndustryMap({ group, nodes }: Props) {
     return (
       <div className="rounded-lg border border-dashed border-edge px-8 py-14 text-center">
         <p className="text-ink-muted">The map for {group} is being computed.</p>
-        <p className="mt-2 text-sm text-ink-faint">
+        <p className="mt-2 text-sm text-ink-muted">
           Positions are generated from company descriptions; check back soon.
         </p>
       </div>
