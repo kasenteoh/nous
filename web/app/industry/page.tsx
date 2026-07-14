@@ -104,7 +104,7 @@ export default async function IndustriesPage() {
         </ul>
       )}
 
-      <p className="mt-8 text-xs text-ink-faint leading-relaxed max-w-2xl">
+      <p className="mt-8 text-xs text-ink-muted leading-relaxed max-w-2xl">
         Industry labels are assigned during enrichment; funding figures are
         derived from rounds recorded from public announcements and may be
         incomplete. Only industries with at least three companies are listed.

@@ -92,7 +92,7 @@ export default async function TrendsPage() {
           Funding by quarter
         </h2>
         <ThemeFundingChart buckets={buckets} />
-        <p className="mt-2 text-xs text-ink-faint">
+        <p className="mt-2 text-xs text-ink-muted">
           Total raised across all tracked companies per quarter; the most recent
           bar is the in-progress quarter and will keep filling. Undated rounds
           are not charted and coverage may be incomplete.
@@ -175,7 +175,7 @@ export default async function TrendsPage() {
         </section>
       )}
 
-      <p className="mt-8 text-xs text-ink-faint leading-relaxed max-w-2xl">
+      <p className="mt-8 text-xs text-ink-muted leading-relaxed max-w-2xl">
         Funding figures are derived from rounds recorded from public
         announcements and may be incomplete; growth compares only complete
         quarters, so the in-progress quarter never skews a rate.

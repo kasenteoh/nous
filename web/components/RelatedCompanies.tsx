@@ -87,7 +87,7 @@ export function RelatedCompanies({
                     {c.name}
                   </Link>
                   {c.industryGroup && (
-                    <span className="ml-auto truncate text-xs text-ink-faint">
+                    <span className="ml-auto truncate text-xs text-ink-muted">
                       {c.industryGroup}
                     </span>
                   )}
@@ -128,7 +128,7 @@ export function RelatedCompanies({
                       {c.name}
                     </Link>
                     {c.industryGroup && (
-                      <span className="ml-auto truncate text-xs text-ink-faint">
+                      <span className="ml-auto truncate text-xs text-ink-muted">
                         {c.industryGroup}
                       </span>
                     )}

@@ -632,7 +632,7 @@ export default async function CompaniesPage({
         {/* Disclose when semantically related (not literally matching)
             companies were appended to the results (E-2). */}
         {semanticCount > 0 && (
-          <span className="text-ink-faint"> · includes semantic matches</span>
+          <span className="text-ink-muted"> · includes semantic matches</span>
         )}
       </p>
 

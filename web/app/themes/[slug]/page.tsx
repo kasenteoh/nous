@@ -92,7 +92,7 @@ export default async function ThemePage({ params }: Props) {
           Funding by quarter
         </h2>
         <ThemeFundingChart buckets={buckets} />
-        <p className="mt-2 text-xs text-ink-faint">
+        <p className="mt-2 text-xs text-ink-muted">
           Derived from {rounds.length}{" "}
           {rounds.length === 1 ? "funding round" : "funding rounds"} recorded
           for member companies; undated rounds are not charted and coverage
@@ -140,7 +140,7 @@ export default async function ThemePage({ params }: Props) {
                 <CompanyCard company={m} logoUrl={m.logo_url} />
                 {/* Ranking disclosure, mirroring the similar-companies
                     module: how close this member sits to the theme center. */}
-                <p className="mt-1 px-1 font-mono text-xs text-ink-faint">
+                <p className="mt-1 px-1 font-mono text-xs text-ink-muted">
                   {Math.round(m.similarity * 100)}% match to theme center
                 </p>
               </div>
@@ -149,7 +149,7 @@ export default async function ThemePage({ params }: Props) {
         )}
       </section>
 
-      <p className="text-xs text-ink-faint leading-relaxed max-w-2xl">
+      <p className="text-xs text-ink-muted leading-relaxed max-w-2xl">
         Membership is computed by clustering company descriptions; funding
         figures are derived from rounds recorded from public announcements.
       </p>

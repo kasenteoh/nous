@@ -584,7 +584,7 @@ export default async function CompanyPage({ params }: Props) {
             our scraper), so it renders as quiet plain text, intentionally
             quieter than the StatusBadge pill above. */}
         {company.consecutive_scrape_failures >= INACTIVE_FAILURE_THRESHOLD && (
-          <p className="mt-3 text-xs text-ink-faint">
+          <p className="mt-3 text-xs text-ink-muted">
             Possibly inactive — site unreachable on recent checks
           </p>
         )}
@@ -688,7 +688,7 @@ export default async function CompanyPage({ params }: Props) {
               misrepresent a multi-page synthesis as one citation). The
               enrichment date is appended when known. Genuine per-fact source
               links (funding / news / people) live in the Sources section. */}
-          <p className="mt-4 font-mono text-xs text-ink-faint">
+          <p className="mt-4 font-mono text-xs text-ink-muted">
             Summary written by nous from the company&apos;s website
             {company.last_enriched_at &&
               ` · ${formatDate(company.last_enriched_at)}`}
@@ -785,7 +785,7 @@ export default async function CompanyPage({ params }: Props) {
           the body pre-fills this page's canonical URL plus a what's-wrong /
           correct-value / source skeleton. Additive to the site-wide footer
           "Report it" link — kept quiet (small, muted) beneath the Sources. */}
-      <p className="text-xs text-ink-faint">
+      <p className="text-xs text-ink-muted">
         Spotted something wrong on this page?{" "}
         <a
           href={repoIssueUrl(
