@@ -251,6 +251,21 @@ export interface PersonRow {
   updated_at: string;
 }
 
+/**
+ * One founder/exec and one prior employer, shaped from the career_moves join
+ * (the talent-flow "founder background" rider). `priorCompanySlug` is set only
+ * when the verbatim `priorCompanyName` resolves to a SHOWN catalog company
+ * (else the name renders as plain text with no link).
+ */
+export interface CareerMove {
+  personName: string;
+  priorCompanyName: string;
+  priorRole: string | null;
+  startYear: number | null;
+  endYear: number | null;
+  priorCompanySlug: string | null;
+}
+
 /** Company-level investor (VC firm), shaped from the company_investors join. */
 export interface CompanyInvestorRow {
   name: string;

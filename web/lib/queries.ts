@@ -16,6 +16,7 @@ import type {
   AlsoBackedByCompany,
   AlternativeCompany,
   AlternativesData,
+  CareerMove,
   CoInvestor,
   CompanyDetail,
   CompanyInvestorRow,
@@ -2185,6 +2186,74 @@ export async function getRelatedCompanies(
         evidence: row.evidence ?? null,
       },
     ];
+  });
+}
+
+// Nested prior-company shape from the career_moves → companies embed. career_moves
+// has TWO FKs to companies (company_id + prior_company_id), so the embed MUST name
+// the FK column (`companies!prior_company_id`) or PostgREST 400s "ambiguous".
+interface NestedPriorCompany {
+  slug: string | null;
+  name: string | null;
+  // Excluded prior companies 404 on /c/[slug]; carry the flag so the link is
+  // dropped (the verbatim name still shows as text).
+  exclusion_reason?: string | null;
+}
+
+type CareerMoveJoin = {
+  person_name: string;
+  prior_company_name: string;
+  prior_role: string | null;
+  start_year: number | null;
+  end_year: number | null;
+  prior_company: NestedPriorCompany | NestedPriorCompany[] | null;
+};
+
+/**
+ * Founder background for /c/[slug]: each founder/exec and the companies they
+ * worked at BEFORE this one, from the career_moves table (extract-career-history).
+ * Grouped by person in the component.
+ *
+ * Migration-order-free: the explicit .select() 400s before career_moves (migration
+ * 0040) reaches prod, and the error → [] degrade hides the section until the table
+ * exists — then ISR revalidation surfaces it (same pattern as market-map / momentum,
+ * no feature flag). The `companies!prior_company_id` FK hint is REQUIRED (two FKs to
+ * companies). prior_company_id is nullable — most prior employers aren't catalogued,
+ * so the name renders as plain text with no link.
+ */
+export async function getCareerMoves(companyId: string): Promise<CareerMove[]> {
+  const supabase = supabaseOrNull("getCareerMoves");
+  if (!supabase) return [];
+
+  const { data, error } = await supabase
+    .from("career_moves")
+    .select(
+      "person_name, prior_company_name, prior_role, start_year, end_year, prior_company:companies!prior_company_id(slug, name, exclusion_reason)",
+    )
+    .eq("company_id", companyId)
+    .order("person_normalized_name", { ascending: true })
+    .order("prior_company_name", { ascending: true });
+
+  if (error) {
+    console.error("[getCareerMoves] query failed:", error.message);
+    return [];
+  }
+
+  return ((data ?? []) as CareerMoveJoin[]).map((row) => {
+    const c = Array.isArray(row.prior_company)
+      ? row.prior_company[0]
+      : row.prior_company;
+    // Link only to a SHOWN prior company; an excluded one 404s, so keep the
+    // verbatim name as text and drop the link.
+    const linkable = Boolean(c?.slug && c?.name && !c.exclusion_reason);
+    return {
+      personName: row.person_name,
+      priorCompanyName: row.prior_company_name,
+      priorRole: row.prior_role ?? null,
+      startYear: row.start_year ?? null,
+      endYear: row.end_year ?? null,
+      priorCompanySlug: linkable ? (c?.slug ?? null) : null,
+    };
   });
 }
 

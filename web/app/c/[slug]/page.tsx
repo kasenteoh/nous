@@ -7,6 +7,7 @@ import { notFound, permanentRedirect } from "next/navigation";
 import {
   getAliasTargetSlug,
   getAlsoBackedBy,
+  getCareerMoves,
   getCompanyBySlug,
   getInvestorNameToSlugMap,
   getRelatedCompanies,
@@ -33,6 +34,7 @@ import { Markdown } from "@/components/Markdown";
 import { StatusBadge } from "@/components/StatusBadge";
 import { MomentumBadge } from "@/components/MomentumBadge";
 import { Team } from "@/components/Team";
+import { FounderBackground } from "@/components/FounderBackground";
 import { EventTimeline } from "@/components/EventTimeline";
 import { Investors } from "@/components/Investors";
 import { Competitors } from "@/components/Competitors";
@@ -301,11 +303,13 @@ export default async function CompanyPage({ params }: Props) {
   // neighbors (getSimilarCompanies) replace the heuristic 'similar' edges in
   // the UI when the company has an embedding; the heuristic list stays the
   // fallback for not-yet-embedded companies.
-  const [similar, similarByDescription, alsoBackedBy] = await Promise.all([
-    getRelatedCompanies(company.id),
-    getSimilarCompanies(company.id),
-    getAlsoBackedBy(company.id),
-  ]);
+  const [similar, similarByDescription, alsoBackedBy, careerMoves] =
+    await Promise.all([
+      getRelatedCompanies(company.id),
+      getSimilarCompanies(company.id),
+      getAlsoBackedBy(company.id),
+      getCareerMoves(company.id),
+    ]);
 
   // ── M3 key-facts derivations ──────────────────────────────────────────────
   // Hybrid "total raised": computed = sum of non-null amount_raised across all
@@ -658,6 +662,10 @@ export default async function CompanyPage({ params }: Props) {
 
       {/* ── Leadership / founders (from the company website) ───────────── */}
       <Team people={people} />
+
+      {/* ── Founder background: prior employers (talent-flow rider). Hidden
+             until career_moves lands + is populated (migration-order-free). ── */}
+      <FounderBackground careerMoves={careerMoves} />
 
       {/* ── Timeline: funding rounds + news, merged reverse-chronologically
              (replaces the old separate Funding History table + News list) ── */}

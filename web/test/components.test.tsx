@@ -8,10 +8,12 @@ import {
   MOMENTUM_BADGE_THRESHOLD,
   MomentumBadge,
 } from "@/components/MomentumBadge";
+import { FounderBackground } from "@/components/FounderBackground";
 import { RelatedCompanies } from "@/components/RelatedCompanies";
 import { Sources } from "@/components/Sources";
 import { StatusBadge } from "@/components/StatusBadge";
 import type {
+  CareerMove,
   CompanyInvestorRow,
   CompanyListRow,
   CompetitorWithResolved,
@@ -705,5 +707,86 @@ describe("RelatedCompanies", () => {
       "/c/sibling-co",
     );
     expect(screen.getByText("Also backed by Seed Fund")).toBeInTheDocument();
+  });
+});
+
+// ─── FounderBackground ────────────────────────────────────────────────────────
+
+function careerMove(overrides: Partial<CareerMove> = {}): CareerMove {
+  return {
+    personName: "Jane Doe",
+    priorCompanyName: "Stripe",
+    priorRole: "Engineer",
+    startYear: null,
+    endYear: null,
+    priorCompanySlug: null,
+    ...overrides,
+  };
+}
+
+describe("FounderBackground", () => {
+  it("renders nothing when empty", () => {
+    const { container } = render(<FounderBackground careerMoves={[]} />);
+    expect(container).toBeEmptyDOMElement();
+  });
+
+  it("links a resolved prior company and leaves an unresolved one as text", () => {
+    render(
+      <FounderBackground
+        careerMoves={[
+          careerMove({ priorCompanyName: "Oracle", priorCompanySlug: "oracle" }),
+          careerMove({ priorCompanyName: "Sun Microsystems", priorCompanySlug: null }),
+        ]}
+      />,
+    );
+    expect(screen.getByRole("link", { name: "Oracle" })).toHaveAttribute(
+      "href",
+      "/c/oracle",
+    );
+    expect(screen.queryByRole("link", { name: "Sun Microsystems" })).toBeNull();
+    expect(screen.getByText("Sun Microsystems")).toBeInTheDocument();
+  });
+
+  it("groups multiple prior employers under one founder", () => {
+    render(
+      <FounderBackground
+        careerMoves={[
+          careerMove({ personName: "Jane Doe", priorCompanyName: "Stripe" }),
+          careerMove({ personName: "Jane Doe", priorCompanyName: "Google" }),
+        ]}
+      />,
+    );
+    // One heading for the founder, two employer entries.
+    expect(screen.getAllByText("Jane Doe")).toHaveLength(1);
+    expect(screen.getByText("Stripe")).toBeInTheDocument();
+    expect(screen.getByText("Google")).toBeInTheDocument();
+  });
+
+  it("never claims 'present' for a prior employer with an unknown end year", () => {
+    render(
+      <FounderBackground
+        careerMoves={[careerMove({ startYear: 2005, endYear: null })]}
+      />,
+    );
+    expect(screen.getByText(/from 2005/)).toBeInTheDocument();
+    expect(screen.queryByText(/present/)).toBeNull();
+    expect(screen.queryByText(/\?/)).toBeNull();
+  });
+
+  it("renders a full span and a start-only / end-only tenure honestly", () => {
+    const { rerender } = render(
+      <FounderBackground
+        careerMoves={[careerMove({ startYear: 2010, endYear: 2014 })]}
+      />,
+    );
+    expect(screen.getByText(/2010–2014/)).toBeInTheDocument();
+
+    rerender(
+      <FounderBackground
+        careerMoves={[careerMove({ startYear: null, endYear: 2014 })]}
+      />,
+    );
+    expect(screen.getByText(/until 2014/)).toBeInTheDocument();
+    expect(screen.queryByText(/\?/)).toBeNull();
   });
 });

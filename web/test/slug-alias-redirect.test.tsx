@@ -16,6 +16,7 @@ import {
   getAliasTargetSlug,
   getAlsoBackedBy,
   getAlternatives,
+  getCareerMoves,
   getCompanyBySlug,
   getInvestorNameToSlugMap,
   getRelatedCompanies,
@@ -27,6 +28,7 @@ vi.mock("@/lib/queries", () => ({
   getAliasTargetSlug: vi.fn(),
   getAlsoBackedBy: vi.fn(),
   getAlternatives: vi.fn(),
+  getCareerMoves: vi.fn(),
   getCompanyBySlug: vi.fn(),
   getInvestorNameToSlugMap: vi.fn(),
   getRelatedCompanies: vi.fn(),
@@ -94,6 +96,7 @@ beforeEach(() => {
   vi.mocked(getRelatedCompanies).mockResolvedValue([]);
   vi.mocked(getSimilarCompanies).mockResolvedValue([]);
   vi.mocked(getAlsoBackedBy).mockResolvedValue([]);
+  vi.mocked(getCareerMoves).mockResolvedValue([]);
 });
 
 describe("/c/[slug] miss-path alias redirect", () => {
