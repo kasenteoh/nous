@@ -8,11 +8,11 @@ for the detail behind the Latest-update block below), then the two plan docs
 under `docs/superpowers/plans/` (2026-07-10 improvement plan; 2026-07-11
 hygiene + Wave 3). `BACKLOG.md` is annotated with what shipped.
 
-## LATEST UPDATE — Provenance UI PRs 1–2/3 SHIPPED (2026-07-14, PRs #191–#192)
+## LATEST UPDATE — Provenance UI MVP COMPLETE (2026-07-14, PRs #191–#193)
 
-ROADMAP **Later #1 (Provenance UI)** is now **IN PROGRESS** — the owner-approved
-3-PR build that makes the "every fact is sourced" moat a visible feature on
-`/c/[slug]`. The authoritative spec is
+ROADMAP **Later #1 (Provenance UI)** — the owner-approved 3-PR MVP is **SHIPPED**:
+the "every fact is sourced" moat is now a visible, positive, trust-building
+feature on `/c/[slug]`. The authoritative spec is
 `docs/superpowers/specs/2026-07-14-provenance-ui-design.md` (framing, data
 inventory, locked decisions, the optional DeepSeek source-verification
 enhancement). Framing (load-bearing): a **trust-builder, never a data-gap
@@ -52,18 +52,41 @@ hidden below threshold.
   figure links to a recorded source" line + a `#sources` anchor for a company where
   `<Sources>` renders nothing (dead anchor + false claim). Caught in review.
 
-**Next (PR 3/3 — web):** granular per-fact source superscripts next to each
-already-sourced figure (total-raised → `total_raised_source_url`, status →
-`status_source_url`, each funding row → `primary_news_url`, website →
-`website_source_url`); source-type labels in `Sources` ("News / Website /
-Wikidata / VC portfolio" from `website_source` + URL host); and
-`extraction_confidence` surfaced as a `title` tooltip on ALL funding rounds,
-keeping the visible pill only for `low`. **Sequencing note:** PRs 2 & 3 were
-planned parallel but ship **sequentially** — both edit `web/lib/types.ts`
-(`CompanyRow`) and `web/app/c/[slug]/page.tsx`, and disk is too full for a second
-web worktree's `node_modules`, so parallel edits in the single main tree would
-conflict. The **optional DeepSeek source-verification** pass (spec) is a separate,
-larger, husk-style bet AFTER the MVP — not folded in.
+**PR #193 (PR 3/3 — web):** granular per-fact sourcing.
+- Inline source superscripts (`SourceLink`): a subtle `↗` next to total-raised /
+  status / website / each funding row → that fact's source; **self-omits** when
+  the URL is absent or not parseable http(s) (the pipeline stores scheme-less bare
+  domains, so a "source" affordance never goes nowhere). Source-type labels in
+  `Sources` ("News/Website/Wikidata/VC portfolio" from host + the `website_source`
+  enum ground truth; **unknown host → no label**, never a guess). Confidence: a
+  `title` tooltip on ALL funding rounds, visible pill only for `low`. `CompanyRow`
+  gained `website_source?` / `website_source_url?`.
+- **Gotcha 1 (a11y token debt — logged, not fully fixed):** `text-ink-faint`
+  (~1.42:1 on light) is used ~30 places for de-emphasized supplementary text —
+  below WCAG AA. Fixed the two trust-critical provenance instances (the `↗` glyph
+  + the source-type tag → `text-ink-muted`); a **system-wide token pass is a
+  separate follow-up** (see BACKLOG).
+- **Gotcha 2 (`website_source_url` must be a citation):** the page must push
+  `website_source_url` into the `citations` list (like total-raised/status) or the
+  Website/Wikidata/VC-portfolio source-type labels are unreachable — the
+  `citationSourceType` override keys on that URL's host. Also: `citationSourceType`
+  restricts to http(s) (matching `SourceLink`), so exotic-scheme URLs get no tag.
+- **Gotcha 3 (`Sources.tsx` NUL byte):** the file carried a pre-existing NUL byte
+  (from #192) that made git flag it binary; #193 removed it. If it recurs, diff/
+  read with `--text` / `grep -a`.
+
+**Sequencing note (retro):** PRs 2 & 3 were *planned* parallel but shipped
+**sequentially** — both edit `web/lib/types.ts` (`CompanyRow`) and
+`web/app/c/[slug]/page.tsx`, and disk is too full for a second web worktree's
+`node_modules`, so parallel edits in one tree would conflict.
+
+**Remaining on this bet (optional, NOT started — needs owner go-ahead):** the
+DeepSeek **source-verification** pass ("✓ Verified against source"). It is a
+*material DeepSeek volume* increase, so per `CLAUDE.md` it must be flagged before
+building; do it husk-style (a $0/bounded dry-run FIRST to measure verify-rate + $,
+golden-set-gate the prompt, scraping etiquette on re-fetches, empty-not-fabricate).
+The LLM-*written* provenance narrative stays OFF (generative prose is what the moat
+forbids).
 
 ## LATEST UPDATE — talent-flow "founder background" rider SHIPPED (2026-07-14, PRs #185–#189)
 

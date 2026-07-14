@@ -1245,3 +1245,45 @@ scorer.
 - **Next (PR 3/3):** granular per-fact source superscripts next to each sourced
   figure, source-type labels in `Sources`, and `extraction_confidence` tooltips
   on funding rounds (visible pill only for `low`).
+
+## PR #193 — feat(web): granular per-fact sourcing on /c/[slug] (merged 2026-07-14)
+
+ROADMAP **Later #1 (Provenance UI)**, PR **3 of 3** — completes the owner-approved
+3-PR MVP. The finishing layer of per-fact provenance.
+- **Inline source superscripts** (`SourceLink`): a subtle `↗` next to total
+  raised, status, website, and each funding row → that fact's recorded source.
+  Self-omitting when the URL is absent/unparseable (the pipeline stores
+  scheme-less bare domains) — a "source" affordance never goes nowhere.
+- **Source-type labels** in `Sources`: a muted `· News/Website/Wikidata/VC
+  portfolio` tag per citation, inferred from the host with the `website_source`
+  enum as DB ground truth. Unknown host → NO label (never a guessed attribution).
+- **Confidence transparency** in `EventTimeline`: a `title` tooltip on ALL
+  funding rounds; the visible pill stays low-only. `CompanyRow` gains
+  `website_source?` / `website_source_url?`.
+- Also fixed a **pre-existing NUL byte** in `Sources.tsx` (from #192) that made
+  git treat the file binary — behavior-identical de-dupe, now clean UTF-8.
+- **Adversarial review (3 dims → verify): 4 confirmed, all fixed.** [medium/a11y]
+  the `↗` glyph was `text-ink-faint` (~1.42:1, below WCAG's 3:1 for an interactive
+  control — invisible to low-vision/touch) → `text-ink-muted`+`hover:text-ink`;
+  [nit] `align-super` is inert on flex children → raise via `relative`
+  positioning (consistent across all four placements); [nit/moat]
+  `citationSourceType` now rejects non-http(s) (an `ftp://` URL no longer gets a
+  "News" tag); [nit] the Website/Wikidata/VC-portfolio labels were unreachable
+  (the page never cited `website_source_url`) → now cited like total-raised/status,
+  proven by a page-render test. Verified: npm lint + test (**375 passed**) + build.
+- **GOTCHA (design-system a11y debt, logged not fixed):** `text-ink-faint`
+  (~1.42:1 on light) is used pervasively (~30 sites, e.g. `app/page.tsx:253` "+N
+  more") for de-emphasized supplementary text — below WCAG AA. Fixed the two
+  trust-critical provenance instances here; a system-wide token pass is a
+  separate follow-up.
+
+## Provenance UI MVP COMPLETE (2026-07-14, PRs #191–#193)
+
+The owner-approved 3-PR MVP (spec `docs/superpowers/specs/2026-07-14-provenance-ui-design.md`)
+is shipped: the moat ("every fact is sourced / we don't hallucinate") is now a
+VISIBLE, positive, trust-building feature on `/c/[slug]` — a threshold-gated
+completeness badge, a read-time "last verified", per-fact source superscripts,
+typed citations, and confidence transparency, all $0 (surfaces existing data; no
+LLM). **Remaining (optional, separate bet): the DeepSeek source-verification pass
+("✓ Verified against source") — husk-style, dry-run-gated, flagged to the owner
+before building (material DeepSeek volume).**
