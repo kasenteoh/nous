@@ -127,7 +127,7 @@ here so the push is complete:
 Strategic context: [ROADMAP.md](ROADMAP.md) (Next horizon). Depth pros return
 for, built on top of the clean data foundation.
 
-### Per-entity RSS feeds [S] — SHIPPED (#PENDING)
+### Per-entity RSS feeds [S] — SHIPPED (#183)
 The global `/feed.xml` firehose fanned out to three per-entity scopes — "watch
 this" without accounts, `$0`, works immediately against existing data:
 - **`/c/[slug]/feed.xml`** — one company's funding rounds + news. Reuses the

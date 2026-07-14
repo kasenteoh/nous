@@ -8,6 +8,18 @@ for the detail behind the Latest-update block below), then the two plan docs
 under `docs/superpowers/plans/` (2026-07-10 improvement plan; 2026-07-11
 hygiene + Wave 3). `BACKLOG.md` is annotated with what shipped.
 
+## LATEST UPDATE — per-entity RSS feeds shipped (2026-07-13, PR #183)
+
+ROADMAP **Next #3 (per-entity RSS) done** — web-only, $0, works immediately (no
+cadence/migration dependency, unlike the map/momentum). The global `/feed.xml`
+firehose fanned out to `/c/[slug]/feed.xml`, `/industry/[group]/feed.xml`,
+`/investor/[slug]/feed.xml` (route handlers, 6h ISR, `application/rss+xml`,
+newest-first funding+news, canonical/slug-gated → 404, shown-cohort only). Shared
+`lib/rss-items.ts` mappers (the global feed refactored onto them, byte-identical);
+`<link rel="alternate">` + a visible "Follow via RSS" link on each entity page.
+Built + adversarially reviewed by 2 agents (APPROVE, 0 blocking). **Remaining Next
+bets: talent-flow (#4), investor depth (#5).**
+
 ## LATEST UPDATE — momentum signals shipped (2026-07-13, PRs #181/#182)
 
 ROADMAP **Next #2 (momentum / "heating up") done** — the "open it every morning"
@@ -80,10 +92,11 @@ consolidated to main after.
   funding figure; `/tag/[tag]` `noindex` when <3 companies (lockstep with the
   sitemap's ≥3 filter).
 
-**What's next:** the Now horizon is cleared and Next #1 (market map, #179/#180)
-and Next #2 (momentum, #181/#182) shipped, so the frontier is the rest of the
-**NEXT horizon (depth)** — **per-entity RSS/feeds** (#3), **talent-flow** (#4),
-**investor depth** (#5). Smaller Now follow-ups remain: run the
+**What's next:** the Now horizon is cleared and Next #1–#3 shipped (market map
+#179/#180, momentum #181/#182, per-entity RSS #183), so the frontier is the tail
+of the **NEXT horizon (depth)** — **talent-flow** (#4, from `people`) and
+**investor depth** (#5, co-investment networks). Smaller Now follow-ups remain:
+run the
 `normalize-hq-state` backfill once; wire `util.completeness` into
 husk-enrichment ordering; watch the `data-quality` cron report (esp. the
 website-provenance / wrong-site proxy from the husk re-mining).
@@ -301,11 +314,11 @@ small (below). The frontier is now the **NEXT horizon (depth)** — see `ROADMAP
 
 The frontier is now the **NEXT horizon (depth)**, detailed just below.
 
-**NEXT horizon (depth, after the foundation):** the **market map** (#179/#180)
-and **momentum signals** (#181/#182) SHIPPED (see the top update blocks).
-Remaining Next bets: **per-entity RSS/feeds** (industry/investor/company-scoped,
-fanning out `/feed.xml`), **talent-flow** from `people`, and **investor depth**
-(co-investment networks). Full detail in `ROADMAP.md`.
+**NEXT horizon (depth, after the foundation):** the **market map** (#179/#180),
+**momentum signals** (#181/#182), and **per-entity RSS** (#183) SHIPPED (see the
+top update blocks). Remaining Next bets: **talent-flow** from `people` (founder
+previously-at, repeat founders, exec moves) and **investor depth** (co-investment
+networks, portfolio momentum). Full detail in `ROADMAP.md`.
 
 Deferred (unchanged): the structured-describe fallback ("A", with its three
 required fixes — see the worklog), and anchoring the judge/funding golden

@@ -120,7 +120,7 @@ Built on top of the now-trustworthy foundation.
    the page degrades to an empty-state until then. Follow-ups: homepage strip,
    badge calibration, per-industry scoping, a snapshot sparkline (BACKLOG).
 
-3. **Per-entity RSS/feeds — alerts without accounts.** — **SHIPPED (#PENDING).**
+3. **Per-entity RSS/feeds — alerts without accounts.** — **SHIPPED (#183).**
    Feeds scoped to an industry, an investor, or a single company — the existing
    `/feed.xml` pattern fanned out to `/c/[slug]/feed.xml`,
    `/industry/[group]/feed.xml`, `/investor/[slug]/feed.xml`. Power-user "watch

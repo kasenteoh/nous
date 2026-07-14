@@ -1017,3 +1017,29 @@ The web only READS the pipeline-computed `momentum_score` — no computation.
   fast-forward push before the PR — a reminder to re-verify branch tips after a
   parallel main-tree agent finishes. The 1wk-grammar review nit on #181 was fixed
   in a follow-up commit before merge.
+
+## PR #183 — feat(web): per-entity RSS feeds (company / industry / investor) (merged 2026-07-13)
+
+ROADMAP Next #3. Fanned out the global `/feed.xml` firehose to three per-entity
+scopes — "watch this" without accounts, $0, works immediately against existing
+data (no migration/cadence dependency). Built by a web agent (main tree,
+npm-verified) + adversarial review (APPROVE, 0 blocking).
+- **`/c/[slug]/feed.xml`** (one company's funding+news, reuses the `/c` timeline
+  query), **`/industry/[group]/feed.xml`** (canonical-gated via
+  `resolveIndustrySlug`), **`/investor/[slug]/feed.xml`** (the investor's
+  portfolio companies). All route handlers, `revalidate=21600`, correct
+  `application/rss+xml` + CDN cache headers, newest-first, stable guids matching
+  the global scheme.
+- **Shared `lib/rss-items.ts`** (row→`RssItem` mappers + `mergeFeedItems` +
+  `rssResponse`) — the global `/feed.xml` refactored onto it (byte-identical),
+  so the 4 feeds can't drift. New scoped queries mirror the global
+  `listRecentFundings/News` + one `industry_group`/`slug IN` filter, shown-cohort
+  only (no excluded-company leakage, reviewer-verified).
+- **Discovery:** each entity page adds `<link rel="alternate">` (via
+  `generateMetadata`) + a visible "Follow via RSS" link (`RssLink`).
+- Each feed empty-but-valid on missing Supabase / absent entity (never 500);
+  404 on a configured-but-unknown/non-canonical entity.
+- **Verified:** npm lint + 318 tests + build; XML well-formedness asserted via
+  DOMParser in route tests; full CI rollup green.
+- Follow-ups (deferred, BACKLOG): investor-feed portfolio over-fetch, a feed hub
+  / subscribe hint.
