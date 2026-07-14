@@ -1287,3 +1287,42 @@ typed citations, and confidence transparency, all $0 (surfaces existing data; no
 LLM). **Remaining (optional, separate bet): the DeepSeek source-verification pass
 ("✓ Verified against source") — husk-style, dry-run-gated, flagged to the owner
 before building (material DeepSeek volume).**
+
+## PR #194 — feat(web): group funding coverage under its round in the timeline (merged 2026-07-14)
+
+Owner-flagged UX debt: the `/c/[slug]` Timeline was cluttered — because
+`ingest-news` only ingests funding announcements, the "news" IS the funding
+coverage, so one well-covered round rendered as the round PLUS its primary
+article again PLUS every outlet's near-duplicate article, each a separate entry
+(uncapped, no news↔round link, no clustering). Spec:
+`docs/superpowers/specs/2026-07-14-timeline-group-coverage-design.md`.
+- New pure `web/lib/timeline.ts` `buildTimeline(rounds, news)`: clusters each
+  news article UNDER the funding round it covers (nearest `announced_date` within
+  ±14d; ties → larger amount). A round's `primary_news_url` folds in (deduped by
+  canonical URL, primary leads). Read-time only — no migration, no pipeline change.
+- `EventTimeline`: a round with ≥2 sources → a collapsed native `<details>`
+  "Covered by {distinct outlets} +N more sources" (zero client JS, keyboard/AT
+  friendly, `group-open` chevron); ≤1 source keeps the inline ↗. Trust-preserving:
+  every article one click away, never dropped; multi-outlet coverage becomes a
+  positive "widely covered" signal. Also fixed the old double-render of a round's
+  own article.
+- Consolidated the http(s) host parse into `web/lib/url.ts` `httpHost` (was 3
+  near-identical copies across SourceLink/Sources/timeline — the drift smell a #193
+  nit flagged).
+- **Adversarial review (3 dims → verify, + a focused 2nd pass): 6 confirmed, all
+  fixed.** The load-bearing ones: **pin each round's OWN primary article to that
+  round before nearest-date clustering** — else a bridge + a Series A within 14
+  days cross-attribute each other's press (nearest-wins), and a null-dated primary
+  double-renders; **filter unrenderable URLs up front** so a bad-URL article is
+  dropped symmetrically (never coverage-only, never a dead standalone link);
+  **name distinct outlets** in the summary (no "techcrunch.com, techcrunch.com").
+  Verified: lint + test (**393 passed**) + build; 2nd review pass APPROVE (0 new
+  functional defects).
+- **Gotcha:** `getCompanyBySlug` does NOT filter null `published_date` (unlike the
+  site-wide news queries), so null-dated rows reach `buildTimeline` — the primary
+  pinning (by canonical URL, date-independent) is what keeps them from
+  double-rendering.
+- **Follow-up (BACKLOG):** if the date-proximity mapping proves accurate on the
+  real build, persist a `news_articles.funding_round_id` link (pipeline
+  classification) for exact grouping; the a11y token/focus-ring pass now also
+  covers the disclosure.
