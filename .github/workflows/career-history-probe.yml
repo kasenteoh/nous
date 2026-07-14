@@ -1,0 +1,66 @@
+name: career-history-probe
+
+# $0, READ-ONLY feasibility diagnostic against the production DB. Measures
+# whether scraped bios (raw_pages.content) carry NAMED prior-employer mentions
+# ("ex-Stripe", "previously at Google") — the gate before any talent-flow LLM
+# spend. It EXTRACTS nothing, WRITES nothing, and uses NO LLM (so no
+# DEEPSEEK_API_KEY here). Dispatch-only; the stage writes its report straight to
+# the run's step summary.
+#
+# Example:
+#   gh workflow run career-history-probe.yml -f sample=500
+
+on:
+  workflow_dispatch:
+    inputs:
+      sample:
+        description: "Top-funded shown companies to run the Tier-2 regex over in Python (precision sample)."
+        required: false
+        type: string
+        default: "300"
+
+permissions:
+  contents: read
+
+# Read-only, but the query still runs against the shared prod DB — serialize
+# with every other DB-touching workflow so it never contends for connections.
+concurrency:
+  group: nous-pipeline-db
+  cancel-in-progress: false
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: pipeline
+    env:
+      # DATABASE_URL only — this diagnostic is $0 and never calls an LLM, so no
+      # DEEPSEEK_API_KEY is provisioned.
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39 # v3
+
+      - name: Install dependencies
+        run: uv sync
+
+      # No migration in this change, but upgrade-head keeps the diagnostic
+      # honest against a schema-lagging DB and mirrors the other DB workflows.
+      - name: Apply migrations
+        run: uv run alembic upgrade head
+
+      - name: Run career-history probe
+        # The sample input passes through an env var (never string-interpolated
+        # into the command); the stage itself writes the report to
+        # $GITHUB_STEP_SUMMARY.
+        env:
+          SAMPLE: ${{ inputs.sample }}
+        run: uv run nous career-history-probe --sample "${SAMPLE:-300}"
