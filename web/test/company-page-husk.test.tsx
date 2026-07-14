@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import CompanyPage from "@/app/c/[slug]/page";
 import {
   getAlsoBackedBy,
+  getCareerMoves,
   getCompanyBySlug,
   getInvestorNameToSlugMap,
   getRelatedCompanies,
@@ -15,6 +16,7 @@ import type { CompanyDetail, CompanyRow } from "@/lib/types";
 // works because the component uses no server-only APIs beyond these queries.
 vi.mock("@/lib/queries", () => ({
   getAlsoBackedBy: vi.fn(),
+  getCareerMoves: vi.fn(),
   getCompanyBySlug: vi.fn(),
   getInvestorNameToSlugMap: vi.fn(),
   getRelatedCompanies: vi.fn(),
@@ -77,6 +79,7 @@ beforeEach(() => {
   vi.mocked(getRelatedCompanies).mockResolvedValue([]);
   vi.mocked(getSimilarCompanies).mockResolvedValue([]);
   vi.mocked(getAlsoBackedBy).mockResolvedValue([]);
+  vi.mocked(getCareerMoves).mockResolvedValue([]);
 });
 
 describe("company page husk placeholder", () => {
