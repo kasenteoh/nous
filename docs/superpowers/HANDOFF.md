@@ -18,11 +18,17 @@ upper bound) / ~13–15% after noise-filtering** — below the ~30% bar for a ri
 graph, and many named orgs (Intel/IBM/NVIDIA) are non-catalog non-startups. So
 the "Stripe → founders → companies" **graph is not well-supported by current
 data**; a per-company "founder background" rider on the ~1-in-6 pages that name a
-pedigree is feasible via a bounded LLM extraction (~$6.50 one-time) — a
-value/cost call parked for the owner. The `career-history-probe` tool ships
-(reusable to re-measure as scrape coverage grows). **Remaining Next bet that's
-cleanly buildable from existing data: investor depth (#5)** — co-investment graph
-from `funding_round_investors`/`company_investors`.
+pedigree is feasible via a bounded LLM extraction (~$6.50 one-time). The
+`career-history-probe` tool ships (reusable to re-measure as scrape coverage grows).
+
+**➡️ NEXT SESSION'S QUEUE (owner-approved 2026-07-13):** build the niche
+talent-flow **"founder background" rider** first (accepting the new DeepSeek
+line, ~$6.50 one-time — start with the ~$0.05 LLM extraction dry run to confirm
+quality), THEN pivot to **investor depth (#5)** (co-investment graph from
+`funding_round_investors`/`company_investors`, $0). **Full design + cost + the
+husk-style dry-run-first method are in
+[`docs/superpowers/plans/2026-07-13-talent-flow-rider-and-investor-depth.md`](plans/2026-07-13-talent-flow-rider-and-investor-depth.md)**
+— read it before starting. Migration head is **0039**; the next migration is 0040.
 
 ## LATEST UPDATE — per-entity RSS feeds shipped (2026-07-13, PR #183)
 

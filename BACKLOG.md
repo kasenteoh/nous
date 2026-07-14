@@ -152,6 +152,19 @@ this" without accounts, `$0`, works immediately against existing data:
   guids stable across regenerations. Follow-up: an on-page "how to subscribe"
   hint / feed hub, and email delivery (explicitly out this quarter).
 
+### Talent-flow "founder background" rider [M] — QUEUED (owner-approved)
+Feasibility-gated by the `#184` `career-history-probe` (named prior-employer
+~13-18%, thin → rider not graph). Build the per-company "founder background /
+notable alumni" rider via a bounded LLM career-history extraction (dry-run first,
+~$0.05; ~$6.50 one-time backfill — a NEW DeepSeek line, owner-approved). Full
+design (prompt, migration 0040 `career_moves`, dry-run stage + dispatch, golden
+gating, web rider): **`docs/superpowers/plans/2026-07-13-talent-flow-rider-and-investor-depth.md`**.
+
+### Investor depth [M] — QUEUED
+Co-investment graph + "who's leading rounds in X now" + portfolio momentum (reuse
+`momentum_score`), from existing `funding_round_investors`/`company_investors`
+linkage. $0, no LLM. Sketch in the same plan doc; scout fresh.
+
 ---
 
 ## Pipeline cleanups (P2)

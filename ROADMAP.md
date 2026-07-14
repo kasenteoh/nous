@@ -139,8 +139,10 @@ Built on top of the now-trustworthy foundation.
    → companies" graph is **not** well-supported by current scrape data. What IS
    feasible: a per-company "founder background / notable alumni" rider on the
    ~1-in-6 pages that name a pedigree, via a bounded LLM extraction (~$6.50
-   one-time backfill). Decide value-vs-cost before spending. Repeat-founders via
-   internal name-matching is $0 but low-precision (no person disambiguator).
+   one-time backfill). Repeat-founders via internal name-matching is $0 but
+   low-precision (no person disambiguator). **Owner-approved (2026-07-13): build
+   the rider** (dry-run first) — plan +
+   design: `docs/superpowers/plans/2026-07-13-talent-flow-rider-and-investor-depth.md`.
 
 5. **Investor depth.** Co-investment networks, portfolio momentum, "who's leading
    rounds in X right now" — turn the investor directory from a list into a lens.
