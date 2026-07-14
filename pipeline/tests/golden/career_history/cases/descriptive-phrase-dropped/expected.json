@@ -1,0 +1,15 @@
+{
+  "people": [
+    {
+      "name": "Ivan Petrov",
+      "prior_roles": [
+        {
+          "company": "NVIDIA",
+          "role": null,
+          "start_year": null,
+          "end_year": null
+        }
+      ]
+    }
+  ]
+}

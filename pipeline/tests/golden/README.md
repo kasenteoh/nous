@@ -7,11 +7,19 @@ here before it merges.
 Currently covered prompts (the highest-value ones; the harness is generic
 — see "Adding a prompt"):
 
-| prompt                     | cases | response schema          |
-|----------------------------|-------|--------------------------|
-| `company_description`      | 20    | `CompanyDescription`     |
-| `company_description_long` | 16    | `CompanyLongDescription` |
-| `funding_extraction`       | 20    | `FundingExtraction`      |
+| prompt                     | cases | response schema             |
+|----------------------------|-------|-----------------------------|
+| `company_description`      | 20    | `CompanyDescription`        |
+| `company_description_long` | 16    | `CompanyLongDescription`    |
+| `funding_extraction`       | 20    | `FundingExtraction`         |
+| `career_history`           | 16    | `CareerHistoryExtraction`   |
+
+`career_history` (the talent-flow founder-background rider) gates
+`empty_accuracy` (the empty-not-fabricate dial — most bios name no pedigree),
+`people_*` / `moves_*` P/R over founder names and (person → prior company)
+edges, and the grounding proxy (every prior-company name must appear verbatim
+in the input). Its `case.json` carries a `roster` (the leadership allow-list the
+prompt attributes against).
 
 Since the W-F split, `company_description` is the *judge* (classification,
 people, HQ, `description_short`) and `company_description_long` is the

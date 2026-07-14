@@ -1,0 +1,1 @@
+Cortex Labs builds machine-learning tooling for enterprises. Wei Zhang (ex-Palantir, ex-Google) and Hana Suzuki (previously a staff engineer at Databricks) founded the company in 2022.

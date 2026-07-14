@@ -10,7 +10,8 @@ The harness core (:mod:`nous.evals.harness`) is generic over specs, so
 adding a prompt to the golden set means writing one spec + fixtures — no
 harness changes. Currently scoped to the highest-value prompts:
 ``company_description`` (the judge), ``company_description_long`` (the
-dedicated long-form profile), and ``funding_extraction``.
+dedicated long-form profile), ``funding_extraction``, and ``career_history``
+(the talent-flow founder-background rider).
 
 Scoring runs on responses that already passed the runtime
 parse/validate path (``schema.model_validate_json`` — including model
@@ -21,6 +22,7 @@ the same post-validation normalization the calling stage applies
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -36,6 +38,8 @@ from nous.evals.scoring import (
     word_count,
 )
 from nous.llm.client import MAX_PROMPT_INPUT_CHARS
+from nous.llm.prompts.career_history import CareerHistoryExtraction
+from nous.llm.prompts.career_history import build_prompt as build_career_history_prompt
 from nous.llm.prompts.company_description import CompanyDescription
 from nous.llm.prompts.company_description import build_prompt as build_description_prompt
 from nous.llm.prompts.company_description_long import (
@@ -55,6 +59,7 @@ from nous.llm.prompts.funding_extraction import (
     build_website_prompt as build_funding_website_prompt,
 )
 from nous.util.industry import normalize_industry
+from nous.util.slugify import normalize_name
 from nous.util.text import truncate_to_chars
 
 if TYPE_CHECKING:
@@ -620,6 +625,169 @@ def score_funding_extraction(cases: Sequence[CaseEvaluation]) -> PromptReport:
 
 
 # ---------------------------------------------------------------------------
+# career_history (founder prior-employer extraction — the talent-flow rider)
+# ---------------------------------------------------------------------------
+
+
+def _build_career_history_prompt(case: CaseSpec, input_text: str) -> str:
+    # Mirror extract-career-history: truncate to the shared 32k budget and pass
+    # the case's leadership roster as the attribution allow-list.
+    cleaned = truncate_to_chars(input_text, MAX_PROMPT_INPUT_CHARS)
+    return build_career_history_prompt(
+        company_name=case.company_name, roster=case.roster, cleaned_text=cleaned
+    )
+
+
+def _career_people(extraction: CareerHistoryExtraction) -> set[str]:
+    """Normalized names of founders/execs the extraction gave a prior employer."""
+    return {normalize_name(p.name) for p in extraction.people if p.name}
+
+
+def _career_edges(extraction: CareerHistoryExtraction) -> set[str]:
+    """(person → prior company) edges as ``normname|priorco`` keys."""
+    return {
+        f"{normalize_name(p.name)}|{pr.company.strip().casefold()}"
+        for p in extraction.people
+        for pr in p.prior_roles
+    }
+
+
+def _career_prior_grounding(
+    extraction: CareerHistoryExtraction, input_text: str
+) -> float:
+    """Fraction of prior-company-name tokens that appear in the input text.
+
+    A dedicated no-fabrication proxy rather than the shared ``grounding_fraction``
+    (which skips each fragment's FIRST word to duck sentence-initial capitals —
+    that makes it BLIND to a short/leading company name, e.g. a fabricated single
+    word "Honda" would falsely score 1.0). Here EVERY alphanumeric token of every
+    prior-company name is checked (case-insensitive substring) against the input,
+    so a fabricated employer absent from the bio actually drops the score. Returns
+    1.0 when no prior company is asserted (an empty extraction fabricates nothing).
+    """
+    source = input_text.casefold()
+    checked = 0
+    found = 0
+    for person in extraction.people:
+        for pr in person.prior_roles:
+            for token in re.findall(r"[a-z0-9&]+", pr.company.casefold()):
+                if len(token) < 2:  # skip stray single chars ("&", initials)
+                    continue
+                checked += 1
+                if token in source:
+                    found += 1
+    return found / checked if checked else 1.0
+
+
+def score_career_history(cases: Sequence[CaseEvaluation]) -> PromptReport:
+    """Score career_history recordings against ground truth.
+
+    Gated metrics:
+    - parse_rate — recordings surviving runtime schema validation.
+    - empty_accuracy — the empty-not-fabricate gate: the model returns at least
+      one pedigree exactly when the hand-checked expectation has one. Inventing a
+      pedigree on a bio that names none, and missing one that's clearly stated,
+      both cost this metric (the ~85%-are-empty reality makes it the key dial).
+    - people_precision / people_recall — normalized founder-name sets (an
+      off-roster advisor or a fabricated founder costs precision).
+    - moves_precision / moves_recall — (person → prior company) edge sets, the
+      core extraction quality.
+    - grounding_mean / grounding_min — no-fabrication proxy: every prior-company
+      name must appear (verbatim) in the input text.
+    """
+    issues: dict[str, list[str]] = {}
+    parse = Accuracy()
+    empty = Accuracy()
+    people = SlotTally()
+    moves = SlotTally()
+    groundings: list[float] = []
+    provenance: dict[str, int] = {}
+
+    for case in cases:
+        expected = case.expected
+        assert isinstance(expected, CareerHistoryExtraction)
+        parse.add(case.recorded is not None)
+        if case.recorded is None:
+            _issue(issues, case.case_id, "recorded response failed runtime schema validation")
+            continue
+        recorded = case.recorded
+        assert isinstance(recorded, CareerHistoryExtraction)
+
+        empty.add(bool(expected.people) == bool(recorded.people))
+        if bool(expected.people) != bool(recorded.people):
+            _issue(
+                issues,
+                case.case_id,
+                "empty: expected "
+                + ("a pedigree" if expected.people else "no pedigree")
+                + ", got "
+                + ("a pedigree" if recorded.people else "no pedigree"),
+            )
+
+        exp_people, got_people = _career_people(expected), _career_people(recorded)
+        people.add_sets(exp_people, got_people)
+        if exp_people != got_people:
+            _issue(
+                issues,
+                case.case_id,
+                f"people: missing {sorted(exp_people - got_people)},"
+                f" extra {sorted(got_people - exp_people)}",
+            )
+
+        exp_edges, got_edges = _career_edges(expected), _career_edges(recorded)
+        moves.add_sets(exp_edges, got_edges)
+        if exp_edges != got_edges:
+            _issue(
+                issues,
+                case.case_id,
+                f"moves: missing {sorted(exp_edges - got_edges)},"
+                f" extra {sorted(got_edges - exp_edges)}",
+            )
+
+        # Grounding: every prior-company name the model returned must appear in
+        # the input (the verbatim-copy / no-fabrication rule). Uses a dedicated
+        # per-token check, NOT grounding_fraction (whose first-word skip is blind
+        # to short/leading company names — see _career_prior_grounding).
+        grounding = _career_prior_grounding(recorded, case.input_text)
+        groundings.append(grounding)
+        if grounding < 1.0:
+            _issue(
+                issues,
+                case.case_id,
+                f"grounding: {grounding:.3f} — a prior company is absent from the input",
+            )
+
+    metrics: dict[str, float] = {
+        "parse_rate": parse.value,
+        "empty_accuracy": empty.value,
+        "people_precision": people.precision,
+        "people_recall": people.recall,
+        "moves_precision": moves.precision,
+        "moves_recall": moves.recall,
+        "moves_f1": moves.f1,
+        "grounding_mean": mean(groundings),
+        "grounding_min": min(groundings) if groundings else 1.0,
+    }
+    return PromptReport(
+        prompt="career_history",
+        case_count=len(cases),
+        provenance_counts=provenance,
+        metrics=metrics,
+        gated=[
+            "parse_rate",
+            "empty_accuracy",
+            "people_precision",
+            "people_recall",
+            "moves_precision",
+            "moves_recall",
+            "grounding_mean",
+            "grounding_min",
+        ],
+        issues=issues,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Registry
 # ---------------------------------------------------------------------------
 
@@ -641,6 +809,12 @@ PROMPT_SPECS: tuple[PromptSpec, ...] = (
         schema=FundingExtraction,
         build_prompt=_build_funding_prompt,
         score=score_funding_extraction,
+    ),
+    PromptSpec(
+        name="career_history",
+        schema=CareerHistoryExtraction,
+        build_prompt=_build_career_history_prompt,
+        score=score_career_history,
     ),
 )
 

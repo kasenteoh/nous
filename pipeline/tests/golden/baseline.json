@@ -1,4 +1,14 @@
 {
+  "career_history": {
+    "empty_accuracy": 0.8,
+    "grounding_mean": 0.9,
+    "grounding_min": 0.5,
+    "moves_precision": 0.75,
+    "moves_recall": 0.7,
+    "parse_rate": 1.0,
+    "people_precision": 0.8,
+    "people_recall": 0.75
+  },
   "company_description": {
     "grounding_mean": 0.95,
     "grounding_min": 0.6,

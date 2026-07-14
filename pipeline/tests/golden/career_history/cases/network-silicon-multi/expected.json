@@ -1,0 +1,38 @@
+{
+  "people": [
+    {
+      "name": "Anshul Sadana",
+      "prior_roles": [
+        {
+          "company": "Arista",
+          "role": "Chief Operating Officer",
+          "start_year": null,
+          "end_year": null
+        },
+        {
+          "company": "Cisco Systems",
+          "role": "engineering leader",
+          "start_year": null,
+          "end_year": null
+        }
+      ]
+    },
+    {
+      "name": "Prasad Venugopal",
+      "prior_roles": [
+        {
+          "company": "Broadcom",
+          "role": null,
+          "start_year": null,
+          "end_year": null
+        },
+        {
+          "company": "Arista",
+          "role": null,
+          "start_year": null,
+          "end_year": null
+        }
+      ]
+    }
+  ]
+}

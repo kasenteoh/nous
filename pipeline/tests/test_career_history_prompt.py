@@ -86,6 +86,17 @@ def test_person_with_only_null_company_roles_is_dropped() -> None:
     assert extraction.people == []
 
 
+def test_descriptive_phrase_company_is_dropped() -> None:
+    # A long descriptive phrase where a name belongs (the #185 quality tail) is
+    # treated as unnamed and dropped — the sibling real employer survives.
+    phrase = "a company based on his research that was later acquired in 2017 " * 3
+    person = PersonCareer(
+        name="Jane Doe",
+        prior_roles=[PriorRole(company=phrase), PriorRole(company="Stripe")],
+    )
+    assert [pr.company for pr in person.prior_roles] == ["Stripe"]
+
+
 def test_build_prompt_includes_company_roster_and_text() -> None:
     prompt = build_prompt(
         company_name="Acme",

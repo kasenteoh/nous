@@ -33,6 +33,13 @@ class CaseSpec(BaseModel):
             "one (e.g. funding_extraction: 'news' vs 'website')."
         ),
     )
+    roster: list[tuple[str, str]] = Field(
+        default_factory=list,
+        description=(
+            "(name, role) leadership roster for prompts that take one as an "
+            "allow-list input (career_history). Empty for prompts that don't."
+        ),
+    )
     notes: str = Field(
         default="",
         description="Reviewer notes: what this case exercises and why.",

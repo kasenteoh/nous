@@ -1,0 +1,32 @@
+{
+  "people": [
+    {
+      "name": "Rodrigo Liang",
+      "prior_roles": [
+        {
+          "company": "Oracle",
+          "role": "SVP of engineering",
+          "start_year": null,
+          "end_year": null
+        },
+        {
+          "company": "Sun Microsystems",
+          "role": null,
+          "start_year": null,
+          "end_year": null
+        }
+      ]
+    },
+    {
+      "name": "Kunle Olukotun",
+      "prior_roles": [
+        {
+          "company": "Afara Websystems",
+          "role": null,
+          "start_year": null,
+          "end_year": null
+        }
+      ]
+    }
+  ]
+}

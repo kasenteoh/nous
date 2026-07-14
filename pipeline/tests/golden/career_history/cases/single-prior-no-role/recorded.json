@@ -1,0 +1,18 @@
+{
+  "provenance": "simulated",
+  "response": {
+    "people": [
+      {
+        "name": "Yuki Tanaka",
+        "prior_roles": [
+          {
+            "company": "Toyota",
+            "role": null,
+            "start_year": null,
+            "end_year": null
+          }
+        ]
+      }
+    ]
+  }
+}

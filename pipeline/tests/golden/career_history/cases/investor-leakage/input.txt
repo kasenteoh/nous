@@ -1,0 +1,1 @@
+Fintech Rails powers embedded payments infrastructure. The company is backed by Sequoia and Andreessen Horowitz, whose partners include several former Stripe and PayPal operators. CEO Sam Ortiz leads the team.
