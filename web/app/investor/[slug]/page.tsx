@@ -7,6 +7,7 @@ import { notFound } from "next/navigation";
 import { getCoInvestors, getInvestorBySlug } from "@/lib/queries";
 import { formatDate, formatUsd, formatUsdExact } from "@/lib/format";
 import { CompanyCard } from "@/components/CompanyCard";
+import { RssLink } from "@/components/RssLink";
 
 type Props = {
   params: Promise<{ slug: string }>;
@@ -58,7 +59,19 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
     // Bare investor name — the layout's title template appends " — nous".
     title: investor.name,
     description,
-    alternates: { canonical: `/investor/${slug}` },
+    alternates: {
+      canonical: `/investor/${slug}`,
+      // Per-investor RSS auto-discovery (overrides the layout's global feed
+      // alternate on this page — the portfolio feed is the relevant one here).
+      types: {
+        "application/rss+xml": [
+          {
+            url: `/investor/${slug}/feed.xml`,
+            title: `${investor.name} portfolio — funding & news (RSS)`,
+          },
+        ],
+      },
+    },
   };
 }
 
@@ -193,6 +206,16 @@ export default async function InvestorPage({ params, searchParams }: Props) {
             {description}
           </p>
         )}
+
+        {/* Feed autodiscovery link — subscribe to this investor's portfolio
+            funding + news without an account (mirrors <link rel="alternate">). */}
+        <div className="mt-4">
+          <RssLink
+            href={`/investor/${slug}/feed.xml`}
+            label="Follow portfolio via RSS"
+            title={`Subscribe to ${name}'s portfolio funding & news (RSS)`}
+          />
+        </div>
       </header>
 
       {/* ── Portfolio (paginated, 30/page — mirrors /companies) ─────────────── */}

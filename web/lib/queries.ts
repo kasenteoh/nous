@@ -696,6 +696,67 @@ interface NestedFundingCompany {
   slug: string | null;
 }
 
+// Raw join rows returned by the recent-funding / recent-news selects (global
+// firehose + the entity-scoped variants). Shared so every feed query maps
+// through one place and the row → RssItem-input shaping can never drift.
+interface RawRecentFundingRow {
+  round_type: string | null;
+  amount_raised: number | null;
+  announced_date: string;
+  companies: NestedFundingCompany | NestedFundingCompany[] | null;
+}
+
+interface RawRecentNewsRow {
+  id: string | null;
+  title: string | null;
+  url: string | null;
+  source: string | null;
+  published_date: string | null;
+  companies: NestedFundingCompany | NestedFundingCompany[] | null;
+}
+
+/** Flatten recent-funding join rows, dropping any whose company join is missing. */
+function mapRecentFundingRows(rows: RawRecentFundingRow[]): RecentFundingRow[] {
+  return rows.flatMap((row) => {
+    const company = Array.isArray(row.companies)
+      ? row.companies[0]
+      : row.companies;
+    if (!company?.name || !company.slug) return [];
+    return [
+      {
+        companySlug: company.slug,
+        companyName: company.name,
+        round_type: row.round_type,
+        amount_raised: row.amount_raised,
+        announced_date: row.announced_date,
+      },
+    ];
+  });
+}
+
+/** Flatten recent-news join rows, dropping incomplete rows / missing joins. */
+function mapRecentNewsRows(rows: RawRecentNewsRow[]): RecentNewsRow[] {
+  return rows.flatMap((row) => {
+    const company = Array.isArray(row.companies)
+      ? row.companies[0]
+      : row.companies;
+    if (!row.id || !row.title || !row.url || !company?.name || !company.slug) {
+      return [];
+    }
+    return [
+      {
+        id: row.id,
+        title: row.title,
+        url: row.url,
+        source: row.source ?? "",
+        published_date: row.published_date,
+        companySlug: company.slug,
+        companyName: company.name,
+      },
+    ];
+  });
+}
+
 /**
  * The latest funding rounds with a known announce date, newest first, joined
  * with the company's name and slug. Rows whose company join is missing are
@@ -720,28 +781,7 @@ export async function listRecentFundings(
     return [];
   }
 
-  type Row = {
-    round_type: string | null;
-    amount_raised: number | null;
-    announced_date: string;
-    companies: NestedFundingCompany | NestedFundingCompany[] | null;
-  };
-
-  return ((data ?? []) as Row[]).flatMap((row) => {
-    const company = Array.isArray(row.companies)
-      ? row.companies[0]
-      : row.companies;
-    if (!company?.name || !company.slug) return [];
-    return [
-      {
-        companySlug: company.slug,
-        companyName: company.name,
-        round_type: row.round_type,
-        amount_raised: row.amount_raised,
-        announced_date: row.announced_date,
-      },
-    ];
-  });
+  return mapRecentFundingRows((data ?? []) as RawRecentFundingRow[]);
 }
 
 /** One recent news article, joined to its company — for the RSS feed. */
@@ -779,34 +819,148 @@ export async function listRecentNews(limit = 30): Promise<RecentNewsRow[]> {
     return [];
   }
 
-  type Row = {
-    id: string | null;
-    title: string | null;
-    url: string | null;
-    source: string | null;
-    published_date: string | null;
-    companies: NestedFundingCompany | NestedFundingCompany[] | null;
-  };
+  return mapRecentNewsRows((data ?? []) as RawRecentNewsRow[]);
+}
 
-  return ((data ?? []) as Row[]).flatMap((row) => {
-    const company = Array.isArray(row.companies)
-      ? row.companies[0]
-      : row.companies;
-    if (!row.id || !row.title || !row.url || !company?.name || !company.slug) {
-      return [];
-    }
-    return [
-      {
-        id: row.id,
-        title: row.title,
-        url: row.url,
-        source: row.source ?? "",
-        published_date: row.published_date,
-        companySlug: company.slug,
-        companyName: company.name,
-      },
-    ];
-  });
+// ─── Entity-scoped feed queries (per-entity RSS, ROADMAP Next #3) ──────────────
+//
+// Fan-outs of the global firehose (listRecentFundings / listRecentNews) scoped
+// to one industry_group or to a set of company slugs (an investor's portfolio).
+// Each mirrors its global sibling exactly — same tables, same shown-cohort
+// filter (companies.exclusion_reason IS NULL) via the inner join, same
+// dated-only gate + newest-first order — plus one scoping filter. They feed the
+// per-entity RSS route handlers and reuse the shared row mappers above.
+
+/** Max company slugs an `.in(...)` feed filter accepts, bounding the request
+ * URL length. Portfolios above this are truncated (the feed still shows the 40
+ * most recent events across the first N companies) — see the investor route. */
+export const FEED_IN_SLUGS_CAP = 150;
+
+/**
+ * Recent funding rounds for companies in one canonical `industry_group`, newest
+ * first. Mirrors {@link listRecentFundings} + an `industry_group` filter on the
+ * inner-joined company. Returns [] on missing env or error.
+ */
+export async function listRecentFundingsByIndustry(
+  group: string,
+  limit = 30,
+): Promise<RecentFundingRow[]> {
+  const supabase = supabaseOrNull("listRecentFundingsByIndustry");
+  if (!supabase) return [];
+
+  const { data, error } = await supabase
+    .from("funding_rounds")
+    .select("round_type, amount_raised, announced_date, companies!inner(name, slug)")
+    .is("companies.exclusion_reason", null)
+    .eq("companies.industry_group", group)
+    .not("announced_date", "is", null)
+    .order("announced_date", { ascending: false })
+    .limit(limit);
+
+  if (error) {
+    console.error("[listRecentFundingsByIndustry] query failed:", error.message);
+    return [];
+  }
+
+  return mapRecentFundingRows((data ?? []) as RawRecentFundingRow[]);
+}
+
+/**
+ * Recent news for companies in one canonical `industry_group`, newest first.
+ * Mirrors {@link listRecentNews} + an `industry_group` filter on the
+ * inner-joined company. Returns [] on missing env or error.
+ */
+export async function listRecentNewsByIndustry(
+  group: string,
+  limit = 30,
+): Promise<RecentNewsRow[]> {
+  const supabase = supabaseOrNull("listRecentNewsByIndustry");
+  if (!supabase) return [];
+
+  const { data, error } = await supabase
+    .from("news_articles")
+    .select("id, title, url, source, published_date, companies!inner(name, slug)")
+    .is("companies.exclusion_reason", null)
+    .eq("companies.industry_group", group)
+    .not("published_date", "is", null)
+    .order("published_date", { ascending: false })
+    .limit(limit);
+
+  if (error) {
+    console.error("[listRecentNewsByIndustry] query failed:", error.message);
+    return [];
+  }
+
+  return mapRecentNewsRows((data ?? []) as RawRecentNewsRow[]);
+}
+
+/**
+ * Recent funding rounds for a specific set of company slugs (an investor's
+ * portfolio), newest first. Mirrors {@link listRecentFundings} + an
+ * `.in("companies.slug", slugs)` filter on the inner-joined company. Empty slug
+ * list short-circuits to [] (never issues an `in.()` query). Returns [] on
+ * missing env or error.
+ */
+export async function listRecentFundingsForCompanySlugs(
+  slugs: string[],
+  limit = 30,
+): Promise<RecentFundingRow[]> {
+  if (slugs.length === 0) return [];
+  const supabase = supabaseOrNull("listRecentFundingsForCompanySlugs");
+  if (!supabase) return [];
+
+  const { data, error } = await supabase
+    .from("funding_rounds")
+    .select("round_type, amount_raised, announced_date, companies!inner(name, slug)")
+    .is("companies.exclusion_reason", null)
+    .in("companies.slug", slugs)
+    .not("announced_date", "is", null)
+    .order("announced_date", { ascending: false })
+    .limit(limit);
+
+  if (error) {
+    console.error(
+      "[listRecentFundingsForCompanySlugs] query failed:",
+      error.message,
+    );
+    return [];
+  }
+
+  return mapRecentFundingRows((data ?? []) as RawRecentFundingRow[]);
+}
+
+/**
+ * Recent news for a specific set of company slugs (an investor's portfolio),
+ * newest first. Mirrors {@link listRecentNews} + an `.in("companies.slug",
+ * slugs)` filter on the inner-joined company. Empty slug list short-circuits to
+ * [] (never issues an `in.()` query). Returns [] on missing env or error.
+ */
+export async function listRecentNewsForCompanySlugs(
+  slugs: string[],
+  limit = 30,
+): Promise<RecentNewsRow[]> {
+  if (slugs.length === 0) return [];
+  const supabase = supabaseOrNull("listRecentNewsForCompanySlugs");
+  if (!supabase) return [];
+
+  const { data, error } = await supabase
+    .from("news_articles")
+    .select("id, title, url, source, published_date, companies!inner(name, slug)")
+    .is("companies.exclusion_reason", null)
+    .in("companies.slug", slugs)
+    .not("published_date", "is", null)
+    .order("published_date", { ascending: false })
+    .limit(limit);
+
+  if (error) {
+    console.error(
+      "[listRecentNewsForCompanySlugs] query failed:",
+      error.message,
+    );
+    return [];
+  }
+
+  return mapRecentNewsRows((data ?? []) as RawRecentNewsRow[]);
 }
 
 /** One "Biggest recent rounds" row on /trends. */

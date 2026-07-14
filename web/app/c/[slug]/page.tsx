@@ -37,6 +37,7 @@ import { EventTimeline } from "@/components/EventTimeline";
 import { Investors } from "@/components/Investors";
 import { Competitors } from "@/components/Competitors";
 import { RelatedCompanies } from "@/components/RelatedCompanies";
+import { RssLink } from "@/components/RssLink";
 import { Sources } from "@/components/Sources";
 
 // At or above this many consecutive failed homepage scrapes, the detail page
@@ -83,7 +84,19 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
     // Bare company name — the layout's title template appends " — nous".
     title: company.name,
     description,
-    alternates: { canonical: `/c/${slug}` },
+    alternates: {
+      canonical: `/c/${slug}`,
+      // Per-company RSS auto-discovery (overrides the layout's global feed
+      // alternate on this page — the company feed is the relevant one here).
+      types: {
+        "application/rss+xml": [
+          {
+            url: `/c/${slug}/feed.xml`,
+            title: `${company.name} — funding & news (RSS)`,
+          },
+        ],
+      },
+    },
   };
 }
 
@@ -520,6 +533,16 @@ export default async function CompanyPage({ params }: Props) {
             </div>
           )}
         </dl>
+
+        {/* Feed autodiscovery link — subscribe to this company's funding + news
+            without an account (mirrors the <link rel="alternate"> in <head>). */}
+        <div className="mt-4">
+          <RssLink
+            href={`/c/${company.slug}/feed.xml`}
+            label="Follow via RSS"
+            title={`Subscribe to ${company.name} funding & news (RSS)`}
+          />
+        </div>
 
         {/* Possibly-inactive rider — surfaced when the scraper has failed to
             reach the homepage on several consecutive runs. This is a

@@ -120,10 +120,15 @@ Built on top of the now-trustworthy foundation.
    the page degrades to an empty-state until then. Follow-ups: homepage strip,
    badge calibration, per-industry scoping, a snapshot sparkline (BACKLOG).
 
-3. **Per-entity RSS/feeds — alerts without accounts.** Feeds scoped to an
-   industry, an investor, or a single company — the existing `/feed.xml` pattern
-   fanned out. Power-user "watch this" that respects the no-accounts constraint
-   and costs $0.
+3. **Per-entity RSS/feeds — alerts without accounts.** — **SHIPPED (#PENDING).**
+   Feeds scoped to an industry, an investor, or a single company — the existing
+   `/feed.xml` pattern fanned out to `/c/[slug]/feed.xml`,
+   `/industry/[group]/feed.xml`, `/investor/[slug]/feed.xml`. Power-user "watch
+   this" that respects the no-accounts constraint and costs $0: shared row→item
+   mappers with stable guids (`lib/rss-items.ts`), each feed empty-but-valid on
+   missing data, `<link rel="alternate">` + a visible "Follow via RSS" link on
+   every entity page. Follow-up (BACKLOG): a subscribe hint / feed hub; email
+   delivery stays out this quarter.
 
 4. **Talent-flow graph.** `people` already ties founders/leaders to companies.
    Surface "founder previously at Stripe/Google," repeat founders, exec moves —

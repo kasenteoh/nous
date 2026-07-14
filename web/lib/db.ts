@@ -61,3 +61,16 @@ export function createSupabaseServerClient(): SupabaseClient {
     auth: { persistSession: false, autoRefreshToken: false },
   });
 }
+
+/**
+ * True when the Supabase server env is fully present. Feed route handlers use
+ * this to tell "Supabase intentionally absent" (secret-free CI/local build) —
+ * degrade to an empty-but-valid feed, never 404/500 — apart from "entity
+ * genuinely not found" — a truthful 404. Mirrors the env check in
+ * {@link createSupabaseServerClient} without constructing a client or throwing.
+ */
+export function isSupabaseConfigured(): boolean {
+  return Boolean(
+    process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY,
+  );
+}
