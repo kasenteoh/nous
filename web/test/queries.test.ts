@@ -20,6 +20,7 @@ import {
   getRelatedCompanies,
   getSimilarCompanies,
   listCompanies,
+  listHeatingUpCompanies,
   listIndustriesWithMapCoords,
   listIndustryMapNodes,
   listNewestCompanies,
@@ -952,6 +953,117 @@ describe("listIndustryMapNodes", () => {
       error: { message: 'column companies.map_x does not exist', code: "42703" },
     }));
     await expect(listIndustryMapNodes("Fintech")).resolves.toEqual([]);
+  });
+});
+
+// ─── Momentum / "heating up" (/trending) ──────────────────────────────────────
+
+const MOMENTUM_ROW = {
+  slug: "acme",
+  name: "Acme",
+  hq_city: "San Francisco",
+  hq_state: "CA",
+  industry_group: "Fintech",
+  description_short: "Payments infra.",
+  status: "active",
+  logo_url: "https://acme.example/favicon.ico",
+  momentum_score: 0.82,
+  momentum_computed_at: "2026-07-13T06:00:00Z",
+  momentum_why: ["+40% team", "5 news mentions"],
+};
+
+describe("listHeatingUpCompanies", () => {
+  it("maps rows to MomentumCompany and applies the public-surface filters + score-desc order", async () => {
+    const mock = useClient(() => ({ data: [MOMENTUM_ROW] }));
+    const companies = await listHeatingUpCompanies();
+
+    expect(companies).toEqual([
+      {
+        slug: "acme",
+        name: "Acme",
+        hq_city: "San Francisco",
+        hq_state: "CA",
+        industry_group: "Fintech",
+        description_short: "Payments infra.",
+        status: "active",
+        logo_url: "https://acme.example/favicon.ico",
+        momentumScore: 0.82,
+        momentumComputedAt: "2026-07-13T06:00:00Z",
+        momentumWhy: ["+40% team", "5 news mentions"],
+      },
+    ]);
+
+    const b = mock.buildersFor("companies")[0];
+    expect(b.has("is", "exclusion_reason", null)).toBe(true);
+    expect(b.has("or", CATALOG_BAR_OR)).toBe(true);
+    // Only scored companies surface.
+    expect(b.has("not", "momentum_score", "is", null)).toBe(true);
+    expect(b.has("gte", "momentum_score", 0)).toBe(true);
+    // Hottest first, name as the stable tiebreak.
+    expect(
+      b.has("order", "momentum_score", {
+        ascending: false,
+        nullsFirst: false,
+      }),
+    ).toBe(true);
+    expect(b.has("order", "name", { ascending: true })).toBe(true);
+    expect(b.has("limit", 30)).toBe(true); // default cap
+  });
+
+  it("drops rows missing a slug, name, or momentum_score", async () => {
+    useClient(() => ({
+      data: [
+        MOMENTUM_ROW,
+        { ...MOMENTUM_ROW, slug: null }, // unlinkable
+        { ...MOMENTUM_ROW, name: null }, // nameless
+        { ...MOMENTUM_ROW, momentum_score: null }, // unscored
+      ],
+    }));
+    const companies = await listHeatingUpCompanies();
+    expect(companies).toHaveLength(1);
+    expect(companies[0].slug).toBe("acme");
+  });
+
+  it("defaults momentumWhy to [] and momentumComputedAt to null when absent", async () => {
+    useClient(() => ({
+      data: [
+        {
+          slug: "husk",
+          name: "Husk",
+          hq_city: null,
+          hq_state: null,
+          industry_group: null,
+          description_short: null,
+          status: null,
+          logo_url: null,
+          momentum_score: 0.7,
+          momentum_computed_at: null,
+          momentum_why: null,
+        },
+      ],
+    }));
+    const [company] = await listHeatingUpCompanies();
+    expect(company.momentumWhy).toEqual([]);
+    expect(company.momentumComputedAt).toBeNull();
+    // status falls back to "active" when the projection omits it.
+    expect(company.status).toBe("active");
+  });
+
+  it("returns [] when Supabase is unconfigured (secret-free CI/dev)", async () => {
+    mockedCreate.mockImplementation(() => {
+      throw new Error("SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must be set");
+    });
+    await expect(listHeatingUpCompanies()).resolves.toEqual([]);
+  });
+
+  it("returns [] on a query error — the pre-migration 400 (momentum_score column absent) → empty-state path", async () => {
+    useClient(() => ({
+      error: {
+        message: "column companies.momentum_score does not exist",
+        code: "42703",
+      },
+    }));
+    await expect(listHeatingUpCompanies()).resolves.toEqual([]);
   });
 });
 

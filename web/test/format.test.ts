@@ -4,6 +4,7 @@ import {
   formatDate,
   formatEmployeeRange,
   formatLocation,
+  formatMomentumWhy,
   formatUsd,
   formatUsdExact,
   growthToneClass,
@@ -160,6 +161,27 @@ describe("discoveredViaLabel", () => {
   it("title-cases unknown values instead of leaking the raw enum", () => {
     expect(discoveredViaLabel("hacker_news")).toBe("Hacker News");
     expect(discoveredViaLabel("some_new_source")).toBe("Some New Source");
+  });
+});
+
+describe("formatMomentumWhy", () => {
+  it("joins the pre-worded parts with the site's separator", () => {
+    expect(
+      formatMomentumWhy(["+40% team", "5 news mentions", "raised 3wks ago"]),
+    ).toBe("+40% team · 5 news mentions · raised 3wks ago");
+  });
+
+  it("caps to the most salient `max` parts (default 3)", () => {
+    expect(formatMomentumWhy(["a", "b", "c", "d", "e"])).toBe("a · b · c");
+    expect(formatMomentumWhy(["a", "b", "c", "d"], 2)).toBe("a · b");
+  });
+
+  it("filters falsy parts", () => {
+    expect(formatMomentumWhy(["", "kept", ""])).toBe("kept");
+  });
+
+  it("returns an empty string for an empty array", () => {
+    expect(formatMomentumWhy([])).toBe("");
   });
 });
 

@@ -1,13 +1,19 @@
 import { render, screen, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
+import { CompanyCard } from "@/components/CompanyCard";
 import { Competitors } from "@/components/Competitors";
 import { EventTimeline } from "@/components/EventTimeline";
 import { Investors } from "@/components/Investors";
+import {
+  MOMENTUM_BADGE_THRESHOLD,
+  MomentumBadge,
+} from "@/components/MomentumBadge";
 import { RelatedCompanies } from "@/components/RelatedCompanies";
 import { Sources } from "@/components/Sources";
 import { StatusBadge } from "@/components/StatusBadge";
 import type {
   CompanyInvestorRow,
+  CompanyListRow,
   CompetitorWithResolved,
   FundingRoundWithInvestors,
   NewsArticleRow,
@@ -500,6 +506,90 @@ describe("StatusBadge", () => {
     const link = screen.getByRole("link");
     expect(link).toHaveAttribute("href", "https://news.example/deal");
     expect(within(link).getByText("Acquired")).toBeInTheDocument();
+  });
+});
+
+// ─── MomentumBadge ────────────────────────────────────────────────────────────
+
+describe("MomentumBadge", () => {
+  it("renders the pill at the threshold, with the explaining title", () => {
+    const { container } = render(
+      <MomentumBadge score={MOMENTUM_BADGE_THRESHOLD} />,
+    );
+    const pill = within(container).getByText("🔥 Heating up");
+    expect(pill).toHaveAttribute(
+      "title",
+      "Momentum is accelerating — recent hiring, news, and funding activity",
+    );
+  });
+
+  it("renders the pill for scores well above the threshold", () => {
+    const { container } = render(<MomentumBadge score={0.95} />);
+    expect(within(container).getByText("🔥 Heating up")).toBeInTheDocument();
+  });
+
+  it("renders nothing below the threshold or for null/undefined scores", () => {
+    const below = render(
+      <MomentumBadge score={MOMENTUM_BADGE_THRESHOLD - 0.01} />,
+    );
+    expect(below.container).toBeEmptyDOMElement();
+
+    const nullScore = render(<MomentumBadge score={null} />);
+    expect(nullScore.container).toBeEmptyDOMElement();
+
+    const undefinedScore = render(<MomentumBadge score={undefined} />);
+    expect(undefinedScore.container).toBeEmptyDOMElement();
+  });
+});
+
+// ─── CompanyCard (momentum props gating) ──────────────────────────────────────
+
+function companyListRow(overrides: Partial<CompanyListRow> = {}): CompanyListRow {
+  return {
+    slug: "acme",
+    name: "Acme",
+    hq_city: "San Francisco",
+    hq_state: "CA",
+    industry_group: "Fintech",
+    description_short: "Payments infra.",
+    status: "active",
+    logo_url: null,
+    ...overrides,
+  };
+}
+
+describe("CompanyCard momentum props", () => {
+  it("shows the badge and the joined why line when momentum props are supplied", () => {
+    render(
+      <CompanyCard
+        company={companyListRow()}
+        momentumScore={0.82}
+        momentumWhy={["+40% team", "5 news mentions"]}
+      />,
+    );
+    expect(screen.getByText("🔥 Heating up")).toBeInTheDocument();
+    expect(
+      screen.getByText("+40% team · 5 news mentions"),
+    ).toBeInTheDocument();
+  });
+
+  it("renders neither the badge nor a why line when the props are omitted (every non-/trending call site)", () => {
+    render(<CompanyCard company={companyListRow()} />);
+    expect(screen.queryByText("🔥 Heating up")).not.toBeInTheDocument();
+    expect(screen.queryByText(/·/)).not.toBeInTheDocument();
+  });
+
+  it("omits the badge when the score is below threshold even if a why line is present", () => {
+    render(
+      <CompanyCard
+        company={companyListRow()}
+        momentumScore={MOMENTUM_BADGE_THRESHOLD - 0.1}
+        momentumWhy={["small bump"]}
+      />,
+    );
+    expect(screen.queryByText("🔥 Heating up")).not.toBeInTheDocument();
+    // The why line is independent of the badge threshold — it still renders.
+    expect(screen.getByText("small bump")).toBeInTheDocument();
   });
 });
 

@@ -189,6 +189,16 @@ export function formatLocation(
   return parts.length > 0 ? parts.join(", ") : "—";
 }
 
+/**
+ * Render a company's momentum "why" breakdown for a card line. The parts are
+ * pre-worded by the pipeline (["+40% team", "5 news mentions", "raised 3wks
+ * ago"]); we just cap to the most salient few and join with the site's " · "
+ * separator. Empty/absent → "" so the caller can gate on the string.
+ */
+export function formatMomentumWhy(parts: string[], max = 3): string {
+  return parts.filter(Boolean).slice(0, max).join(" · ");
+}
+
 const DISCOVERED_VIA_LABELS: Record<string, string> = {
   vc_portfolio: "VC portfolio",
   techcrunch: "TechCrunch",
