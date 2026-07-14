@@ -45,7 +45,26 @@ drives off company IDs and re-`session.get`s each — never touch a preloaded OR
 object after a sibling rollback (it fires sync IO → `MissingGreenlet` and crashes
 the run). Post-rollback logs use a captured slug local.
 
-**Remaining Next bet: investor depth (#5).**
+## LATEST UPDATE — investor depth SHIPPED (2026-07-14, PR #190)
+
+ROADMAP Next **#5 (investor depth) is BUILT** — the last Next bet, so the whole
+**Next (depth) horizon is now cleared** (#1 map, #2 momentum, #3 RSS, #4
+talent-flow, #5 investor depth all shipped). Turned the investor directory from
+a list into a lens, $0 / read-time, from existing linkage:
+- **Co-investment** ("frequently co-invests with") already shipped
+  (`getCoInvestors`, read-time, capped — no persisted edge, O(N²) to store).
+- **Portfolio momentum (#190):** `getInvestorPortfolioMomentum` aggregates the
+  `momentum_score` (#181) across an investor's DISTINCT shown portfolio companies
+  (unioned over both link paths, deduped by slug) → a "N of M heating up" section
+  + the hottest few on `/investor/[slug]`. Omit-when-cold; fetch capped 2000/path
+  for mega-funds; migration-order-free. Renders once momentum populates on the
+  weekly `discovery.yml` cadence.
+
+**Follow-ups (BACKLOG, unstarted):** "who's leading rounds in industry X right
+now" (an `/industry/[group]` surface) + a global co-investment meta-graph. The
+frontier is now the **Later** horizon (provenance UI, AI-answer surfaces) + the
+cross-cutting platform-health debt (embedding/Vercel decoupling, pipeline.yml
+input cap, observability).
 
 ## LATEST UPDATE — talent-flow feasibility gate (2026-07-13, PR #184)
 

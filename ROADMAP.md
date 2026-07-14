@@ -143,8 +143,13 @@ Built on top of the now-trustworthy foundation.
    company** measured (full backfill well under the ~$6.50 estimate). Follow-up
    (BACKLOG): a $0 low-precision "repeat founders" co-membership index.
 
-5. **Investor depth.** Co-investment networks, portfolio momentum, "who's leading
-   rounds in X right now" — turn the investor directory from a list into a lens.
+5. **Investor depth.** — **SHIPPED** (co-investment pre-existing; portfolio
+   momentum **#190**). Turned the investor directory from a list into a lens, $0
+   / read-time, from existing linkage: "frequently co-invests with"
+   (`getCoInvestors`) + a portfolio-momentum lens ("N of M portfolio companies
+   heating up", reusing the #181 `momentum_score`) on `/investor/[slug]`.
+   Follow-ups (BACKLOG): "who's leading rounds in industry X right now" (an
+   industry-page surface) + a global co-investment meta-graph.
 
 ---
 

@@ -165,10 +165,18 @@ Follow-ups (BACKLOG, low-priority): a catalog-level "repeat founders" index
 (co-membership by `person_normalized_name`, $0 but low-precision — no person
 disambiguator); re-extract as scrape coverage grows (prompt bump re-selects).
 
-### Investor depth [M] — QUEUED
-Co-investment graph + "who's leading rounds in X now" + portfolio momentum (reuse
-`momentum_score`), from existing `funding_round_investors`/`company_investors`
-linkage. $0, no LLM. Sketch in the same plan doc; scout fresh.
+### Investor depth [M] — SHIPPED (co-investment pre-existing; portfolio momentum #190)
+Turned the investor directory from a list into a lens, $0 / no LLM, from existing
+linkage. **Co-investment** ("frequently co-invests with") already shipped
+(`getCoInvestors`, read-time, capped). **Portfolio momentum** (#190): aggregate
+`momentum_score` (#181) across an investor's portfolio → "N of M heating up" +
+the hottest few, on `/investor/[slug]`. Remaining follow-ups (unstarted, P2):
+- **"Who's leading rounds in industry X right now"** — recent rounds by
+  `industry_group` + their `is_lead` investors, on `/industry/[group]`. $0, from
+  `funding_round_investors` + `funding_rounds` + `companies`.
+- A **global co-investment meta-graph** (investor↔investor network view) — would
+  need a materialized edge table if it goes beyond a single investor's page
+  (per-investor is O(N) read-time; all-pairs is O(N²) — persist if pursued).
 
 ---
 

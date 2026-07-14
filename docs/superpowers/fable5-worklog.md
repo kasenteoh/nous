@@ -1152,3 +1152,26 @@ the prior employer resolves to a shown catalog company.
 - Adversarially reviewed (2 lenses → verify): 1 confirmed defect fixed (the
   "present"/"?" tenure fabrication), regression-tested. Verified: npm lint +
   test (328 passed) + build.
+
+## PR #190 — feat(web): portfolio-momentum lens on /investor/[slug] (investor depth) (merged 2026-07-14)
+
+ROADMAP Next **#5 (investor depth)** — turn the investor directory from a list
+into a lens. The co-investment lens ("frequently co-invests with") already
+shipped (`getCoInvestors`, read-time); this adds the **portfolio-momentum** lens:
+how many of an investor's portfolio companies are heating up right now, and the
+hottest few. $0, read-time — reuses the pipeline `momentum_score` (#181), no new
+data/LLM.
+- `getInvestorPortfolioMomentum(slug)`: aggregates `momentum_score` over the
+  investor's DISTINCT shown portfolio companies, unioned across BOTH link paths
+  (`company_investors` + `funding_round_investors`→`funding_rounds`→`companies`)
+  and deduped by slug. Returns scoredCount / heatingUpCount (≥ the shared
+  `MOMENTUM_BADGE_THRESHOLD` 0.65) / meanMomentum / topHeatingUp. Both embeds are
+  unambiguous (one FK each) so no FK hint; fetch capped 2000/path (mega-fund).
+  Migration-order-free; a single-path failure still yields a partial aggregate.
+- `PortfolioMomentum` server component — omit-when-cold, links the hot companies
+  with their momentum "why" chips (reuses /trending wording).
+- Adversarially reviewed (2 lenses → verify): 1 confirmed grammar defect fixed
+  (noun agreed with the numerator not the denominator), regression-tested.
+  Verified: npm lint + test (336 passed) + build.
+- **Follow-ups (BACKLOG):** "who's leading rounds in industry X right now" (a
+  separate industry-page surface); a global co-investment meta-graph.
