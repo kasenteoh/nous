@@ -41,6 +41,7 @@ import { Competitors } from "@/components/Competitors";
 import { RelatedCompanies } from "@/components/RelatedCompanies";
 import { RssLink } from "@/components/RssLink";
 import { ProvenancePanel } from "@/components/ProvenancePanel";
+import { SourceLink } from "@/components/SourceLink";
 import { Sources, hasRenderableCitations } from "@/components/Sources";
 
 // At or above this many consecutive failed homepage scrapes, the detail page
@@ -438,11 +439,26 @@ export default async function CompanyPage({ params }: Props) {
           </h1>
           {/* Status badge — renders nothing while status='active'; otherwise
               marks the exit (Acquired / Shut down / IPO), linking to the
-              announcement when a source URL was recorded. */}
-          <StatusBadge
-            status={company.status}
-            sourceUrl={company.status_source_url}
-          />
+              announcement when a source URL was recorded. The badge's own link
+              is visually undiscoverable, so a subtle source superscript beside
+              it makes the provenance visible and consistent with the other
+              sourced figures (self-omits when status_source_url is
+              absent/unparseable). Grouped so the superscript hugs the badge
+              rather than picking up the header row's wider gap. */}
+          {company.status !== "active" ? (
+            <span className="inline-flex items-center gap-0.5">
+              <StatusBadge
+                status={company.status}
+                sourceUrl={company.status_source_url}
+              />
+              <SourceLink url={company.status_source_url} label="Status" />
+            </span>
+          ) : (
+            <StatusBadge
+              status={company.status}
+              sourceUrl={company.status_source_url}
+            />
+          )}
           {/* Momentum badge — a "🔥 Heating up" pill for high-momentum
               companies. Renders null below the threshold and whenever the
               momentum_score column is absent pre-migration (undefined →
@@ -474,6 +490,11 @@ export default async function CompanyPage({ params }: Props) {
                 >
                   {websiteHostname(company.website) ?? company.website}
                 </a>
+                {/* Source for HOW nous learned the website (the Wikidata entity
+                    page / sourcing article / VC portfolio page) — distinct from
+                    the site link above. Self-omits when website_source_url is
+                    absent/unparseable. */}
+                <SourceLink url={company.website_source_url} label="Website" />
               </dd>
             </div>
           )}
@@ -583,6 +604,12 @@ export default async function CompanyPage({ params }: Props) {
               title={hasTotalRaised ? formatUsdExact(displayedTotal) : undefined}
             >
               {hasTotalRaised ? formatUsd(displayedTotal) : "—"}
+              {/* Inline source affordance for the displayed total. Self-omits
+                  when the source URL is absent/unparseable (e.g. a scheme-less
+                  company.website fallback), so "—" never sprouts a dead link. */}
+              {hasTotalRaised && (
+                <SourceLink url={totalRaisedSourceUrl} label="Total raised" />
+              )}
             </dd>
             {/* "As of" freshness rider (not a citation) — kept inline. */}
             {hasTotalRaised && statedAsOf && (
@@ -733,7 +760,16 @@ export default async function CompanyPage({ params }: Props) {
       />
 
       {/* ── Sources (D1: consolidated, labeled, at the bottom) ─────────── */}
-      <Sources citations={citations} />
+      {/* companyWebsite + website_source(_url) let Sources tag each citation with
+          a muted source-type ("News / Website / Wikidata / VC portfolio"),
+          inferred from the host with the website_source enum as ground truth;
+          an un-inferable host stays unlabeled (never a guessed attribution). */}
+      <Sources
+        citations={citations}
+        companyWebsite={company.website}
+        websiteSource={company.website_source}
+        websiteSourceUrl={company.website_source_url}
+      />
 
       {/* ── Report incorrect data (company-scoped) ─────────────────────────
           The repo is public, so this prefilled GitHub-issue link resolves for

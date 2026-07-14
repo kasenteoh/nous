@@ -11,6 +11,19 @@ export interface CompanyRow {
   primary_category: string | null; // filled in M2
   tags: string[] | null; // filled in M2 — Supabase returns Postgres text[] as string[]
   website: string | null; // filled in M2
+  // Website provenance (sibling-column convention, cf. status_source_url /
+  // total_raised_source_url; pipeline models.py). website_source is a short
+  // source-type tag ('wikidata' | 'news_outbound' | 'vc_portfolio') set by
+  // resolve-website-fallback; website_source_url is the specific attributing URL
+  // (the Wikidata entity page, the sourcing article, the VC portfolio page). The
+  // detail page renders an inline source superscript from website_source_url and
+  // a source-type label from website_source. Both NULL for the legacy cohort.
+  // Optional (`?`), not just nullable — matching the migration-order-free
+  // pattern below: select("*") returns them when present, and absent/undefined
+  // simply omits the affordance rather than fabricating a source. Treat
+  // undefined as null.
+  website_source?: string | null;
+  website_source_url?: string | null;
   logo_url: string | null; // filled in M2
   hq_city: string | null;
   hq_state: string | null;
