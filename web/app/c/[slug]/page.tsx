@@ -40,6 +40,7 @@ import { Investors } from "@/components/Investors";
 import { Competitors } from "@/components/Competitors";
 import { RelatedCompanies } from "@/components/RelatedCompanies";
 import { RssLink } from "@/components/RssLink";
+import { ProvenancePanel } from "@/components/ProvenancePanel";
 import { Sources } from "@/components/Sources";
 
 // At or above this many consecutive failed homepage scrapes, the detail page
@@ -714,6 +715,17 @@ export default async function CompanyPage({ params }: Props) {
           )}
         </section>
       )}
+
+      {/* ── Data & provenance (PR 2) ───────────────────────────────────────
+          A trust-builder above the Sources list: a positive-only "documented"
+          badge (gated on completeness_score, hidden below threshold — never a
+          data-gap badge), a read-time "Last verified N days ago" freshness line,
+          and a sourcing line anchor-linking down to the Sources section. Each
+          part self-omits, and the panel renders nothing when none applies, so it
+          degrades cleanly when the completeness/freshness columns are absent
+          pre-migration (select("*") omits unknown columns). hasSources gates the
+          sourcing line on the same citation list the Sources section renders. */}
+      <ProvenancePanel company={company} hasSources={citations.length > 0} />
 
       {/* ── Sources (D1: consolidated, labeled, at the bottom) ─────────── */}
       <Sources citations={citations} />
