@@ -50,13 +50,22 @@ export function SourceLink({ url, label }: Props): ReactElement | null {
       target="_blank"
       rel="noopener noreferrer"
       title={`${label} — source: ${host}`}
-      // Deliberately the faintest muted token + a 10px superscript glyph: it
-      // must read as a quiet affordance beside the figure, never compete with
-      // it. Brightens one step on hover so it's discoverable without shouting.
-      className="ml-0.5 align-super text-[10px] leading-none text-ink-faint no-underline hover:text-ink-muted"
+      // Quiet muted affordance beside the figure — never competes with it, and
+      // brightens on hover. text-ink-muted (not the fainter -faint) so the ↗ —
+      // the SOLE visual cue that a source link exists — clears WCAG's 3:1
+      // non-text-contrast floor for an interactive control in both themes.
+      className="ml-0.5 text-ink-muted no-underline hover:text-ink"
     >
       <span className="sr-only">{`Source for ${label} (${host})`}</span>
-      <span aria-hidden>↗</span>
+      {/* Raised via position (not vertical-align: super, which is inert when the
+          link is a flex child — several of the four call sites are flex rows), so
+          the glyph reads as a superscript consistently everywhere. */}
+      <span
+        aria-hidden
+        className="relative -top-[0.35em] text-[10px] leading-none"
+      >
+        ↗
+      </span>
     </a>
   );
 }

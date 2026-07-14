@@ -125,6 +125,13 @@ describe("citationSourceType", () => {
     expect(citationSourceType("not a url")).toBeNull();
   });
 
+  it("omits the label for a non-http(s) scheme (mirrors SourceLink)", () => {
+    // new URL('ftp://techcrunch.com/x') parses and yields a hostname, but it is
+    // not a real web source — no source-type tag (and no dead label).
+    expect(citationSourceType("ftp://techcrunch.com/wire")).toBeNull();
+    expect(citationSourceType("ws://techcrunch.com/live")).toBeNull();
+  });
+
   it("uses website_source as ground truth for the website-provenance URL", () => {
     // A VC-portfolio page host isn't otherwise inferable; the website_source
     // enum is the only reliable signal, so it overrides host inference.

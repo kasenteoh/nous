@@ -419,6 +419,14 @@ export default async function CompanyPage({ params }: Props) {
       url: company.status_source_url,
     });
   }
+  // Website provenance: how nous learned the company's site (a Wikidata entity
+  // page / a sourcing article / a VC portfolio page). Cited like the other facts
+  // — consistent with total-raised/status having both an inline superscript and a
+  // Sources row — and it is what makes the "Website / Wikidata / VC portfolio"
+  // source-type labels reachable (the label override keys on this URL's host).
+  if (company.website_source_url) {
+    citations.push({ label: "Website", url: company.website_source_url });
+  }
 
   return (
     <main className="flex-1 px-6 py-12 max-w-4xl mx-auto w-full">

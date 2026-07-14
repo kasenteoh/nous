@@ -102,6 +102,17 @@ export function citationSourceType(
     websiteSourceUrl?: string | null;
   } = {},
 ): SourceType | null {
+  // Only ever label a real web source. new URL() accepts exotic schemes (ftp:,
+  // ws:, file:) that still yield a hostname; reject non-http(s) here — matching
+  // SourceLink's sourceHost — so an odd-scheme URL never gets a source-type tag.
+  let protocol: string;
+  try {
+    protocol = new URL(url).protocol;
+  } catch {
+    return null;
+  }
+  if (protocol !== "http:" && protocol !== "https:") return null;
+
   const host = hostname(url);
   if (!host) return null;
 
@@ -219,11 +230,13 @@ export function Sources({
             >
               {row.host}
             </a>
-            {/* Muted source-type tag, kept subordinate to the hostname link
-                (fainter, no underline). Omitted when the type can't be
-                confidently inferred — never a guessed attribution. */}
+            {/* Muted source-type tag — subordinate to the hostname link (no
+                underline) but at text-ink-muted so this readable, informational
+                label stays legible (the fainter -faint is ~1.4:1 on light).
+                Omitted when the type can't be confidently inferred — never a
+                guessed attribution. */}
             {row.type && (
-              <span className="text-xs text-ink-faint">· {row.type}</span>
+              <span className="text-xs text-ink-muted">· {row.type}</span>
             )}
           </li>
         ))}
