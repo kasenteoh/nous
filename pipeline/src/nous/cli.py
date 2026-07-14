@@ -1784,6 +1784,40 @@ def data_quality_cmd() -> None:
     asyncio.run(_run())
 
 
+@cli.command("career-history-probe")
+@click.option(
+    "--sample",
+    type=int,
+    default=300,
+    help=(
+        "How many top-funded shown companies to run the Tier-2 regex over IN "
+        "PYTHON for the precision-corrected named-prior rate + example captures."
+    ),
+)
+def career_history_probe_cmd(sample: int) -> None:
+    """Measure NAMED prior-employer signal in scraped bios (read-only, no LLM).
+
+    The $0 gate before any talent-flow LLM spend: a phrase-regex census over the
+    shown cohort's raw_pages. Extracts nothing, writes nothing, no pipeline_runs
+    row (mirrors db-stats / data-quality). Emits a report to the step summary.
+    """
+    import asyncio
+
+    from nous.db.session import AsyncSessionLocal
+    from nous.pipeline.career_history_probe import (
+        emit_career_history_probe_summary,
+        run_career_history_probe,
+    )
+
+    async def _run() -> None:
+        async with AsyncSessionLocal() as session:
+            summary = await run_career_history_probe(session, sample=sample)
+        click.echo(summary.model_dump_json(indent=2))
+        emit_career_history_probe_summary(summary)
+
+    asyncio.run(_run())
+
+
 @cli.command("judge-eligibility")
 @click.option(
     "--limit",
