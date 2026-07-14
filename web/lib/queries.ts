@@ -30,9 +30,11 @@ import type {
   HuskFallbackRow,
   InvestorDetail,
   InvestorListRow,
+  InvestorPortfolioMomentum,
   InvestorRoundRow,
   InvestorSlugRow,
   MomentumCompany,
+  PortfolioMomentumCompany,
   NamedAlternative,
   NewsArticleRow,
   PersonRow,
@@ -43,6 +45,9 @@ import type {
   ThemeMember,
   ThemeRound,
 } from "@/lib/types";
+// The badge threshold is the single source of truth for "heating up" — reused
+// here so the portfolio-momentum count and the per-company badge agree.
+import { MOMENTUM_BADGE_THRESHOLD } from "@/components/MomentumBadge";
 
 /**
  * The server Supabase client, or null when Supabase is intentionally absent
@@ -3776,6 +3781,131 @@ export async function getCoInvestors(slug: string): Promise<CoInvestor[]> {
     const f = firmById.get(r.id);
     return f ? [{ slug: f.slug, name: f.name, sharedRounds: r.sharedRounds }] : [];
   });
+}
+
+// How many portfolio companies to pull per link path before aggregating — a
+// bound so a mega-fund's thousands of links stay cheap. The momentum aggregate
+// over the cap is representative; flagged rather than silently unbounded.
+const PORTFOLIO_MOMENTUM_FETCH_CAP = 2000;
+const TOP_HEATING_UP = 5;
+
+// Nested company shape from the two portfolio link-path embeds.
+interface NestedMomentumCompany {
+  slug: string | null;
+  name: string | null;
+  momentum_score: number | null;
+  momentum_why: string[] | null;
+  exclusion_reason?: string | null;
+}
+
+/**
+ * Portfolio momentum for /investor/[slug]: aggregate the pipeline
+ * `momentum_score` (#181) across this investor's DISTINCT shown portfolio
+ * companies — unioned over BOTH link paths (`company_investors` +
+ * `funding_round_investors` → `funding_rounds` → `companies`) and deduped by
+ * slug — and surface how many are "heating up" plus the hottest few. $0,
+ * read-time, no new data; turns the flat portfolio list into a signal.
+ *
+ * Migration-order-free: `momentum_score` is migration 0039 (already on prod),
+ * but a query error still degrades to null → the section hides. Returns an
+ * object (with `scoredCount` possibly 0) on success; null on missing env / a
+ * hard failure. Both embeds are unambiguous (each join table has ONE FK to its
+ * target), so no FK hint is needed.
+ */
+export async function getInvestorPortfolioMomentum(
+  slug: string,
+): Promise<InvestorPortfolioMomentum | null> {
+  const supabase = supabaseOrNull("getInvestorPortfolioMomentum");
+  if (!supabase) return null;
+
+  const { data: investor, error: investorError } = await supabase
+    .from("investors")
+    .select("id")
+    .eq("slug", slug)
+    .single();
+  if (investorError || !investor) {
+    if (investorError?.code !== "PGRST116") {
+      console.error(
+        "[getInvestorPortfolioMomentum] investor lookup failed:",
+        investorError?.message,
+      );
+    }
+    return null;
+  }
+  const investorId = investor.id as string;
+
+  const cols = "slug, name, momentum_score, momentum_why, exclusion_reason";
+  const [direct, viaRounds] = await Promise.all([
+    supabase
+      .from("company_investors")
+      .select(`companies(${cols})`)
+      .eq("investor_id", investorId)
+      .limit(PORTFOLIO_MOMENTUM_FETCH_CAP),
+    supabase
+      .from("funding_round_investors")
+      .select(`funding_rounds(companies(${cols}))`)
+      .eq("investor_id", investorId)
+      .limit(PORTFOLIO_MOMENTUM_FETCH_CAP),
+  ]);
+  // Degrade only when BOTH paths fail; a single failure still yields a partial
+  // (honest, smaller) aggregate rather than hiding the section entirely.
+  if (direct.error && viaRounds.error) {
+    console.error(
+      "[getInvestorPortfolioMomentum] portfolio queries failed:",
+      direct.error.message,
+    );
+    return null;
+  }
+
+  // Union distinct SHOWN, SCORED companies by slug (first occurrence wins — the
+  // same company via both paths carries the same score).
+  const bySlug = new Map<string, PortfolioMomentumCompany>();
+  const consider = (c: NestedMomentumCompany | null): void => {
+    if (!c?.slug || !c.name || c.exclusion_reason) return;
+    if (c.momentum_score == null || bySlug.has(c.slug)) return;
+    bySlug.set(c.slug, {
+      slug: c.slug,
+      name: c.name,
+      momentumScore: Number(c.momentum_score),
+      momentumWhy: Array.isArray(c.momentum_why) ? c.momentum_why : [],
+    });
+  };
+  for (const row of (direct.data ?? []) as {
+    companies: NestedMomentumCompany | NestedMomentumCompany[] | null;
+  }[]) {
+    consider(Array.isArray(row.companies) ? row.companies[0] : row.companies);
+  }
+  for (const row of (viaRounds.data ?? []) as {
+    funding_rounds:
+      | { companies: NestedMomentumCompany | NestedMomentumCompany[] | null }
+      | { companies: NestedMomentumCompany | NestedMomentumCompany[] | null }[]
+      | null;
+  }[]) {
+    const fr = Array.isArray(row.funding_rounds)
+      ? row.funding_rounds[0]
+      : row.funding_rounds;
+    if (!fr) continue;
+    consider(Array.isArray(fr.companies) ? fr.companies[0] : fr.companies);
+  }
+
+  const scored = [...bySlug.values()];
+  const scoredCount = scored.length;
+  const heatingUp = scored
+    .filter((c) => c.momentumScore >= MOMENTUM_BADGE_THRESHOLD)
+    .sort(
+      (a, b) => b.momentumScore - a.momentumScore || a.name.localeCompare(b.name),
+    );
+  const meanMomentum =
+    scoredCount > 0
+      ? scored.reduce((sum, c) => sum + c.momentumScore, 0) / scoredCount
+      : null;
+
+  return {
+    scoredCount,
+    heatingUpCount: heatingUp.length,
+    meanMomentum,
+    topHeatingUp: heatingUp.slice(0, TOP_HEATING_UP),
+  };
 }
 
 // ─── Themes (Wave 3 E-3) ───────────────────────────────────────────────────────

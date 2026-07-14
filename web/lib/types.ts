@@ -457,6 +457,28 @@ export interface CoInvestor {
   sharedRounds: number;
 }
 
+/** One heating-up portfolio company for the investor-page momentum lens. */
+export interface PortfolioMomentumCompany {
+  slug: string;
+  name: string;
+  momentumScore: number;
+  momentumWhy: string[];
+}
+
+/**
+ * Aggregate momentum across an investor's portfolio — the "which of this
+ * investor's bets are accelerating right now" lens, computed read-time from the
+ * companies' pipeline momentum_score (migration 0039 / #181). `scoredCount` is
+ * the distinct shown portfolio companies that actually have a score; the
+ * section is hidden when it's zero.
+ */
+export interface InvestorPortfolioMomentum {
+  scoredCount: number;
+  heatingUpCount: number;
+  meanMomentum: number | null;
+  topHeatingUp: PortfolioMomentumCompany[];
+}
+
 // ─── Themes (Wave 3 E-3) ───────────────────────────────────────────────────────
 
 /**

@@ -4,9 +4,14 @@ export const revalidate = 21600;
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { getCoInvestors, getInvestorBySlug } from "@/lib/queries";
+import {
+  getCoInvestors,
+  getInvestorBySlug,
+  getInvestorPortfolioMomentum,
+} from "@/lib/queries";
 import { formatDate, formatUsd, formatUsdExact } from "@/lib/format";
 import { CompanyCard } from "@/components/CompanyCard";
+import { PortfolioMomentum } from "@/components/PortfolioMomentum";
 import { RssLink } from "@/components/RssLink";
 
 type Props = {
@@ -105,10 +110,15 @@ export default async function InvestorPage({ params, searchParams }: Props) {
     notFound();
   }
 
-  // Co-investor signal (Task C5): firms that frequently appear on the same
-  // rounds. Fetched after the existence check; degrades to [] when this firm
-  // shares no rounds (the section then renders nothing).
-  const coInvestors = await getCoInvestors(slug);
+  // Depth lenses, fetched in parallel after the existence check:
+  //  - co-investor signal (Task C5): firms frequently on the same rounds → []
+  //    when this firm shares none.
+  //  - portfolio momentum (#5): how many of the portfolio are heating up → null
+  //    when nothing is scored/hot (both sections then render nothing).
+  const [coInvestors, portfolioMomentum] = await Promise.all([
+    getCoInvestors(slug),
+    getInvestorPortfolioMomentum(slug),
+  ]);
 
   const { name, type, description, website, portfolioCount, portfolioTotal, rounds } =
     investor;
@@ -217,6 +227,9 @@ export default async function InvestorPage({ params, searchParams }: Props) {
           />
         </div>
       </header>
+
+      {/* ── Portfolio momentum: which of this investor's bets are heating up ── */}
+      <PortfolioMomentum momentum={portfolioMomentum} />
 
       {/* ── Portfolio (paginated, 30/page — mirrors /companies) ─────────────── */}
       <section className="mb-12">

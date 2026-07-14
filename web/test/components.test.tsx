@@ -9,6 +9,7 @@ import {
   MomentumBadge,
 } from "@/components/MomentumBadge";
 import { FounderBackground } from "@/components/FounderBackground";
+import { PortfolioMomentum } from "@/components/PortfolioMomentum";
 import { RelatedCompanies } from "@/components/RelatedCompanies";
 import { Sources } from "@/components/Sources";
 import { StatusBadge } from "@/components/StatusBadge";
@@ -788,5 +789,57 @@ describe("FounderBackground", () => {
     );
     expect(screen.getByText(/until 2014/)).toBeInTheDocument();
     expect(screen.queryByText(/\?/)).toBeNull();
+  });
+});
+
+// ─── PortfolioMomentum ────────────────────────────────────────────────────────
+
+describe("PortfolioMomentum", () => {
+  it("renders nothing when null or nothing is heating up", () => {
+    const { container, rerender } = render(<PortfolioMomentum momentum={null} />);
+    expect(container).toBeEmptyDOMElement();
+    rerender(
+      <PortfolioMomentum
+        momentum={{ scoredCount: 5, heatingUpCount: 0, meanMomentum: 0.5, topHeatingUp: [] }}
+      />,
+    );
+    expect(container).toBeEmptyDOMElement();
+  });
+
+  it("summarizes the heating-up count and links the hot companies with their why", () => {
+    render(
+      <PortfolioMomentum
+        momentum={{
+          scoredCount: 42,
+          heatingUpCount: 2,
+          meanMomentum: 0.61,
+          topHeatingUp: [
+            { slug: "rocket", name: "Rocket", momentumScore: 0.9, momentumWhy: ["news +180%"] },
+            { slug: "surge", name: "Surge", momentumScore: 0.8, momentumWhy: [] },
+          ],
+        }}
+      />,
+    );
+    expect(screen.getByText(/2 of 42 scored portfolio companies heating up/)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Rocket" })).toHaveAttribute("href", "/c/rocket");
+    expect(screen.getByText("news +180%")).toBeInTheDocument();
+  });
+
+  it("pluralizes the noun on the denominator (1 of 42 → 'companies')", () => {
+    render(
+      <PortfolioMomentum
+        momentum={{
+          scoredCount: 42,
+          heatingUpCount: 1,
+          meanMomentum: 0.55,
+          topHeatingUp: [
+            { slug: "solo", name: "Solo", momentumScore: 0.9, momentumWhy: [] },
+          ],
+        }}
+      />,
+    );
+    expect(
+      screen.getByText(/1 of 42 scored portfolio companies heating up/),
+    ).toBeInTheDocument();
   });
 });
