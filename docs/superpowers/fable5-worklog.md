@@ -1213,3 +1213,35 @@ Makes the "every fact is sourced" moat a visible feature (see
 - **Shared debt noted:** `momentum_score` has the identical exit-cohort staleness
   (its badge renders for husks that lost their signal) — accepted for momentum,
   but worth revisiting if it ever reads as a trust claim.
+
+## PR #192 — feat(web): Data & provenance panel on /c/[slug] (merged 2026-07-14)
+
+ROADMAP **Later #1 (Provenance UI)**, PR **2 of 3** — the web half's first
+surface. A "Data & provenance" panel on `/c/[slug]` that makes the moat visible,
+reading PR 1's stored `completeness_score` (#191) — the web never re-derives the
+scorer.
+- New `ProvenancePanel` server component (rendered just before `<Sources>`):
+  **positive-only completeness badge** (`≥0.75` "Richly documented", `0.5–0.75`
+  "Well documented", `<0.5`/null → no badge — never a negative gap badge);
+  **"Last verified N days ago"** = read-time MAX over the present freshness stamps
+  (`last_enriched_at` + the `*_checked_at`/`_resolved_at` columns), `title` = exact
+  date, omitted when none present; a **sourcing line** anchor-linking to
+  `#sources`. Omit-when-empty; muted `MomentumBadge`/`StatusBadge` vocabulary,
+  light+dark tokens. Shared exported thresholds (`COMPLETENESS_WELL/RICH_THRESHOLD`
+  + `completenessLabel()`), mirroring `MOMENTUM_BADGE_THRESHOLD`.
+- **Migration-order-free:** `getCompanyBySlug` unchanged (`.select("*")` picks up
+  the new columns post-migration); `CompanyRow` gains 7 optional+nullable fields;
+  absent columns → panel hides.
+- **Trust-safety fix (adversarial review, 3 dims → verify):** `hasSources` was
+  gated on raw `citations.length > 0`, which diverged from what `<Sources>`
+  renders — it drops citations whose URL fails `new URL()`, and the pipeline
+  stores scheme-less bare domains (`company.website` = `acme.com`, the
+  total_raised / leadership source fallback). A company whose only citations were
+  unparseable showed "every figure links to a recorded source" pointing at a
+  `#sources` anchor that didn't exist (dead link + false claim). Fixed by
+  exporting `hasRenderableCitations()` — the SAME `hostname()`-survival predicate
+  `<Sources>` filters on — and gating on it.
+  Verified: npm lint + test (**352 passed**) + build.
+- **Next (PR 3/3):** granular per-fact source superscripts next to each sourced
+  figure, source-type labels in `Sources`, and `extraction_confidence` tooltips
+  on funding rounds (visible pill only for `low`).
