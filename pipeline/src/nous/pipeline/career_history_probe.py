@@ -255,7 +255,7 @@ async def run_career_history_probe(
                     select(Company.id)
                     .where(Company.exclusion_reason.is_(None))
                     .where(exists().where(RawPage.company_id == Company.id))
-                    .order_by(nulls_last(Company.latest_round_amount.desc()))
+                    .order_by(nulls_last(Company.latest_round_amount.desc()), Company.id)
                     .limit(sample)
                 )
             )
