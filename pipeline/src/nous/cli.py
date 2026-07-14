@@ -1818,6 +1818,58 @@ def career_history_probe_cmd(sample: int) -> None:
     asyncio.run(_run())
 
 
+@cli.command("extract-career-history")
+@click.option(
+    "--limit",
+    type=int,
+    default=20,
+    show_default=True,
+    help="Max shown companies (with a roster + pages) to extract; bounds LLM spend.",
+)
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    default=False,
+    help=(
+        "Run the extraction over the slice and print the yield table WITHOUT "
+        "writing (the only supported mode today — the persisting apply path "
+        "lands with migration 0040 / career_moves)."
+    ),
+)
+def extract_career_history_cmd(limit: int | None, dry_run: bool) -> None:
+    """Extract founders' PRIOR employers (talent-flow rider) — DeepSeek, paid.
+
+    The bounded LLM half of the "founder background" rider. ``--dry-run``
+    measures extraction quality (roster-match rate, off-roster fabrication
+    proxy, example moves, and the $ spend via the usage ledger) over a bounded,
+    prominence-ordered slice and writes nothing — the husk-style evidence gate
+    before the persisting pipeline is built. Cost ≈ $0.0025/company.
+    """
+    import asyncio
+
+    from nous.db.session import AsyncSessionLocal
+    from nous.observability import emit_run_telemetry, write_step_summary
+    from nous.pipeline.extract_career_history import (
+        render_yield_table,
+        run_extract_career_history,
+    )
+
+    async def _run() -> None:
+        # emit_run_telemetry in finally so the LLM $ table is written even if the
+        # stage raises mid-run (the ledger accrues per successful call).
+        try:
+            async with AsyncSessionLocal() as session:
+                summary = await run_extract_career_history(
+                    session, limit=limit, dry_run=dry_run
+                )
+            click.echo(summary.model_dump_json(indent=2))
+            write_step_summary(render_yield_table(summary))
+        finally:
+            emit_run_telemetry("extract-career-history")
+
+    asyncio.run(_run())
+
+
 @cli.command("judge-eligibility")
 @click.option(
     "--limit",

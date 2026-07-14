@@ -1,0 +1,89 @@
+name: extract-career-history
+
+# Manual lever for the talent-flow "founder background" extraction, against the
+# production DB. This is the ONE owner-approved PAID (DeepSeek) line beyond
+# enrichment — hence DEEPSEEK_API_KEY in env, unlike the $0 career-history-probe.
+# No local environment holds DATABASE_URL or the DeepSeek key, so Actions is the
+# only place this runs against real companies.
+#
+# TODAY only the DRY-RUN path is wired: it runs the extraction over a bounded,
+# prominence-ordered slice, roster-matches the result, and prints a yield table
+# (roster-match rate + off-roster fabrication proxy + example moves + the $
+# spend) WITHOUT writing anything — the husk-style evidence gate before the
+# persisting pipeline (migration 0040 / career_moves) is built. Dispatching with
+# dry_run=false fails loudly until that apply path lands.
+#
+# Cost: ~$0.0025/company (one call, ~8k in + ~300 out). A 20-company dry run is
+# ~$0.05; the eventual full ~2,600-company backfill ~$6.50. The exact spend is
+# printed by observability.emit_run_telemetry in the step summary.
+#
+# Example (20-company dry run — the default):
+#   gh workflow run extract-career-history.yml -f dry_run=true -f limit=20
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Dry run: extract + print the yield table without writing (only supported mode today)."
+        required: false
+        type: boolean
+        default: true
+      limit:
+        description: "Max shown companies (with a roster + pages) to extract."
+        required: false
+        type: string
+        default: "20"
+
+permissions:
+  contents: read
+
+# The apply path will mutate career_moves — serialize with every other
+# DB-touching workflow (the cron, discovery, ops) even though the dry run only
+# reads, so it never contends for the free-tier connection pool.
+concurrency:
+  group: nous-pipeline-db
+  cancel-in-progress: false
+
+jobs:
+  extract-career-history:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: pipeline
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      # The PAID line: the extraction calls DeepSeek per company. The key lives
+      # only in Actions secrets (never locally), the same as enrichment.
+      DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39 # v3
+
+      - name: Install dependencies
+        run: uv sync
+
+      - name: Apply migrations
+        # Keeps prod at head before the run. Safe: only migrations already merged
+        # to the default branch exist in this checkout.
+        run: uv run alembic upgrade head
+
+      - name: Run extract-career-history
+        env:
+          OP_DRY_RUN: ${{ inputs.dry_run }}
+          OP_LIMIT: ${{ inputs.limit }}
+        # Inputs pass through env vars (never string-interpolated into the
+        # script). The stage writes its markdown yield table + LLM-usage block to
+        # $GITHUB_STEP_SUMMARY itself; the JSON summary lands in the run log.
+        # pipefail so a failing `uv run` surfaces as a failed step.
+        run: |
+          set -o pipefail
+          ARGS=(--limit "${OP_LIMIT:-20}")
+          if [ "$OP_DRY_RUN" = "true" ]; then ARGS+=(--dry-run); fi
+          uv run nous extract-career-history "${ARGS[@]}"
