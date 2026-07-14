@@ -234,7 +234,8 @@ def build_why(
         if funding_days < 7:
             why.append("raised this week")
         elif funding_days < FUNDING_WHY_MONTHS_CUTOFF_DAYS:
-            why.append(f"raised {round(funding_days / 7)}wks ago")
+            weeks = round(funding_days / 7)
+            why.append(f"raised {weeks}wk{'s' if weeks != 1 else ''} ago")
         else:
             why.append(f"raised {round(funding_days / 30)}mo ago")
     # C — headcount (0.15): team growth over the window (only if it moved).
