@@ -27,17 +27,17 @@ found named pedigrees too thin/non-catalog for a graph). Five PRs, husk-style
 - **#189** — live DeepSeek golden re-recording (grounding **1.0**, empty_accuracy
   0.937 — the gate now reflects reality).
 
-**Prod data:** the apply path is proven (20 + 500 companies backfilled so far →
-**~1,365 career_moves rows, ~180 in-catalog links, 0 persisted fabrication,
-~$0.71**). A **backfill drain loop is running** (dispatch `extract-career-history.yml
--f dry_run=false -f limit=500` repeatedly until `companies_seen < 500`);
-prominence-ordered, so marquee companies are done first. Steady-state re-extraction
-is **dispatch-only** (no cron wiring, deliberately — a bump of `PROMPT_VERSION`
-re-selects everyone; empties are stamped so they don't re-bill). Cost is
-~$0.0013/company — the full cohort lands well under the ~$6.50 estimate.
-**To finish/resume the backfill:** dispatch more `-f dry_run=false -f limit=500`
-batches until a run reports `companies_seen < 500`. The web section appears on
-each `/c/[slug]` after the 6h ISR revalidation once its rows exist.
+**Prod data — backfill COMPLETE.** The whole cohort is drained (827 companies
+that have BOTH a leadership roster and scraped pages — the last batch saw
+307 < 500, so nothing unstamped remains): **2,106 career_moves rows, 264
+in-catalog `prior_company_id` links, 0 persisted fabrication, $1.10 total**
+(~$0.0013/company — well under the ~$6.50 estimate; the cohort was smaller than
+the 2,210-with-pages because it also requires a `people` roster). Steady-state
+re-extraction is **dispatch-only** (no cron wiring, deliberately — a bump of
+`PROMPT_VERSION` re-selects everyone; empties are stamped so they don't re-bill),
+and as scrape/enrich coverage grows, new roster+page companies are picked up by
+re-dispatching `extract-career-history.yml -f dry_run=false -f limit=500`. The
+web section appears on each `/c/[slug]` after the 6h ISR revalidation.
 
 **Gotcha logged (career_moves apply):** a per-company `session.rollback()`
 expires the WHOLE identity map (independent of `expire_on_commit`), so the loop
