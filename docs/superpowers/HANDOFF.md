@@ -8,6 +8,42 @@ for the detail behind the Latest-update block below), then the two plan docs
 under `docs/superpowers/plans/` (2026-07-10 improvement plan; 2026-07-11
 hygiene + Wave 3). `BACKLOG.md` is annotated with what shipped.
 
+## LATEST UPDATE — Provenance UI PR 1/3 SHIPPED (2026-07-14, PR #191)
+
+ROADMAP **Later #1 (Provenance UI)** is now **IN PROGRESS** — the owner-approved
+3-PR build that makes the "every fact is sourced" moat a visible feature on
+`/c/[slug]`. The authoritative spec is
+`docs/superpowers/specs/2026-07-14-provenance-ui-design.md` (framing, data
+inventory, locked decisions, the optional DeepSeek source-verification
+enhancement). Framing (load-bearing): a **trust-builder, never a data-gap
+advertiser** — completeness ≠ trustworthiness; the badge is positive-only and
+hidden below threshold.
+
+**PR #191 (PR 1/3 — pipeline, $0):** the stored completeness score.
+- **Migration head is now 0042** (`companies.completeness_score` Float +
+  `completeness_computed_at`; off 0041). No index (per-company page read).
+- New **`compute-completeness`** stage writes it for every *shown* company via
+  `util.completeness` (THE scorer — the web must NOT re-derive it in TS); wired
+  into `discovery.yml` after `compute-momentum` with an `id` (deploy-gate). $0,
+  deterministic, idempotent. Extracted `completeness_fields()` as the single
+  raw→flags mapping (data_quality refactored onto it).
+- **Gotcha / design note:** a company that EXITS the shown cohort (loses both
+  description and funding, or becomes excluded) has its `completeness_score`
+  cleared to NULL — a deliberate divergence from `compute-momentum` so a stale
+  "richly documented" badge can never render (a false trust claim). `momentum_score`
+  has the same exit-cohort staleness and does NOT clear (accepted; noted as
+  shared debt if it ever reads as a trust claim).
+
+**Next (PRs 2 & 3 — independent web PRs, both read PR 1's column + existing
+`getCompanyBySlug`, run in parallel):** PR 2 the `/c/[slug]` "Data & provenance"
+panel (positive-only badge ≥0.5, "last verified N days ago" = read-time MAX of
+the `*_checked_at` stamps, sourcing line); PR 3 granular per-fact source
+superscripts + source-type labels + `extraction_confidence` tooltips.
+`getCompanyBySlug` uses `.select("*")`, so PR 1's column is picked up
+automatically post-migration (naturally migration-order-free). The **optional
+DeepSeek source-verification** pass (spec) is a separate, larger, husk-style bet
+AFTER the MVP — not folded in.
+
 ## LATEST UPDATE — talent-flow "founder background" rider SHIPPED (2026-07-14, PRs #185–#189)
 
 ROADMAP Next **#4 (talent-flow) is BUILT** — as the evidence-gated per-company
