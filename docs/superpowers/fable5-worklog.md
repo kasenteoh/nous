@@ -1327,7 +1327,7 @@ article again PLUS every outlet's near-duplicate article, each a separate entry
   classification) for exact grouping; the a11y token/focus-ring pass now also
   covers the disclosure.
 
-## PR #195 — a11y: lift de-emphasized text to WCAG AA contrast (open — pending owner visual review)
+## PR #195 — a11y: lift de-emphasized text to WCAG AA contrast (merged 2026-07-14)
 
 The system-wide a11y pass the #193/#194 reviews flagged (owner-requested).
 De-emphasized text tokens were below WCAG AA (4.5:1) for text.
@@ -1348,5 +1348,5 @@ De-emphasized text tokens were below WCAG AA (4.5:1) for text.
   uses); the brand `--accent` as link text (~4.36:1, marginally under) is a
   separate deferred token decision (BACKLOG). Verified: lint + 393 tests + build;
   the diff was reviewed line-by-line (all 15 KEEPs confirmed untouched, no
-  border/`--edge`/`--accent` change). **A visual change tests can't verify —
-  opened for owner review of the Vercel preview before merge.**
+  border/`--edge`/`--accent` change). **A visual change tests can't verify — the
+  owner reviewed the Vercel preview and approved before merge.**
