@@ -42,6 +42,41 @@ class CompletenessFields(BaseModel):
     has_employees: bool = False  # an employee-count range
 
 
+def completeness_fields(
+    *,
+    website: str | None,
+    description_short: str | None,
+    funding_round_count: int,
+    hq_country: str | None,
+    hq_city: str | None,
+    industry_group: str | None,
+    has_people: bool,
+    logo_url: str | None,
+    tags: list[str] | None,
+    employee_count_min: int | None,
+    employee_count_max: int | None,
+) -> CompletenessFields:
+    """Map a company's raw field values to its :class:`CompletenessFields`.
+
+    The single presence-mapping used everywhere a completeness score is derived
+    (the data-quality report AND the stored compute-completeness column), so the
+    two can never drift. Takes primitives, not a ``Company`` row, to keep this
+    module pure and DB-free (unit-testable). ``has_people`` is passed in because
+    it needs a separate people query the caller already has.
+    """
+    return CompletenessFields(
+        has_website=website is not None,
+        has_description=description_short is not None,
+        has_funding=funding_round_count > 0,
+        has_location=hq_country is not None or hq_city is not None,
+        has_industry=industry_group is not None,
+        has_people=has_people,
+        has_logo=logo_url is not None,
+        has_tags=bool(tags),
+        has_employees=employee_count_min is not None or employee_count_max is not None,
+    )
+
+
 def completeness_score(fields: CompletenessFields) -> float:
     """Weighted 0..1 completeness score. 0 = husk (nothing), 1 = fully complete."""
     present = fields.model_dump()

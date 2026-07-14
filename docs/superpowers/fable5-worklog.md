@@ -1175,3 +1175,41 @@ data/LLM.
   Verified: npm lint + test (336 passed) + build.
 - **Follow-ups (BACKLOG):** "who's leading rounds in industry X right now" (a
   separate industry-page surface); a global co-investment meta-graph.
+
+## PR #191 — feat(pipeline): stored completeness score for the web provenance badge (merged 2026-07-14)
+
+ROADMAP **Later #1 (Provenance UI)**, PR **1 of 3** — the $0 pipeline half that
+lets the web render a completeness badge without re-implementing scoring in TS.
+Makes the "every fact is sourced" moat a visible feature (see
+`docs/superpowers/specs/2026-07-14-provenance-ui-design.md`).
+- **Migration 0042** (hand-written, off head 0041): `companies.completeness_score`
+  (Float 0..1) + `completeness_computed_at`. No index — read per-company for a
+  page badge, never a WHERE/ORDER BY key (unlike `momentum_score`'s leaderboard).
+  Up→down→up round-trip container-verified on `pgvector/pgvector:pg15`.
+- **`compute-completeness` stage** — writes the score for every *shown* company
+  (same cohort as `compute-momentum`) via `util.completeness` (THE scorer the
+  data-quality report already aggregates — no second implementation). $0,
+  deterministic, idempotent, batched `begin_nested` commits mirroring
+  `compute-momentum`. Wired into `discovery.yml` after momentum with an `id` so a
+  fresh score triggers the Vercel deploy gate (rendered surface).
+- **Single source of truth** — extracted `completeness_fields()` (pure,
+  primitives only) as the one raw→flags mapping; refactored `data_quality.py`
+  onto it so the stored column and the internal report can't drift (its DB test
+  stayed green — behavior-equivalent).
+- **Trust-safety (from adversarial review):** a company that EXITS the shown
+  cohort (loses both description and funding, or becomes excluded) has its score
+  cleared to NULL, so a stale "richly documented" badge can never render — a
+  deliberate divergence from `compute-momentum` (a stale momentum chip is benign;
+  a stale provenance claim is a false trust claim). The clear-stale UPDATE's WHERE
+  is the exact negation of the scoring SELECT's shown predicate (factored into
+  `_shown_predicate()` so they can't drift).
+- Adversarially reviewed (4 dimensions → per-finding verify): 3 confirmed nits,
+  all addressed (the exit-cohort clearing above + two doc-accuracy fixes).
+  Verified: ruff + mypy + pytest (**1714 passed**, full suite with DB attached);
+  migration round-trip + real-CLI smoke (full→1.0, thin→0.20, mean 0.6).
+- **Next (PRs 2 & 3, independent web PRs):** the "Data & provenance" panel on
+  `/c/[slug]` (positive-only badge, "last verified", sourcing line); granular
+  per-fact source superscripts + source-type labels + confidence tooltips.
+- **Shared debt noted:** `momentum_score` has the identical exit-cohort staleness
+  (its badge renders for husks that lost their signal) — accepted for momentum,
+  but worth revisiting if it ever reads as a trust claim.

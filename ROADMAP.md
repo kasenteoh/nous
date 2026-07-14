@@ -92,9 +92,10 @@ cleverly → make correctness visible.
    issue link resolves). The human-in-the-loop correction signal is live.
 
 5. **Per-company completeness / confidence score.** — **internal primitive
-   SHIPPED (#175)** (`util.completeness`, aggregated by the dashboard). Remaining:
-   wire it into husk-enrichment ordering, fold in `extraction_confidence`, and
-   expose a public trust badge (Later — provenance UI).
+   SHIPPED (#175)**; **stored for the web SHIPPED (#191)** (migration 0042 +
+   `compute-completeness` — Later #1 PR 1 of 3). Remaining: wire it into
+   husk-enrichment ordering, fold in `extraction_confidence`, and expose the
+   public trust badge (Later — provenance UI, PR 2).
 
 ---
 
@@ -157,10 +158,17 @@ Built on top of the now-trustworthy foundation.
 
 Depends on the foundation being solid, so genuinely later.
 
-1. **Provenance UI, made public.** Inline sources, "last verified,"
-   completeness/confidence badges on the profile — turn "we don't hallucinate"
-   from a claim into a *visible feature*. This is where data quality becomes a
-   distribution surface.
+1. **Provenance UI, made public.** — **IN PROGRESS** (owner-approved 3-PR split;
+   spec `docs/superpowers/specs/2026-07-14-provenance-ui-design.md`). Inline
+   sources, "last verified," completeness/confidence badges on the profile — turn
+   "we don't hallucinate" from a claim into a *visible feature*. This is where
+   data quality becomes a distribution surface. **PR 1 SHIPPED (#191):** the
+   stored `completeness_score` (migration 0042 + `compute-completeness`). **Next:**
+   PR 2 — the `/c/[slug]` "Data & provenance" panel (positive-only badge, "last
+   verified", sourcing line); PR 3 — granular per-fact source superscripts +
+   source-type labels + confidence tooltips. Framing: a **trust-builder**, never
+   a data-gap advertiser (completeness ≠ trustworthiness — the badge is
+   positive-only and hidden below threshold).
 
 2. **Sharpen AI-answer surfaces.** `llms.txt`, `/c/[slug].md`. As answer engines
    increasingly cite sources, "fully-sourced" is a structural advantage worth
