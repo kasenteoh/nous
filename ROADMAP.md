@@ -114,6 +114,14 @@ Built on top of the now-trustworthy foundation.
    already records weekly headcount + news velocity. Build detection on top:
    *accelerating* companies (hiring + news + funding cadence), "heating up this
    week." The single feature most likely to create a repeat power-user habit.
+   **Web surface landed (branch `fable5/momentum-web`):** `/trending` ("Heating
+   up") ranks by a `companies.momentum_score` the web only reads, with a
+   `🔥 Heating up` badge (threshold `MOMENTUM_BADGE_THRESHOLD = 0.65`), a
+   pipeline-authored "why" line, nav + footer + sitemap links; it degrades to an
+   empty state until the scorer ships. **Still pending:** the pipeline half —
+   migration 0039 (`momentum_score` + index, `momentum_computed_at`,
+   `momentum_why text[]`) and the detection stage that computes the score. The
+   page and badge light up automatically on the next revalidate once scores land.
 
 3. **Per-entity RSS/feeds — alerts without accounts.** Feeds scoped to an
    industry, an investor, or a single company — the existing `/feed.xml` pattern

@@ -30,6 +30,10 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
     { url: `${origin}/themes` },
     { url: `${origin}/industry` },
     { url: `${origin}/trends` },
+    // /trending is a permanent nav destination with a graceful empty state
+    // (same posture as /new), so it is listed unconditionally even before
+    // momentum_score lands on prod.
+    { url: `${origin}/trending` },
     { url: `${origin}/about` },
   ];
 

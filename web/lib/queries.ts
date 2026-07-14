@@ -31,6 +31,7 @@ import type {
   InvestorListRow,
   InvestorRoundRow,
   InvestorSlugRow,
+  MomentumCompany,
   NamedAlternative,
   NewsArticleRow,
   PersonRow,
@@ -1126,6 +1127,89 @@ export async function listIndustriesWithMapCoords(): Promise<string[]> {
     .filter(([, c]) => c >= MIN_MAP_NODE_COUNT)
     .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
     .map(([g]) => g);
+}
+
+// ─── Momentum / "heating up" (/trending, migration 0039) ──────────────────────
+
+/**
+ * Minimum momentum_score to surface on /trending. A floor, not the badge
+ * threshold (see MOMENTUM_BADGE_THRESHOLD). The pipeline's score is in [0,1]
+ * (0.5 = flat, higher = accelerating), so 0 lists every scored company; raise
+ * it once the distribution is known to hide flat/neutral rows.
+ */
+const MIN_MOMENTUM_SCORE = 0;
+
+/**
+ * The highest-momentum shown companies for /trending, momentum_score desc.
+ * Mirrors {@link listIndustryMapNodes} exactly: the same public-surface filters
+ * (exclusion_reason IS NULL + the catalog bar), the same `.not(col,"is",null)`
+ * gate so only SCORED companies surface, and the same explicit-select
+ * degradation. Selecting momentum_score/momentum_computed_at/momentum_why
+ * EXPLICITLY means that until the columns reach prod (migration ordering) this
+ * 400s → the standard error path → [] → the page's empty state — the intended
+ * "no scores yet" behavior, no feature flag needed (the identical property
+ * {@link getCompanyOgData} / {@link listIndustryMapNodes} rely on). When the
+ * migration lands, scored rows appear on the next ISR revalidation. Returns []
+ * on missing env or error.
+ */
+export async function listHeatingUpCompanies(
+  limit = 30,
+  minScore = MIN_MOMENTUM_SCORE,
+): Promise<MomentumCompany[]> {
+  const supabase = supabaseOrNull("listHeatingUpCompanies");
+  if (!supabase) return [];
+
+  const { data, error } = await supabase
+    .from("companies")
+    .select(
+      "slug, name, hq_city, hq_state, industry_group, description_short, status, logo_url, momentum_score, momentum_computed_at, momentum_why",
+    )
+    .is("exclusion_reason", null)
+    .or(CATALOG_BAR_OR)
+    .not("momentum_score", "is", null)
+    .gte("momentum_score", minScore)
+    .order("momentum_score", { ascending: false, nullsFirst: false })
+    .order("name", { ascending: true })
+    .limit(limit);
+
+  if (error) {
+    console.error("[listHeatingUpCompanies] query failed:", error.message);
+    return [];
+  }
+
+  return (
+    (data ?? []) as unknown as {
+      slug: string | null;
+      name: string | null;
+      hq_city: string | null;
+      hq_state: string | null;
+      industry_group: string | null;
+      description_short: string | null;
+      status: string | null;
+      logo_url: string | null;
+      momentum_score: number | null;
+      momentum_computed_at: string | null;
+      momentum_why: string[] | null;
+    }[]
+  ).flatMap((r) =>
+    r.slug && r.name && r.momentum_score != null
+      ? [
+          {
+            slug: r.slug,
+            name: r.name,
+            hq_city: r.hq_city ?? null,
+            hq_state: r.hq_state ?? null,
+            industry_group: r.industry_group ?? null,
+            description_short: r.description_short ?? null,
+            status: r.status ?? "active",
+            logo_url: r.logo_url ?? null,
+            momentumScore: Number(r.momentum_score),
+            momentumComputedAt: r.momentum_computed_at ?? null,
+            momentumWhy: Array.isArray(r.momentum_why) ? r.momentum_why : [],
+          },
+        ]
+      : [],
+  );
 }
 
 /**

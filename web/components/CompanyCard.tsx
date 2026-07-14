@@ -2,8 +2,9 @@
 // Used by /companies, /tag/[tag], /location/[state], and /watchlist.
 
 import Link from "next/link";
-import { formatLocation } from "@/lib/format";
+import { formatLocation, formatMomentumWhy } from "@/lib/format";
 import { StatusBadge } from "@/components/StatusBadge";
+import { MomentumBadge } from "@/components/MomentumBadge";
 import { WatchlistButton } from "@/components/WatchlistButton";
 import { CompareToggle } from "@/components/CompareBar";
 import type { CompanyListRow } from "@/lib/types";
@@ -87,6 +88,19 @@ interface CompanyCardProps {
    * the logo lights up automatically if a future query selects the column.
    */
   logoUrl?: string | null;
+  /**
+   * Optional pipeline momentum score in [0,1] (see MomentumBadge). Supplied
+   * only by /trending; omitted at every other call site (browse, watchlist,
+   * tag, location, alternatives, investor pages) so the badge never lights
+   * there. Above the badge threshold it renders a "🔥 Heating up" pill.
+   */
+  momentumScore?: number | null;
+  /**
+   * Optional pre-worded momentum breakdown (["+40% team", "5 news mentions"]),
+   * again /trending-only. Rendered as a compact "why" line via
+   * {@link formatMomentumWhy}; absent/empty → no line.
+   */
+  momentumWhy?: string[];
 }
 
 /**
@@ -98,7 +112,12 @@ interface CompanyCardProps {
  * is invalid HTML: the star is absolutely positioned in the corner, the Compare
  * toggle sits in a footer row below the linked region.
  */
-export function CompanyCard({ company, logoUrl }: CompanyCardProps) {
+export function CompanyCard({
+  company,
+  logoUrl,
+  momentumScore,
+  momentumWhy,
+}: CompanyCardProps) {
   return (
     <div className="group relative flex flex-col rounded-lg border border-edge p-5 hover:border-ink-muted transition-colors">
       {/* Watchlist toggle — kept out of the link flow (absolute sibling). The
@@ -118,6 +137,9 @@ export function CompanyCard({ company, logoUrl }: CompanyCardProps) {
             {company.name}
           </h2>
           <StatusBadge status={company.status} />
+          {/* Momentum pill — renders null below the threshold and whenever
+              momentumScore is omitted (every call site except /trending). */}
+          <MomentumBadge score={momentumScore} />
         </div>
 
         {company.description_short && (
@@ -140,6 +162,15 @@ export function CompanyCard({ company, logoUrl }: CompanyCardProps) {
             </div>
           )}
         </dl>
+
+        {/* Momentum "why" line — the pipeline's pre-worded breakdown, joined
+            with the site's " · " separator (mirrors the homepage strip). Shown
+            only on /trending, where momentumWhy is supplied. */}
+        {momentumWhy && momentumWhy.length > 0 && (
+          <p className="mt-3 font-mono text-xs text-ink-faint">
+            {formatMomentumWhy(momentumWhy)}
+          </p>
+        )}
       </Link>
 
       {/* Compare toggle — a sibling footer row (interactive controls can't nest

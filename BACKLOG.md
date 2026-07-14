@@ -398,6 +398,33 @@ One happy-path "/c/[slug] renders" test is high-leverage.
 
 ---
 
+## 2026-07-13 momentum / "heating up" (ROADMAP Next #2)
+
+Web read-surface for the momentum signal, on branch `fable5/momentum-web`
+(mirrors the `/map` split: web ships the reader, pipeline owns the compute).
+
+- ✅ `/trending` page ("Heating up") — ranked CompanyCard grid by
+  `companies.momentum_score` desc, ISR 6h, empty-state pre-migration, "Momentum
+  as of" rider. `listHeatingUpCompanies` → `MomentumCompany[]` (explicit select
+  → pre-migration 400 → [] → empty state, no feature flag, mirrors
+  `listIndustryMapNodes`). `MomentumBadge` (`🔥 Heating up`,
+  `MOMENTUM_BADGE_THRESHOLD = 0.65`) on cards + the `/c/[slug]` header;
+  `formatMomentumWhy` joins the pipeline's pre-worded breakdown. Nav + footer +
+  sitemap entries. Tests: queries mapping + pre-migration error path, formatter,
+  badge threshold + card gating, page smoke.
+- ⏳ **Blocked on pipeline (separate work):** migration **0039** adding
+  `momentum_score double precision NULL` (indexed — WHERE/ORDER column),
+  `momentum_computed_at timestamptz NULL`, `momentum_why text[] NULL DEFAULT
+  '{}'`, plus the detection stage that computes the score in [0,1] (0.5 = flat)
+  and writes the pre-worded `momentum_why` strings. Until then `/trending` shows
+  its empty state and no badge lights.
+- Follow-ups (deferred): homepage "Heating up this week" strip reusing
+  `listHeatingUpCompanies` (after the "Trending now" naming-coherence call);
+  badge-threshold calibration once the score distribution is known; per-industry
+  `/trending` scoping; a momentum sparkline from `company_snapshots` history.
+
+---
+
 ## Future ideas (need a spec discussion first)
 
 ### Human-review admin for dedup candidate pairs

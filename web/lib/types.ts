@@ -61,6 +61,18 @@ export interface CompanyRow {
   latest_round_amount?: number | null;
   latest_round_date?: string | null; // ISO date (YYYY-MM-DD) or null
   latest_round_type?: string | null;
+  // Momentum / "heating up" signal (migration 0039), pipeline-computed. Score is
+  // in [0,1] (0.5 = flat, higher = accelerating), NULL until a company has
+  // enough history to score. `momentum_why` is a pre-worded breakdown
+  // (["+40% team", "5 news mentions"]) the web joins verbatim. Optional (`?`),
+  // not just nullable — same reason as total_raised_* / latest_round_*: prod
+  // rows lack these columns until the migration runs there, and select("*")
+  // omits unknown columns, so the keys may be absent at runtime. The detail
+  // page's MomentumBadge reads momentum_score and degrades to no badge when the
+  // column is absent (undefined → isHeatingUp false).
+  momentum_score?: number | null;
+  momentum_computed_at?: string | null; // ISO timestamp or null
+  momentum_why?: string[] | null; // pre-worded breakdown; Postgres text[]
   created_at: string;
   updated_at: string;
 }
@@ -81,6 +93,21 @@ export interface CompanyListRow {
   // fallback. Optional (`?`): some projections (e.g. the investor-portfolio
   // join) don't select it — those rows simply fall back to the monogram.
   logo_url?: string | null;
+}
+
+/**
+ * A "heating up" company for /trending: the CompanyCard projection plus the
+ * pipeline-computed momentum fields. `momentumScore` is in [0,1] (0.5 = flat,
+ * higher = accelerating). `momentumWhy` is a pre-worded breakdown
+ * (["+40% team", "5 news mentions", "raised 3wks ago"]) rendered join(" · "),
+ * mirroring Spotlight.facts — the web never computes it. All momentum columns
+ * land via migration 0039; until then the query 400s → [] (see
+ * {@link listHeatingUpCompanies}), so the page shows its empty state.
+ */
+export interface MomentumCompany extends CompanyListRow {
+  momentumScore: number;
+  momentumComputedAt: string | null; // ISO timestamp or null
+  momentumWhy: string[];
 }
 
 // ─── M3: funding-history rows ─────────────────────────────────────────────────

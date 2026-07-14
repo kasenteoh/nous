@@ -31,6 +31,7 @@ import { CompanyLogo } from "@/components/CompanyCard";
 import { JsonLd } from "@/components/JsonLd";
 import { Markdown } from "@/components/Markdown";
 import { StatusBadge } from "@/components/StatusBadge";
+import { MomentumBadge } from "@/components/MomentumBadge";
 import { Team } from "@/components/Team";
 import { EventTimeline } from "@/components/EventTimeline";
 import { Investors } from "@/components/Investors";
@@ -424,6 +425,13 @@ export default async function CompanyPage({ params }: Props) {
             status={company.status}
             sourceUrl={company.status_source_url}
           />
+          {/* Momentum badge — a "🔥 Heating up" pill for high-momentum
+              companies. Renders null below the threshold and whenever the
+              momentum_score column is absent pre-migration (undefined →
+              isHeatingUp false), so it degrades cleanly without a query change:
+              CompanyRow uses select("*"), so the column arrives automatically
+              once migration 0039 lands. */}
+          <MomentumBadge score={company.momentum_score} />
           {/* Discovery badge — every company has a discovered_via value
               ('vc_portfolio' | 'news' | 'techcrunch'), surfacing how nous
               first found the company. Humanized so the raw enum never leaks. */}
