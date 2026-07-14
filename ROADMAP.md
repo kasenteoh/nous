@@ -130,9 +130,17 @@ Built on top of the now-trustworthy foundation.
    every entity page. Follow-up (BACKLOG): a subscribe hint / feed hub; email
    delivery stays out this quarter.
 
-4. **Talent-flow graph.** `people` already ties founders/leaders to companies.
-   Surface "founder previously at Stripe/Google," repeat founders, exec moves —
-   the human network VCs actually care about.
+4. **Talent-flow graph.** — **feasibility-gated (#184 probe): thin, graph
+   deferred.** A $0 read-only prevalence probe over prod found career-history
+   *prose* is common (69.5% of companies with pages have a bio section) but
+   **named** prior employers are thin: ~18% SQL upper bound / ~13–15% after
+   noise-filtering, concentrated in prominent companies, and many named orgs
+   (Intel, IBM, NVIDIA…) are non-catalog non-startups → a rich "Stripe → founders
+   → companies" graph is **not** well-supported by current scrape data. What IS
+   feasible: a per-company "founder background / notable alumni" rider on the
+   ~1-in-6 pages that name a pedigree, via a bounded LLM extraction (~$6.50
+   one-time backfill). Decide value-vs-cost before spending. Repeat-founders via
+   internal name-matching is $0 but low-precision (no person disambiguator).
 
 5. **Investor depth.** Co-investment networks, portfolio momentum, "who's leading
    rounds in X right now" — turn the investor directory from a list into a lens.

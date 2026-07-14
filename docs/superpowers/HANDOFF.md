@@ -8,6 +8,22 @@ for the detail behind the Latest-update block below), then the two plan docs
 under `docs/superpowers/plans/` (2026-07-10 improvement plan; 2026-07-11
 hygiene + Wave 3). `BACKLOG.md` is annotated with what shipped.
 
+## LATEST UPDATE — talent-flow feasibility gate (2026-07-13, PR #184)
+
+ROADMAP Next **#4 (talent-flow) is feasibility-gated, not built.** Rather than
+spend LLM budget blind, a $0 read-only `career-history-probe` measured whether
+scraped bios carry **named** prior employers. **Prod result (2,210 companies with
+pages):** 69.5% have a bio section, but named prior-employer is **only ~18% (SQL
+upper bound) / ~13–15% after noise-filtering** — below the ~30% bar for a rich
+graph, and many named orgs (Intel/IBM/NVIDIA) are non-catalog non-startups. So
+the "Stripe → founders → companies" **graph is not well-supported by current
+data**; a per-company "founder background" rider on the ~1-in-6 pages that name a
+pedigree is feasible via a bounded LLM extraction (~$6.50 one-time) — a
+value/cost call parked for the owner. The `career-history-probe` tool ships
+(reusable to re-measure as scrape coverage grows). **Remaining Next bet that's
+cleanly buildable from existing data: investor depth (#5)** — co-investment graph
+from `funding_round_investors`/`company_investors`.
+
 ## LATEST UPDATE — per-entity RSS feeds shipped (2026-07-13, PR #183)
 
 ROADMAP **Next #3 (per-entity RSS) done** — web-only, $0, works immediately (no

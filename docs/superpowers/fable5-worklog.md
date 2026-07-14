@@ -1043,3 +1043,28 @@ npm-verified) + adversarial review (APPROVE, 0 blocking).
   DOMParser in route tests; full CI rollup green.
 - Follow-ups (deferred, BACKLOG): investor-feed portfolio over-fetch, a feed hub
   / subscribe hint.
+
+## PR #184 — feat(pipeline): career-history-probe ($0 talent-flow feasibility gate) (merged 2026-07-13)
+
+The evidence gate for ROADMAP Next #4 (talent-flow), before any LLM spend. A $0,
+read-only regex diagnostic (third read-only DB instrument alongside
+db-stats/data-quality) measuring whether scraped bios carry **named** prior
+employers. Built + reviewed by 2 agents; dispatched once against prod.
+- **Prod result (denominator = 2,210 shown companies with pages):** bio section
+  69.5%; any career signal 24.6%; **named prior-employer 17.7% (SQL upper bound)
+  / 22.3% marquee-sample**, but example captures were ~40% noise (titles like
+  "VP"/"CTO", sentence-starters) → true rate ~13–15%. Real orgs present (Intel,
+  IBM, NVIDIA, Cisco, FireEye, SambaNova, Softbank, OakNorth) but sparse and
+  mostly non-catalog non-startups.
+- **Verdict:** the rich talent-flow *graph* is NOT well-supported by current
+  scrape data (thin + prior orgs mostly non-catalog). A per-company "founder
+  background" rider on the ~1-in-6 pages that name a pedigree is feasible via a
+  bounded LLM extraction (~$0.05 dry run, ~$6.50 one-time backfill) — a
+  value-vs-cost call, deferred to the owner. See ROADMAP Next #4.
+- **Tooling shipped:** `career-history-probe` stage + CLI + `career-history-probe.yml`
+  dispatch (read-only, no DEEPSEEK key). Reusable to re-measure as scrape
+  coverage grows. Verified: ruff+mypy, 1665 passed (40 new); full CI green.
+- **Process note:** this is the husk-style "evidence before plumbing" gate — $0
+  measurement first, LLM spend only if the number clears the bar. It didn't
+  clearly clear (~15% vs the ~30% green-light), so the LLM extraction was NOT
+  built pending an owner value/cost call.
