@@ -76,6 +76,28 @@ describe("EventTimeline coverage grouping", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("names DISTINCT outlets in the summary (never 'techcrunch.com, techcrunch.com')", () => {
+    const r = round({ announced_date: "2026-03-04", primary_news_url: null });
+    render(
+      <EventTimeline
+        rounds={[r]}
+        news={[
+          news({ url: "https://techcrunch.com/a", title: "TC A", published_date: "2026-03-05" }),
+          news({ url: "https://techcrunch.com/b", title: "TC B", published_date: "2026-03-04" }),
+          news({ url: "https://reuters.com/c", title: "RT C", published_date: "2026-03-03" }),
+        ]}
+      />,
+    );
+    // 3 articles, 2 distinct outlets → the summary names both once, no "+N more".
+    const summary = screen.getByText(/Covered by/);
+    expect(summary).toHaveTextContent("Covered by techcrunch.com, reuters.com");
+    expect(summary.textContent).not.toContain("techcrunch.com, techcrunch.com");
+    expect(summary.textContent).not.toContain("more source");
+    // Both techcrunch articles are still individually listed on expand.
+    expect(screen.getByRole("link", { name: /TC A/ })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /TC B/ })).toBeInTheDocument();
+  });
+
   it("keeps the single inline ↗ (no disclosure) for a round with one source", () => {
     const r = round({
       announced_date: "2026-03-04",

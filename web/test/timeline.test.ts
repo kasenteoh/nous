@@ -234,3 +234,60 @@ describe("buildTimeline coverage assembly", () => {
     expect(cov.map((c) => c.host)).toEqual(["bloomberg.com"]);
   });
 });
+
+describe("buildTimeline — primary pinning & unrenderable URLs (review fixes)", () => {
+  it("excludes an unrenderable-URL article consistently — neither coverage NOR standalone", () => {
+    const r = round({ announced_date: "2026-03-04", primary_news_url: null });
+    // In-window date, but the URL can't render a real link.
+    const bad = news({ url: "not a url", published_date: "2026-03-04" });
+    const items = buildTimeline([r], [bad]);
+    expect(items.filter((i) => i.kind === "news")).toHaveLength(0);
+    expect(items[0].kind === "funding" ? items[0].coverage : []).toHaveLength(0);
+  });
+
+  it("pins a round's primary article to THAT round even when its news row is undated", () => {
+    const primaryUrl = "https://techcrunch.com/announce";
+    const r = round({ announced_date: "2026-03-04", primary_news_url: primaryUrl });
+    // The primary's own news row has NO date — before the fix this went standalone
+    // AND the round prepended a title-less copy → the URL rendered twice.
+    const article = news({
+      url: primaryUrl,
+      title: "The announcement",
+      published_date: null,
+    });
+    const items = buildTimeline([r], [article]);
+    expect(items.filter((i) => i.kind === "news")).toHaveLength(0);
+    const cov = items[0].kind === "funding" ? items[0].coverage : [];
+    expect(cov).toHaveLength(1);
+    expect(cov[0].url).toBe(primaryUrl);
+    expect(cov[0].title).toBe("The announcement"); // uses the news row (not title-less)
+  });
+
+  it("pins a round's primary to its OWN round, not a date-nearer neighbor (no cross-attribution)", () => {
+    const primaryUrl = "https://techcrunch.com/round-a";
+    const roundA = round({
+      id: "r-a",
+      announced_date: "2026-03-01",
+      primary_news_url: primaryUrl,
+    });
+    const roundB = round({
+      id: "r-b",
+      announced_date: "2026-03-10",
+      primary_news_url: null,
+    });
+    // A's announcement is dated 03-09 — NEAREST to B, but it is A's primary source.
+    const article = news({
+      url: primaryUrl,
+      title: "A raised",
+      published_date: "2026-03-09",
+    });
+    const items = buildTimeline([roundA, roundB], [article]);
+    const a = items.find((i) => i.kind === "funding" && i.round.id === "r-a");
+    const b = items.find((i) => i.kind === "funding" && i.round.id === "r-b");
+    expect(a?.kind === "funding" ? a.coverage.map((c) => c.url) : []).toContain(
+      primaryUrl,
+    );
+    expect(b?.kind === "funding" ? b.coverage : []).toHaveLength(0);
+    expect(items.filter((i) => i.kind === "news")).toHaveLength(0);
+  });
+});

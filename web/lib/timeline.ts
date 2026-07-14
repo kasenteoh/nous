@@ -134,11 +134,45 @@ export function buildTimeline(
   rounds: FundingRoundWithInvestors[],
   news: NewsArticleRow[],
 ): TimelineItem[] {
+  // Exclude articles whose URL can't render a real link (unparseable / non-http(s)):
+  // a dead link is not a source, so it is dropped CONSISTENTLY — never as coverage
+  // and never as a dead standalone row (news_articles.url is http(s) in practice,
+  // so this is defensive symmetry, not a common path).
+  const renderable = news.filter((article) => httpHost(article.url) !== null);
+
   const datedRounds = rounds.filter((r) => r.announced_date !== null);
+
+  // Pin each round's OWN primary_news_url article to that round BEFORE date
+  // clustering, keyed by canonical URL. Two bugs this prevents: a round's
+  // announcement being pulled onto a NEIGHBORING round by nearest-wins (a bridge
+  // + a Series A within 14 days would misattribute each other's press), and the
+  // primary double-rendering (as the round's source AND a standalone/other-round
+  // row) when its news_articles row is null-dated or out-of-window.
+  const primaryOwner = new Map<string, string>(); // canonical URL → round id
+  for (const round of rounds) {
+    if (round.primary_news_url === null) continue;
+    const key = canonicalUrl(round.primary_news_url);
+    if (key !== null && !primaryOwner.has(key)) primaryOwner.set(key, round.id);
+  }
+
   const coverageByRound = new Map<string, NewsArticleRow[]>();
   const standalone: NewsArticleRow[] = [];
+  const attach = (roundId: string, article: NewsArticleRow): void => {
+    const arr = coverageByRound.get(roundId) ?? [];
+    arr.push(article);
+    coverageByRound.set(roundId, arr);
+  };
 
-  for (const article of news) {
+  for (const article of renderable) {
+    // (a) The article IS a round's primary source → it belongs to that round,
+    //     regardless of its own date (pinned above), never a neighbor.
+    const canon = canonicalUrl(article.url);
+    const owner = canon === null ? undefined : primaryOwner.get(canon);
+    if (owner !== undefined) {
+      attach(owner, article);
+      continue;
+    }
+    // (b) Otherwise cluster to the NEAREST dated round within the window.
     const published = article.published_date;
     if (published === null) {
       standalone.push(article);
@@ -159,9 +193,7 @@ export function buildTimeline(
       }
     }
     if (best) {
-      const arr = coverageByRound.get(best.id) ?? [];
-      arr.push(article);
-      coverageByRound.set(best.id, arr);
+      attach(best.id, article);
     } else {
       standalone.push(article);
     }

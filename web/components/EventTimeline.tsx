@@ -184,8 +184,11 @@ function FundingEntry({
  * never dropped.
  */
 function CoverageDisclosure({ coverage }: { coverage: CoverageLink[] }) {
-  const [first, second] = coverage;
-  const extra = coverage.length - 2;
+  // Name DISTINCT outlets (two URLs from one outlet must not read "Covered by
+  // techcrunch.com, techcrunch.com"); the count is remaining distinct outlets.
+  const outlets = [...new Set(coverage.map((c) => c.host))];
+  const shown = outlets.slice(0, 2);
+  const extra = outlets.length - shown.length;
   return (
     <details className="group mt-1.5">
       <summary className="flex w-fit cursor-pointer list-none items-center gap-1.5 text-sm text-ink-muted hover:text-ink focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 [&::-webkit-details-marker]:hidden">
@@ -200,7 +203,7 @@ function CoverageDisclosure({ coverage }: { coverage: CoverageLink[] }) {
           <path d="M7 4l7 6-7 6" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
         <span>
-          Covered by {first.host}, {second.host}
+          Covered by {shown.join(", ")}
           {extra > 0 && (
             <span className="text-ink-faint">
               {" "}
