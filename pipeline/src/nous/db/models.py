@@ -322,6 +322,18 @@ class Company(Base):
     funding_prompt_version: Mapped[str | None] = mapped_column(
         Text, nullable=True
     )
+    # career_moves rows written by extract-career-history from the career_history
+    # prompt. Stamped per company on every extraction ATTEMPT — including one
+    # that (correctly) wrote zero rows for a company with no named pedigree — so
+    # the ~85% of empty-bio companies are NOT re-extracted (and re-billed) every
+    # run. Version-gated: the stage selects companies where this is NULL or
+    # below the current PROMPT_VERSION, exactly like --redescribe-outdated. This
+    # per-company stamp is what makes empties idempotent (career_moves rows alone
+    # can't distinguish "never extracted" from "extracted, correctly empty").
+    # Indexed because it is the selection WHERE key (migration 0041).
+    career_extracted_prompt_version: Mapped[str | None] = mapped_column(
+        Text, nullable=True, index=True
+    )
 
     # Description embedding (migration 0033): 384-dim bge-small-en-v1.5 vector
     # over name + description_short + description_long, written by the

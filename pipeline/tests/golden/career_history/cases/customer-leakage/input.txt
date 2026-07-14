@@ -1,0 +1,1 @@
+MetricFlow is product analytics for growth teams. It is trusted by teams from Netflix, Uber, and Airbnb. Founder Liam Byrne built MetricFlow after being frustrated with broken dashboards.

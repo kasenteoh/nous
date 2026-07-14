@@ -1,0 +1,15 @@
+{
+  "people": [
+    {
+      "name": "Grace Kim",
+      "prior_roles": [
+        {
+          "company": "Intuit",
+          "role": "VP of Product",
+          "start_year": 2016,
+          "end_year": 2020
+        }
+      ]
+    }
+  ]
+}

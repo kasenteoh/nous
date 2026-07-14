@@ -1,0 +1,18 @@
+{
+  "provenance": "simulated",
+  "response": {
+    "people": [
+      {
+        "name": "Drew Durbin",
+        "prior_roles": [
+          {
+            "company": "Sendwave",
+            "role": null,
+            "start_year": null,
+            "end_year": null
+          }
+        ]
+      }
+    ]
+  }
+}

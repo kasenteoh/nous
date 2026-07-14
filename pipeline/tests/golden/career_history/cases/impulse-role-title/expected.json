@@ -1,0 +1,15 @@
+{
+  "people": [
+    {
+      "name": "Tom Mueller",
+      "prior_roles": [
+        {
+          "company": "SpaceX",
+          "role": "CTO of Propulsion",
+          "start_year": null,
+          "end_year": null
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,35 @@
+{
+  "provenance": "simulated",
+  "response": {
+    "people": [
+      {
+        "name": "Wei Zhang",
+        "prior_roles": [
+          {
+            "company": "Palantir",
+            "role": null,
+            "start_year": null,
+            "end_year": null
+          },
+          {
+            "company": "Google",
+            "role": null,
+            "start_year": null,
+            "end_year": null
+          }
+        ]
+      },
+      {
+        "name": "Hana Suzuki",
+        "prior_roles": [
+          {
+            "company": "Databricks",
+            "role": "staff engineer",
+            "start_year": null,
+            "end_year": null
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "provenance": "simulated",
+  "response": {
+    "people": [
+      {
+        "name": "Ravi Menon",
+        "prior_roles": [
+          {
+            "company": "VMware",
+            "role": "director",
+            "start_year": null,
+            "end_year": null
+          }
+        ]
+      }
+    ]
+  }
+}

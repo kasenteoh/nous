@@ -1,0 +1,18 @@
+{
+  "provenance": "simulated",
+  "response": {
+    "people": [
+      {
+        "name": "Omar Farah",
+        "prior_roles": [
+          {
+            "company": "Epic Systems",
+            "role": "product lead",
+            "start_year": null,
+            "end_year": null
+          }
+        ]
+      }
+    ]
+  }
+}

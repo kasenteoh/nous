@@ -51,3 +51,32 @@ def test_named_entities_from_input_ground() -> None:
         " month team plan."
     )
     assert grounding_fraction(text, _INPUT) == 1.0
+
+
+# --------------------------------------------------------------------------- #
+# career_history prior-company grounding (dedicated, not grounding_fraction)
+# --------------------------------------------------------------------------- #
+
+
+def test_career_prior_grounding_catches_fabricated_single_name() -> None:
+    """The whole point of the dedicated grounder: a fabricated single-word
+    employer must NOT ground (grounding_fraction would falsely score it 1.0 by
+    skipping the fragment's first word)."""
+    from nous.evals.prompts import _career_prior_grounding
+    from nous.llm.prompts.career_history import (
+        CareerHistoryExtraction,
+        PersonCareer,
+        PriorRole,
+    )
+
+    text = "Yuki Tanaka founded Meridian after several years at Toyota."
+    grounded = CareerHistoryExtraction(
+        people=[PersonCareer(name="Yuki Tanaka", prior_roles=[PriorRole(company="Toyota")])]
+    )
+    fabricated = CareerHistoryExtraction(
+        people=[PersonCareer(name="Yuki Tanaka", prior_roles=[PriorRole(company="Honda")])]
+    )
+    assert _career_prior_grounding(grounded, text) == 1.0
+    assert _career_prior_grounding(fabricated, text) == 0.0  # Honda absent → caught
+    # Empty extraction fabricates nothing.
+    assert _career_prior_grounding(CareerHistoryExtraction(), text) == 1.0

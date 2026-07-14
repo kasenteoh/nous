@@ -1,0 +1,1 @@
+NimbusDB is a serverless database for modern apps. It was founded by Priya Nair in 2021. Our advisory board includes Jane Smith, a former VP at Google, and Robert Lang, who was previously at Amazon.

@@ -36,7 +36,15 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 # "<date>.<same-day-counter>"; bump on ANY semantic change to the template,
 # schema, or validators — even a wording tweak — so data from a bad revision can
 # be found and re-extracted (mirrors the enrichment/eligibility version stamps).
-PROMPT_VERSION: str = "2026-07-13.1"
+# 2026-07-13.2: tighten the verbatim-name rule after the #185 dry run — a few
+# captures copied a descriptive phrase ("a company based on his research that
+# was acquired in 2017") instead of a named company; instruct null-not-phrase so
+# those become drops (empty-not-fabricate) rather than junk prior_company_name.
+PROMPT_VERSION: str = "2026-07-13.2"
+
+# A real employer name is short; anything longer is a descriptive phrase the
+# model slipped in where a name belongs (see PriorRole._normalize_fields).
+_MAX_PRIOR_COMPANY_CHARS = 120
 
 
 def _clean(value: str | None) -> str | None:
@@ -96,7 +104,15 @@ class PriorRole(BaseModel):
         # Trim the verbatim name and null-out an empty role. A blank company is
         # not repairable here (the field is required); the parent model drops
         # roles whose company cleans to empty.
-        object.__setattr__(self, "company", (_clean(self.company) or ""))
+        company = _clean(self.company) or ""
+        # Defense-in-depth for the prompt's null-not-phrase rule: a real company
+        # name is short. Anything this long is a descriptive phrase the model
+        # slipped in ("a company based on his research that was acquired in
+        # 2017") — treat it as unnamed (drop the role) rather than persist junk
+        # (which would also blow the (…, prior_company_name) unique btree index).
+        if len(company) > _MAX_PRIOR_COMPANY_CHARS:
+            company = ""
+        object.__setattr__(self, "company", company)
         object.__setattr__(self, "role", _clean(self.role))
         # Guard against a stray non-year integer (e.g. a headcount) leaking into
         # a year field — keep only plausible 4-digit calendar years.
@@ -194,6 +210,11 @@ Critical rules:
   degrees, or awards — only employers.
 - Copy each prior-company name VERBATIM from the text. Do not normalize,
   expand abbreviations, or infer a fuller legal name.
+- `company` must be a specific NAMED organization (e.g. "Stripe", "Google",
+  "NVIDIA"). If the text only describes a prior job without naming the employer
+  (e.g. "a startup he later sold", "a large fintech", "his own research lab"),
+  return null for `company` — that role is dropped. A description is NOT a name;
+  never put a phrase where a company name belongs.
 - `role`: the person's title at that prior company, only if stated. Null
   otherwise — never guess a title.
 - `start_year` / `end_year`: 4-digit years, only if the text states them. Null

@@ -1839,22 +1839,30 @@ def career_history_probe_cmd(sample: int) -> None:
 def extract_career_history_cmd(limit: int | None, dry_run: bool) -> None:
     """Extract founders' PRIOR employers (talent-flow rider) — DeepSeek, paid.
 
-    The bounded LLM half of the "founder background" rider. ``--dry-run``
-    measures extraction quality (roster-match rate, off-roster fabrication
-    proxy, example moves, and the $ spend via the usage ledger) over a bounded,
-    prominence-ordered slice and writes nothing — the husk-style evidence gate
-    before the persisting pipeline is built. Cost ≈ $0.0025/company.
+    The bounded LLM half of the "founder background / notable alumni" rider.
+    Version-gated + ``--limit`` bounded. ``--dry-run`` measures extraction
+    quality (roster-match rate, off-roster / self-reference fabrication proxies,
+    example moves, and the $ spend via the usage ledger) and writes nothing.
+    Apply (default) additionally persists ``career_moves`` replace-style per
+    company and stamps ``career_extracted_prompt_version`` (so empties aren't
+    re-billed). Cost ≈ $0.0025/company.
     """
     import asyncio
+    from datetime import UTC, datetime
 
     from nous.db.session import AsyncSessionLocal
-    from nous.observability import emit_run_telemetry, write_step_summary
+    from nous.observability import (
+        emit_run_telemetry,
+        record_pipeline_run,
+        write_step_summary,
+    )
     from nous.pipeline.extract_career_history import (
         render_yield_table,
         run_extract_career_history,
     )
 
     async def _run() -> None:
+        started = datetime.now(UTC)
         # emit_run_telemetry in finally so the LLM $ table is written even if the
         # stage raises mid-run (the ledger accrues per successful call).
         try:
@@ -1864,6 +1872,17 @@ def extract_career_history_cmd(limit: int | None, dry_run: bool) -> None:
                 )
             click.echo(summary.model_dump_json(indent=2))
             write_step_summary(render_yield_table(summary))
+            if not dry_run:
+                # flag_empty=False: writing zero rows is a VALID outcome (the
+                # ~85% of companies with no named pedigree), not a silent failure.
+                await record_pipeline_run(
+                    "extract-career-history",
+                    started_at=started,
+                    inputs_seen=summary.companies_seen,
+                    rows_written=summary.rows_written,
+                    summary=summary,
+                    flag_empty=False,
+                )
         finally:
             emit_run_telemetry("extract-career-history")
 
