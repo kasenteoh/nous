@@ -122,6 +122,38 @@ here so the push is complete:
 
 ---
 
+## 2026-07-13 ROADMAP "Next" horizon — depth features
+
+Strategic context: [ROADMAP.md](ROADMAP.md) (Next horizon). Depth pros return
+for, built on top of the clean data foundation.
+
+### Per-entity RSS feeds [S] — SHIPPED (#PENDING)
+The global `/feed.xml` firehose fanned out to three per-entity scopes — "watch
+this" without accounts, `$0`, works immediately against existing data:
+- **`/c/[slug]/feed.xml`** — one company's funding rounds + news. Reuses the
+  `/c/[slug]` timeline query (`getCompanyBySlug` already returns both) rather
+  than a new query; 404s on an unknown/excluded company.
+- **`/industry/[group]/feed.xml`** — funding + news across a canonical
+  `industry_group`. Slug hard-gated via `resolveIndustrySlug` (same gate as the
+  page); non-canonical slug → 404.
+- **`/investor/[slug]/feed.xml`** — funding + news across an investor's resolved
+  portfolio companies (both link paths, excluded companies dropped); slug set
+  capped (`FEED_IN_SLUGS_CAP=150`) to bound the request URL.
+- **Shared layer** (`lib/rss-items.ts`): row→`RssItem` mappers with the stable
+  `funding:`/`news:` guid scheme, newest-first merge, and the cached RSS
+  `Response` — the global `/feed.xml` route was refactored onto it too, so all
+  four feeds emit an identical item shape. New scoped queries
+  (`listRecentFundings/NewsByIndustry`, `listRecentFundings/NewsForCompanySlugs`)
+  mirror the global ones + one scoping filter, shown-cohort only.
+- **Discovery:** each entity page's `generateMetadata` emits a
+  `<link rel="alternate" type="application/rss+xml">` for its feed, plus a
+  subtle visible "Follow via RSS" link near the header (`components/RssLink.tsx`).
+- Every feed degrades to empty-but-valid on missing Supabase (never 404/500);
+  guids stable across regenerations. Follow-up: an on-page "how to subscribe"
+  hint / feed hub, and email delivery (explicitly out this quarter).
+
+---
+
 ## Pipeline cleanups (P2)
 
 ### Throttle/get helper triplicated across source clients [M]

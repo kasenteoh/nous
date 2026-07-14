@@ -17,6 +17,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { CompanyCard } from "@/components/CompanyCard";
+import { RssLink } from "@/components/RssLink";
 import { ThemeFundingChart } from "@/components/ThemeFundingChart";
 import {
   fundingGrowth,
@@ -109,10 +110,23 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
   // page carries nothing /companies?industry=X doesn't — keep it out of the
   // index rather than compete with the filtered list for the same query.
   const thin = !data.hasFunding && data.themes.length === 0;
+  const canonicalSlug = industryToSlug(data.group);
   return {
     title: `${data.group} startups`,
     description: `${data.count.toLocaleString("en-US")} US software startups in ${data.group}, with funding momentum and sub-themes — tracked by nous from VC portfolios and funding news.`,
-    alternates: { canonical: `/industry/${industryToSlug(data.group)}` },
+    alternates: {
+      canonical: `/industry/${canonicalSlug}`,
+      // Per-industry RSS auto-discovery (overrides the layout's global feed
+      // alternate on this page — the industry feed is the relevant one here).
+      types: {
+        "application/rss+xml": [
+          {
+            url: `/industry/${canonicalSlug}/feed.xml`,
+            title: `${data.group} — funding & news (RSS)`,
+          },
+        ],
+      },
+    },
     ...(thin ? { robots: { index: false, follow: true } } : {}),
   };
 }
@@ -158,6 +172,16 @@ export default async function IndustryPage({ params }: Props) {
             {growthLabel !== "—" && <> ({growthLabel})</>}
           </p>
         )}
+
+        {/* Feed autodiscovery link — subscribe to this industry's funding + news
+            without an account (mirrors the <link rel="alternate"> in <head>). */}
+        <div className="mt-4">
+          <RssLink
+            href={`/industry/${industryToSlug(group)}/feed.xml`}
+            label="Follow via RSS"
+            title={`Subscribe to ${group} funding & news (RSS)`}
+          />
+        </div>
       </header>
 
       {/* ── Funding by quarter (from the 0036 RPC) ──────────────────────────── */}

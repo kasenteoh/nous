@@ -3,10 +3,19 @@
 // Read-only, on-site distribution only (email is out this quarter). Route
 // handler rather than a page: RSS is XML, not HTML. Degrades to an empty but
 // valid feed when Supabase is absent (CI build) — never 500s.
+//
+// The per-entity feeds (company / industry / investor) mirror this structure;
+// the row → RssItem mapping, newest-first merge, and cached Response all live in
+// lib/rss-items.ts so every feed emits an identical item shape.
 
 import { listRecentFundings, listRecentNews } from "@/lib/queries";
-import { buildRssFeed, type RssItem } from "@/lib/rss";
-import { formatUsd } from "@/lib/format";
+import { buildRssFeed } from "@/lib/rss";
+import {
+  fundingToRssItem,
+  mergeFeedItems,
+  newsToRssItem,
+  rssResponse,
+} from "@/lib/rss-items";
 import { siteOrigin } from "@/lib/site";
 
 // Regenerate at most every 6 hours, matching the pages' ISR window.
@@ -24,38 +33,14 @@ export async function GET(): Promise<Response> {
     listRecentNews(PER_SOURCE),
   ]);
 
-  const fundingItems: RssItem[] = fundings.map((f) => {
-    const amount =
-      f.amount_raised != null && f.amount_raised > 0
-        ? formatUsd(f.amount_raised)
-        : null;
-    const round = f.round_type ? ` (${f.round_type})` : "";
-    const title = amount
-      ? `${f.companyName} raised ${amount}${round}`
-      : `${f.companyName} — new funding round${round}`;
-    return {
-      title,
-      link: `${origin}/c/${f.companySlug}`,
-      description: `${title}, announced ${f.announced_date}.`,
-      // Stable across regenerations: same round → same guid.
-      guid: `funding:${f.companySlug}:${f.announced_date}:${f.amount_raised ?? "na"}`,
-      pubDate: f.announced_date,
-    };
-  });
-
-  const newsItems: RssItem[] = news.map((n) => ({
-    title: n.title,
-    // News items link to the original article, not the nous page.
-    link: n.url,
-    description: `${n.companyName} in the news${n.source ? ` — ${n.source}` : ""}.`,
-    guid: `news:${n.id}`,
-    pubDate: n.published_date,
-  }));
-
   // Merge and sort newest-first; both sources are already date-filtered.
-  const items = [...fundingItems, ...newsItems]
-    .sort((a, b) => (b.pubDate ?? "").localeCompare(a.pubDate ?? ""))
-    .slice(0, FEED_SIZE);
+  const items = mergeFeedItems(
+    [
+      ...fundings.map((f) => fundingToRssItem(f, origin)),
+      ...news.map((n) => newsToRssItem(n)),
+    ],
+    FEED_SIZE,
+  );
 
   const xml = buildRssFeed({
     title: "nous — new US software startup funding & news",
@@ -67,11 +52,5 @@ export async function GET(): Promise<Response> {
     items,
   });
 
-  return new Response(xml, {
-    headers: {
-      "content-type": "application/rss+xml; charset=utf-8",
-      // Let CDNs cache it in step with the ISR window.
-      "cache-control": "public, max-age=0, s-maxage=21600",
-    },
-  });
+  return rssResponse(xml);
 }
