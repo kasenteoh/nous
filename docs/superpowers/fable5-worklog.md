@@ -946,3 +946,47 @@ component, and critically no ML in the Vercel function (the #157 lesson).
 - **Orchestration:** #179 (pipeline, isolated worktree, uv) + #180 (web, main
   tree, npm) were scouted, implemented, and reviewed by 6 agents across two
   workflows (2 scout → 2 implement → 2 review), merged sequentially.
+
+## PR #PENDING — feat(pipeline): momentum ("heating up") score (compute-momentum) (fable5)
+
+Pipeline side of the "Momentum signals" backlog bet: score every shown company's
+weekly "heating up" momentum so the web can rank a `/trending` leaderboard and
+light a "heating up" badge off flat columns (no compute in the Vercel function).
+Web side (`/trending` + badge) is a paired follow-up against the same contract.
+- **Migration 0039** (hand-written, chains off 0038): three columns on
+  `companies` — `momentum_score` (double precision, `[0,1]`; 0.5=flat,
+  higher=accelerating, NULL=insufficient data), `momentum_computed_at`
+  (timestamptz freshness stamp), `momentum_why` (text[] default `'{}'`,
+  pre-worded chips the web joins with " · " and never re-computes). PARTIAL DESC
+  index `ix_companies_momentum_score` (`WHERE momentum_score IS NOT NULL`) —
+  unlike map_x/map_y (0038) this IS the leaderboard's WHERE + ORDER BY key, and
+  the partial keeps it to the scored minority. up+down round-tripped.
+- **`compute_momentum.py`** — pure, unit-tested component helpers each →
+  `[0,1]` (0.5=flat) or ABSENT: news acceleration (`company_snapshots.news_count_30d`
+  recent 2wk mean vs weeks-3–9 baseline, `(recent+3)/(baseline+3)` clipped to
+  `[¼,4]`, log-mapped), funding recency (`latest_round_date` exp-decay τ=180d),
+  headcount growth (snapshot midpoints, 56d gap). Combined as a
+  **weight-renormalized mean over the PRESENT components** (news 0.50 / funding
+  0.35 / headcount 0.15) so a missing signal drops out rather than drags;
+  all-absent → NULL (never fabricated). Anchored to `as_of_week` for
+  determinism/idempotence; every shown company is (re)written each run (value OR
+  NULL) so a faded signal clears its stale score. Batched `begin_nested` commits.
+- **`compute-momentum` CLI** (`--as-of-week` for backfill/determinism) — records
+  a `pipeline_runs` row (`flag_empty` off: a young catalog legitimately scores
+  few). Wired into `discovery.yml` AFTER "Snapshot companies" (weekly, NOT
+  TTL-gated, plain `uv sync` — $0, no LLM/network/scikit-learn); given `id:
+  momentum` so a fresh score triggers the Vercel redeploy via the deploy gate,
+  like the `map` step.
+- **Web hand-off (shared contract):** read is `SELECT slug, name, momentum_score,
+  momentum_why, ... FROM companies WHERE momentum_score IS NOT NULL ORDER BY
+  momentum_score DESC`. `momentum_why` is display-only (join with " · "); the
+  badge lights at a conservative `momentum_score` threshold (~0.65, calibratable
+  constant on the web side). NULL rows are hidden from `/trending`.
+- **Verified:** `ruff` + `mypy src` clean; `alembic upgrade→downgrade→upgrade`
+  round-trips 0039; full `pytest -q` = **1625 passed** (44 new momentum tests, DB
+  container on `:55432`).
+- **Launch reality (flag for the reviewer):** the `company_snapshots` table is
+  new — until ~6 weekly rows accrue per company the news component is ABSENT for
+  most, so early scores are funding-recency-dominated and self-enrich as history
+  builds (no code change needed). Populates on the next `discovery.yml` run once
+  0039 reaches prod.

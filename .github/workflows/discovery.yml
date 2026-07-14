@@ -263,6 +263,23 @@ jobs:
         continue-on-error: true
         run: uv run nous snapshot-companies
 
+      - name: Compute momentum
+        id: momentum
+        # Weekly "heating up" score from the fresh company_snapshots row this run
+        # just wrote, so it runs AFTER Snapshot companies. Reads snapshots + the
+        # denormalized latest_round_date; $0 — pure arithmetic, no LLM / network /
+        # scikit-learn, hence plain `uv sync` above (NOT the embeddings group).
+        # Deterministic + idempotent (anchored to the as-of ISO week). NOT
+        # TTL-gated (unlike map/themes): "heating up THIS week" is inherently a
+        # weekly recompute and it's cheap enough to run every week. Given an `id`
+        # (unlike the side-channel snapshot step) BECAUSE momentum_score is a
+        # rendered surface — a fresh score should trigger the Vercel redeploy via
+        # the deploy gate below, exactly like the `map` step.
+        if: ${{ !cancelled() }}
+        timeout-minutes: 10
+        continue-on-error: true
+        run: uv run nous compute-momentum
+
       - name: Database stats
         # No step id — contains(steps.*.outcome, ...) on the Trigger step only
         # sees id'd steps; leaving this id-free means it cannot accidentally
