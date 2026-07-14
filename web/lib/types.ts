@@ -73,6 +73,29 @@ export interface CompanyRow {
   momentum_score?: number | null;
   momentum_computed_at?: string | null; // ISO timestamp or null
   momentum_why?: string[] | null; // pre-worded breakdown; Postgres text[]
+  // Completeness / "documented" signal (migration 0042), pipeline-computed by the
+  // compute-completeness stage from util.completeness (the SOLE scorer — the web
+  // never re-derives it). Score is in [0,1] (share of key profile fields filled
+  // in), NULL until the stage runs for a company. The detail page's
+  // ProvenancePanel reads completeness_score to show a positive-only "documented"
+  // badge (gated ≥0.5) and degrades to no badge when the column is absent
+  // (undefined → below every threshold). Optional (`?`), not just nullable —
+  // same reason as momentum_* / total_raised_* / latest_round_* / the *_checked_at
+  // freshness stamps below: prod rows lack these columns until the migration runs
+  // there, and select("*") omits unknown columns, so the keys may be absent at
+  // runtime. Treat undefined as null.
+  completeness_score?: number | null;
+  completeness_computed_at?: string | null; // ISO timestamp or null
+  // Per-enrichment-stage freshness stamps (each set when that stage last touched
+  // the company). The ProvenancePanel derives "Last verified N days ago" from the
+  // MAX of these plus last_enriched_at, computed read-time (no dedicated column).
+  // Same optionality caveat as above: absent on pre-migration prod rows, so the
+  // panel simply omits the line when none is present rather than fabricating one.
+  website_resolved_at?: string | null;
+  website_fallback_checked_at?: string | null;
+  news_checked_at?: string | null;
+  website_funding_checked_at?: string | null;
+  employee_count_checked_at?: string | null;
   created_at: string;
   updated_at: string;
 }

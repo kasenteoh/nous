@@ -99,15 +99,16 @@ duplicate rate (shared `normalized_name`), enrichment staleness. Id-free cron
 step. **Follow-up:** a web-facing version is ROADMAP Later (provenance UI); this
 is internal-report-only for now.
 
-### Per-company completeness / confidence score [S] — P2 — SHIPPED (internal primitive #175; stored for web #191)
+### Per-company completeness / confidence score [S] — P2 — SHIPPED (internal primitive #175; stored for web #191; badge #192)
 Pure `util.completeness` weighted 0..1 score (husk-defining fields dominate),
 aggregated by the data-quality report. **#191 stored it** on
 `companies.completeness_score` (migration 0042 + the `compute-completeness`
-stage) so the web can render a completeness badge without re-implementing the
-scorer in TS — PR 1 of 3 of the provenance UI (ROADMAP Later #1). The public
-trust badge itself lands in PR 2 (the `/c/[slug]` "Data & provenance" panel).
-**Remaining:** wire the score into husk-enrichment prioritisation ordering;
-fold in `extraction_confidence` (field-presence only for now).
+stage) so the web renders the badge without re-implementing the scorer in TS;
+**#192 shipped the public trust badge** — the positive-only "Richly/Well
+documented" badge in the `/c/[slug]` "Data & provenance" panel (PRs 1–2 of 3 of
+the provenance UI, ROADMAP Later #1). **Remaining:** wire the score into
+husk-enrichment prioritisation ordering; fold in `extraction_confidence`
+(field-presence only for now — PR 3 surfaces the enum as a tooltip).
 
 ### Pulled into this push — existing open entries
 Consciously scoped into the Now horizon; tracked in their home sections, listed

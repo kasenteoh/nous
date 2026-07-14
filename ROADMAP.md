@@ -163,12 +163,12 @@ Depends on the foundation being solid, so genuinely later.
    sources, "last verified," completeness/confidence badges on the profile — turn
    "we don't hallucinate" from a claim into a *visible feature*. This is where
    data quality becomes a distribution surface. **PR 1 SHIPPED (#191):** the
-   stored `completeness_score` (migration 0042 + `compute-completeness`). **Next:**
-   PR 2 — the `/c/[slug]` "Data & provenance" panel (positive-only badge, "last
-   verified", sourcing line); PR 3 — granular per-fact source superscripts +
-   source-type labels + confidence tooltips. Framing: a **trust-builder**, never
-   a data-gap advertiser (completeness ≠ trustworthiness — the badge is
-   positive-only and hidden below threshold).
+   stored `completeness_score` (migration 0042 + `compute-completeness`). **PR 2
+   SHIPPED (#192):** the `/c/[slug]` "Data & provenance" panel (positive-only
+   badge, "last verified N days ago", sourcing line). **Next:** PR 3 — granular
+   per-fact source superscripts + source-type labels + confidence tooltips.
+   Framing: a **trust-builder**, never a data-gap advertiser (completeness ≠
+   trustworthiness — the badge is positive-only and hidden below threshold).
 
 2. **Sharpen AI-answer surfaces.** `llms.txt`, `/c/[slug].md`. As answer engines
    increasingly cite sources, "fully-sourced" is a structural advantage worth

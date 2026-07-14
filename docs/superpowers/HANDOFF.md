@@ -8,7 +8,7 @@ for the detail behind the Latest-update block below), then the two plan docs
 under `docs/superpowers/plans/` (2026-07-10 improvement plan; 2026-07-11
 hygiene + Wave 3). `BACKLOG.md` is annotated with what shipped.
 
-## LATEST UPDATE — Provenance UI PR 1/3 SHIPPED (2026-07-14, PR #191)
+## LATEST UPDATE — Provenance UI PRs 1–2/3 SHIPPED (2026-07-14, PRs #191–#192)
 
 ROADMAP **Later #1 (Provenance UI)** is now **IN PROGRESS** — the owner-approved
 3-PR build that makes the "every fact is sourced" moat a visible feature on
@@ -34,15 +34,36 @@ hidden below threshold.
   has the same exit-cohort staleness and does NOT clear (accepted; noted as
   shared debt if it ever reads as a trust claim).
 
-**Next (PRs 2 & 3 — independent web PRs, both read PR 1's column + existing
-`getCompanyBySlug`, run in parallel):** PR 2 the `/c/[slug]` "Data & provenance"
-panel (positive-only badge ≥0.5, "last verified N days ago" = read-time MAX of
-the `*_checked_at` stamps, sourcing line); PR 3 granular per-fact source
-superscripts + source-type labels + `extraction_confidence` tooltips.
-`getCompanyBySlug` uses `.select("*")`, so PR 1's column is picked up
-automatically post-migration (naturally migration-order-free). The **optional
-DeepSeek source-verification** pass (spec) is a separate, larger, husk-style bet
-AFTER the MVP — not folded in.
+**PR #192 (PR 2/3 — web):** the `/c/[slug]` **"Data & provenance"** panel.
+- New `ProvenancePanel` server component (before `<Sources>`): positive-only
+  completeness badge (`≥0.75` "Richly documented", `0.5–0.75` "Well documented",
+  else no badge); **"Last verified N days ago"** = read-time MAX over the present
+  freshness stamps (`last_enriched_at` + the `*_checked_at`/`_resolved_at`
+  columns), `title` = exact date, omitted when none present; a sourcing line
+  anchor-linking to `#sources`. Omit-when-empty; muted `MomentumBadge` vocabulary.
+- `getCompanyBySlug` unchanged (`.select("*")` picks up the columns
+  post-migration); `CompanyRow` gained 7 optional+nullable fields; absent → hides.
+- **Gotcha / design note:** the sourcing line's `hasSources` gate MUST use
+  `hasRenderableCitations()` (exported from `Sources.tsx`) — the same
+  `hostname()`-survival predicate `<Sources>` filters on — NOT raw
+  `citations.length`. `<Sources>` drops citations whose URL fails `new URL()`, and
+  the pipeline stores scheme-less bare domains (`company.website` = `acme.com`, the
+  total_raised / leadership source fallback), so a raw-length gate showed the "every
+  figure links to a recorded source" line + a `#sources` anchor for a company where
+  `<Sources>` renders nothing (dead anchor + false claim). Caught in review.
+
+**Next (PR 3/3 — web):** granular per-fact source superscripts next to each
+already-sourced figure (total-raised → `total_raised_source_url`, status →
+`status_source_url`, each funding row → `primary_news_url`, website →
+`website_source_url`); source-type labels in `Sources` ("News / Website /
+Wikidata / VC portfolio" from `website_source` + URL host); and
+`extraction_confidence` surfaced as a `title` tooltip on ALL funding rounds,
+keeping the visible pill only for `low`. **Sequencing note:** PRs 2 & 3 were
+planned parallel but ship **sequentially** — both edit `web/lib/types.ts`
+(`CompanyRow`) and `web/app/c/[slug]/page.tsx`, and disk is too full for a second
+web worktree's `node_modules`, so parallel edits in the single main tree would
+conflict. The **optional DeepSeek source-verification** pass (spec) is a separate,
+larger, husk-style bet AFTER the MVP — not folded in.
 
 ## LATEST UPDATE — talent-flow "founder background" rider SHIPPED (2026-07-14, PRs #185–#189)
 
