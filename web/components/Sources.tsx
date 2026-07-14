@@ -9,6 +9,8 @@
 // provenance (independent press vs the company's own domain), so there is no
 // "self-reported" / "company-stated" wording.
 
+import { httpHost } from "@/lib/url";
+
 interface Citation {
   /** Human-readable description of the fact being sourced, e.g. "Series B · $40M". */
   label: string;
@@ -102,24 +104,16 @@ export function citationSourceType(
     websiteSourceUrl?: string | null;
   } = {},
 ): SourceType | null {
-  // Only ever label a real web source. new URL() accepts exotic schemes (ftp:,
-  // ws:, file:) that still yield a hostname; reject non-http(s) here — matching
-  // SourceLink's sourceHost — so an odd-scheme URL never gets a source-type tag.
-  let protocol: string;
-  try {
-    protocol = new URL(url).protocol;
-  } catch {
-    return null;
-  }
-  if (protocol !== "http:" && protocol !== "https:") return null;
-
-  const host = hostname(url);
-  if (!host) return null;
+  // Only ever label a real web source. httpHost rejects non-http(s) / malformed
+  // URLs (exotic schemes like ftp: still yield a hostname from a bare new URL()),
+  // so an odd-scheme URL never gets a source-type tag.
+  const host = httpHost(url);
+  if (host === null) return null;
 
   if (
     opts.websiteSource &&
     opts.websiteSourceUrl &&
-    hostname(opts.websiteSourceUrl) === host
+    httpHost(opts.websiteSourceUrl) === host
   ) {
     const mapped = WEBSITE_SOURCE_LABELS[opts.websiteSource];
     if (mapped) return mapped;

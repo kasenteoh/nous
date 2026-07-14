@@ -1,21 +1,20 @@
 // Server component — the unified event timeline on /c/[slug]. Merges the
-// company's funding rounds and news articles into one reverse-chronological
-// list, REPLACING the old separate FundingHistory table + News list (the two
-// are never rendered alongside this — no duplication). Funding entries keep
-// their full detail (round type, amount, post-money valuation, lead/other
-// investors, low-confidence flag); news entries link out to the source article.
-// Read-only display, all data flows in via props.
+// company's funding rounds and news into one reverse-chronological list
+// (REPLACING the old separate FundingHistory table + News list). Because
+// ingest-news only ingests funding announcements, the "news" IS the funding
+// coverage — so a well-covered round would otherwise render as N near-duplicate
+// news rows. `buildTimeline` (lib/timeline.ts) clusters each article UNDER the
+// round it covers; a round with ≥2 sources shows a collapsed "Covered by …"
+// disclosure (every article one click away — the moat intact), while lightly
+// covered rounds keep their single inline source. Read-only display.
 //
-// Ordering: dated events run newest-first. Undated events can't be placed on
-// the time axis (never dropped — no data loss), so they're tiered by
-// importance: an undated FUNDING round floats to the TOP (it's the structured
-// spine of the page — LLM-extracted rounds often lack a clean date, and burying
-// a company's $65B round below dozens of dated news items reads as broken),
-// while undated news sinks to the bottom. Dated funding still interleaves with
-// news chronologically.
+// Ordering (in buildTimeline): dated events run newest-first; undated FUNDING
+// leads (the structured spine — an undated $65B round must not sink below dated
+// news), undated news trails.
 
 import { formatDate, formatUsd, formatUsdExact } from "@/lib/format";
 import type { FundingRoundWithInvestors, NewsArticleRow } from "@/lib/types";
+import { buildTimeline, type CoverageLink } from "@/lib/timeline";
 import { SourceLink } from "@/components/SourceLink";
 
 const EM_DASH = "—";
@@ -50,55 +49,19 @@ function joinOthers(names: string[]): string {
   return `${names.slice(0, 3).join(", ")} and ${names.length - 3} more`;
 }
 
-type TimelineEvent =
-  | { kind: "funding"; date: string | null; round: FundingRoundWithInvestors }
-  | { kind: "news"; date: string | null; article: NewsArticleRow };
-
-/**
- * Ordering tier: undated funding leads (0), dated events run chronologically
- * (1, newest-first within the tier), undated news trails (2). Keeps a company's
- * rounds prominent even when the pipeline couldn't date them, without disturbing
- * the dated chronology.
- */
-function timelineTier(event: TimelineEvent): number {
-  if (event.date) return 1;
-  return event.kind === "funding" ? 0 : 2;
-}
-
 interface Props {
   rounds: FundingRoundWithInvestors[];
   news: NewsArticleRow[];
 }
 
 export function EventTimeline({ rounds, news }: Props) {
-  const events: TimelineEvent[] = [
-    ...rounds.map(
-      (round): TimelineEvent => ({
-        kind: "funding",
-        date: round.announced_date,
-        round,
-      }),
-    ),
-    ...news.map(
-      (article): TimelineEvent => ({
-        kind: "news",
-        date: article.published_date,
-        article,
-      }),
-    ),
-  ].sort((a, b) => {
-    const ta = timelineTier(a);
-    const tb = timelineTier(b);
-    if (ta !== tb) return ta - tb;
-    // Same tier: dated events newest-first; undated tiers keep insertion order.
-    return (b.date ?? "").localeCompare(a.date ?? "");
-  });
+  const items = buildTimeline(rounds, news);
 
   return (
     <section className="mb-12">
       <h2 className="text-lg font-semibold text-ink mb-4">Timeline</h2>
 
-      {events.length === 0 ? (
+      {items.length === 0 ? (
         <p className="text-sm text-ink-muted">
           No funding rounds or news recorded yet.
         </p>
@@ -107,29 +70,32 @@ export function EventTimeline({ rounds, news }: Props) {
           className="relative ml-2 border-l border-edge"
           aria-label="Company timeline"
         >
-          {events.map((event) => {
-            const dateLabel = event.date ? formatDate(event.date) : EM_DASH;
-            const key =
-              event.kind === "funding"
-                ? `f-${event.round.id}`
-                : `n-${event.article.id}`;
+          {items.map((item) => {
+            const isFunding = item.kind === "funding";
+            const date = isFunding
+              ? item.round.announced_date
+              : item.article.published_date;
+            const dateLabel = date ? formatDate(date) : EM_DASH;
+            const key = isFunding
+              ? `f-${item.round.id}`
+              : `n-${item.article.id}`;
             return (
               <li key={key} className="relative pb-6 pl-6 last:pb-0">
                 {/* Rail marker — money-green for funding, muted for news. */}
                 <span
                   aria-hidden
                   className={`absolute -left-[5px] top-1.5 h-2.5 w-2.5 rounded-full border-2 border-canvas ${
-                    event.kind === "funding" ? "bg-money" : "bg-ink-faint"
+                    isFunding ? "bg-money" : "bg-ink-faint"
                   }`}
                 />
                 <p className="font-mono text-xs text-ink-faint">
-                  {dateLabel} · {event.kind === "funding" ? "Funding" : "News"}
+                  {dateLabel} · {isFunding ? "Funding" : "News"}
                 </p>
 
-                {event.kind === "funding" ? (
-                  <FundingEntry round={event.round} />
+                {item.kind === "funding" ? (
+                  <FundingEntry round={item.round} coverage={item.coverage} />
                 ) : (
-                  <NewsEntry article={event.article} />
+                  <NewsEntry article={item.article} />
                 )}
               </li>
             );
@@ -140,7 +106,13 @@ export function EventTimeline({ rounds, news }: Props) {
   );
 }
 
-function FundingEntry({ round }: { round: FundingRoundWithInvestors }) {
+function FundingEntry({
+  round,
+  coverage,
+}: {
+  round: FundingRoundWithInvestors;
+  coverage: CoverageLink[];
+}) {
   const hasInvestors =
     round.leadInvestors.length > 0 || round.otherInvestors.length > 0;
   return (
@@ -181,9 +153,12 @@ function FundingEntry({ round }: { round: FundingRoundWithInvestors }) {
             low confidence
           </span>
         )}
-        {/* Inline source affordance → the article that reported this round.
-            Self-omits when primary_news_url is absent/unparseable. */}
-        <SourceLink url={round.primary_news_url} label="Funding round" />
+        {/* Exactly one source → a subtle inline ↗ (self-omits on a bad URL). Two
+            or more → the collapsed coverage disclosure below instead, so the
+            inline ↗ isn't shown twice. */}
+        {coverage.length === 1 && (
+          <SourceLink url={coverage[0].url} label="Funding round" />
+        )}
       </p>
       {hasInvestors && (
         <p className="mt-0.5 text-sm text-ink-soft">
@@ -196,7 +171,62 @@ function FundingEntry({ round }: { round: FundingRoundWithInvestors }) {
           {round.otherInvestors.length > 0 && joinOthers(round.otherInvestors)}
         </p>
       )}
+      {coverage.length >= 2 && <CoverageDisclosure coverage={coverage} />}
     </>
+  );
+}
+
+/**
+ * A round's press coverage, collapsed. Native <details> (server-component-safe,
+ * keyboard-operable, exposes open state to assistive tech for free): the summary
+ * names the first two hosts + a "+N more sources" count; expanding lists every
+ * article as a source link. Trust-preserving — every source is one click away,
+ * never dropped.
+ */
+function CoverageDisclosure({ coverage }: { coverage: CoverageLink[] }) {
+  const [first, second] = coverage;
+  const extra = coverage.length - 2;
+  return (
+    <details className="group mt-1.5">
+      <summary className="flex w-fit cursor-pointer list-none items-center gap-1.5 text-sm text-ink-muted hover:text-ink focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 [&::-webkit-details-marker]:hidden">
+        <svg
+          viewBox="0 0 20 20"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.6"
+          aria-hidden
+          className="h-3 w-3 shrink-0 text-ink-faint transition-transform group-open:rotate-90"
+        >
+          <path d="M7 4l7 6-7 6" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+        <span>
+          Covered by {first.host}, {second.host}
+          {extra > 0 && (
+            <span className="text-ink-faint">
+              {" "}
+              +{extra} more source{extra === 1 ? "" : "s"}
+            </span>
+          )}
+        </span>
+      </summary>
+      <ul className="mt-2 ml-[18px] flex flex-col gap-1.5">
+        {coverage.map((c) => (
+          <li key={c.url} className="text-sm leading-snug">
+            <a
+              href={c.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-ink-muted underline-offset-2 hover:text-ink hover:underline"
+            >
+              {c.title ?? c.host}
+            </a>
+            {c.title && (
+              <span className="ml-1.5 text-xs text-ink-faint">· {c.host}</span>
+            )}
+          </li>
+        ))}
+      </ul>
+    </details>
   );
 }
 
