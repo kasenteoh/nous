@@ -280,6 +280,22 @@ jobs:
         continue-on-error: true
         run: uv run nous compute-momentum
 
+      - name: Compute completeness
+        id: completeness
+        # Stored per-company completeness score for the web provenance badge,
+        # from current field presence (util.completeness — the same scorer the
+        # data-quality report aggregates). $0 — pure arithmetic, no LLM / network,
+        # hence plain `uv sync` above (NOT the embeddings group). Deterministic +
+        # idempotent (a same-DB-state re-run is byte-identical). Runs after the
+        # dedup/enrich/momentum stages so it scores the freshest field state.
+        # Given an `id` (like the `momentum`/`map` steps) BECAUSE completeness_score
+        # is a rendered surface — a fresh score should trigger the Vercel redeploy
+        # via the deploy gate below.
+        if: ${{ !cancelled() }}
+        timeout-minutes: 10
+        continue-on-error: true
+        run: uv run nous compute-completeness
+
       - name: Database stats
         # No step id — contains(steps.*.outcome, ...) on the Trigger step only
         # sees id'd steps; leaving this id-free means it cannot accidentally

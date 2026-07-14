@@ -520,6 +520,53 @@ def compute_momentum(as_of_week: str | None) -> None:
     asyncio.run(_run())
 
 
+@cli.command("compute-completeness")
+@click.option(
+    "--limit",
+    type=int,
+    default=None,
+    help=(
+        "Cap the run to the first N id-ordered shown companies (operational "
+        "escape hatch for testing / partial runs). Default: score the whole "
+        "shown cohort."
+    ),
+)
+def compute_completeness(limit: int | None) -> None:
+    """Store every shown company's completeness score for the web provenance badge.
+
+    Writes companies.completeness_score + completeness_computed_at using
+    util.completeness.completeness_score — the SAME scorer the data-quality report
+    aggregates, so the web renders the badge from this stored column and never
+    re-derives it in TS. $0, local, deterministic: pure arithmetic over current
+    field presence, no LLM / network. Idempotent — a same-DB-state re-run
+    overwrites with byte-identical completeness_score (re-stamping only
+    completeness_computed_at).
+    """
+    import asyncio
+    from datetime import UTC, datetime
+
+    from nous.db.session import AsyncSessionLocal
+    from nous.observability import record_pipeline_run
+    from nous.pipeline.compute_completeness import run_compute_completeness
+
+    async def _run() -> None:
+        started = datetime.now(UTC)
+        async with AsyncSessionLocal() as session:
+            summary = await run_compute_completeness(session, limit=limit)
+            click.echo(summary.model_dump_json(indent=2))
+        # flag_empty off: an empty score set only happens on an empty catalog (no
+        # shown companies) — a young catalog, not a failure.
+        await record_pipeline_run(
+            "compute-completeness",
+            started_at=started,
+            inputs_seen=summary.companies_seen,
+            rows_written=summary.companies_scored,
+            summary=summary,
+        )
+
+    asyncio.run(_run())
+
+
 @cli.command("refresh-vc-portfolios")
 @click.option(
     "--firm",

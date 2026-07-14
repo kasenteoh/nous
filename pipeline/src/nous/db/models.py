@@ -397,6 +397,22 @@ class Company(Base):
         ARRAY(String), nullable=True, server_default=text("'{}'")
     )
 
+    # Stored completeness score (migration 0042), (re)written weekly by the
+    # compute-completeness stage: util.completeness.completeness_score over 9
+    # weighted presence fields (website/description dominate). Range [0, 1]:
+    # 0.0 = husk (name only), 1.0 = every field present. This is the SAME scorer
+    # the internal data-quality report uses — util.completeness is the sole source
+    # of truth, so the web reads this column and never re-derives the score in TS.
+    # Unlike momentum, this is never NULL for a scored company (a husk scores 0.0,
+    # not NULL); NULL means "not yet computed" (pre-migration/unscored) and the web
+    # degrades to a hidden badge. NOT indexed: read per-company for the /c/[slug]
+    # provenance badge, never a WHERE/ORDER BY key (unlike momentum_score's
+    # /trending leaderboard).
+    completeness_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    completeness_computed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
 
 class RawPage(Base):
     """Scraped-page cache for homepage / about / product pages.

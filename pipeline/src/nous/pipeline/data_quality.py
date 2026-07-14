@@ -27,14 +27,14 @@ from collections import Counter
 from datetime import UTC, datetime, timedelta
 
 from pydantic import BaseModel, Field
-from sqlalchemy import func, or_, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from nous.db.models import Company, Person
 from nous.observability import write_step_summary
 from nous.util.completeness import (
     FIELD_WEIGHTS,
-    CompletenessFields,
+    completeness_fields,
     completeness_score,
 )
 
@@ -94,23 +94,22 @@ async def run_data_quality(session: AsyncSession) -> DataQualitySummary:
         (await session.execute(select(Person.company_id).distinct())).scalars().all()
     )
 
-    # Per-company presence booleans for the shown cohort, in one round-trip. Core
-    # columns only (not full ORM rows) so a few-thousand-row scan stays cheap.
+    # Raw presence-driving columns for the shown cohort, in one round-trip. Core
+    # columns only (not full ORM rows) so a few-thousand-row scan stays cheap; the
+    # presence booleans are derived in Python via completeness_fields() — the same
+    # mapping the stored compute-completeness column uses, so the two never drift.
     stmt = select(
         Company.id,
-        Company.website.is_not(None).label("has_website"),
-        Company.description_short.is_not(None).label("has_description"),
-        (Company.funding_round_count > 0).label("has_funding"),
-        or_(
-            Company.hq_country.is_not(None), Company.hq_city.is_not(None)
-        ).label("has_location"),
-        Company.industry_group.is_not(None).label("has_industry"),
-        Company.logo_url.is_not(None).label("has_logo"),
-        (func.coalesce(func.cardinality(Company.tags), 0) > 0).label("has_tags"),
-        or_(
-            Company.employee_count_min.is_not(None),
-            Company.employee_count_max.is_not(None),
-        ).label("has_employees"),
+        Company.website,
+        Company.description_short,
+        Company.funding_round_count,
+        Company.hq_country,
+        Company.hq_city,
+        Company.industry_group,
+        Company.logo_url,
+        Company.tags,
+        Company.employee_count_min,
+        Company.employee_count_max,
         Company.website_source,
         Company.normalized_name,
         Company.last_enriched_at,
@@ -130,16 +129,18 @@ async def run_data_quality(session: AsyncSession) -> DataQualitySummary:
     now = datetime.now(tz=UTC)
 
     for row in rows:
-        fields = CompletenessFields(
-            has_website=row.has_website,
-            has_description=row.has_description,
-            has_funding=row.has_funding,
-            has_location=row.has_location,
-            has_industry=row.has_industry,
+        fields = completeness_fields(
+            website=row.website,
+            description_short=row.description_short,
+            funding_round_count=row.funding_round_count,
+            hq_country=row.hq_country,
+            hq_city=row.hq_city,
+            industry_group=row.industry_group,
             has_people=row.id in people_ids,
-            has_logo=row.has_logo,
-            has_tags=row.has_tags,
-            has_employees=row.has_employees,
+            logo_url=row.logo_url,
+            tags=row.tags,
+            employee_count_min=row.employee_count_min,
+            employee_count_max=row.employee_count_max,
         )
         present = fields.model_dump()
         for key, is_present in present.items():
@@ -157,7 +158,7 @@ async def run_data_quality(session: AsyncSession) -> DataQualitySummary:
                 bucket_counts[label] += 1
                 break
 
-        if row.has_website:
+        if row.website is not None:
             website_source_counts[row.website_source or _LEGACY_SOURCE] += 1
 
         name_counts[row.normalized_name] += 1
