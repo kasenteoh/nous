@@ -101,10 +101,42 @@ page bottom; `StatusBadge`/`MomentumBadge` are the muted-pill vocabulary;
 - Confidence shown as **tooltip-on-all + pill-only-for-low**, not a tri-state
   pill wall.
 
+## Cost
+The 3-PR MVP is **$0, no LLM** — it only surfaces provenance data that already
+exists. Cost is NOT a hard constraint on this feature, though: **DeepSeek (the
+one paid line) is permitted** where it genuinely earns its keep (see the optional
+enhancement below). Only a *new non-DeepSeek* paid line, or a material rise in
+DeepSeek volume, needs flagging — the standing `CLAUDE.md` rule.
+
+## Optional enhancement (DeepSeek-permitted): source-verification
+The strongest "make the moat visible" move, unlocked now that DeepSeek is
+allowed: don't just *cite* a source — **verify the fact against it**. A bounded,
+**discriminative** (never generative) pass, per rendered fact with a cited
+source (funding amount, HQ, status): fetch the cited `source_url` text and ask
+DeepSeek "does this source support the claim '<fact>'? → supported / unsupported
+/ uncertain + the supporting quote." Store a per-fact verification stamp; the
+panel then shows a "✓ Verified against source" affordance for `supported` facts
+only. **Empty-not-fabricate:** `uncertain`/`unsupported` are NOT marked verified
+(never claim a verification we don't have) — and an `unsupported` result is a
+free data-quality signal worth surfacing internally.
+
+This is a **separate, larger bet** — treat it husk-style like talent-flow: a $0
+prevalence check / a bounded LLM dry run FIRST (measure verify-rate + $ from
+`emit_run_telemetry`), golden-set gate the verification prompt (it persists
+data), respect scraping etiquette (contact-email UA, robots.txt, 1 req/sec) when
+re-fetching sources, and only build the full pass if the dry run is clean. Do it
+AFTER the 3-PR MVP, not folded into it.
+
+**Stays OFF regardless of cost:** an LLM-*written* provenance narrative ("how we
+know this") — generative prose is exactly what the moat forbids (one hallucinated
+claim destroys the trust the feature sells; ROADMAP "LLM-written narrative
+reports" is deferred indefinitely). Verification is discriminative; narrative is
+generative — only the former is allowed.
+
 ## Non-goals / follow-ups
 - No per-round numeric confidence score (the enum stays).
 - No `extraction_confidence` on people/competitors/career_moves (would need
-  pipeline changes) — a later enhancement.
+  pipeline changes) — a later enhancement (or fold into the verification pass).
 - A public data-quality dashboard (the web-facing version of #175's aggregate)
   is a separate Later item, not this feature.
 
