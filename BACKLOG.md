@@ -237,6 +237,17 @@ Thin single-company tag pages: `/tag/[tag]` now `noindex` when <3 companies, and
 `sitemap.ts` already excludes tags with <3 (`listAllTags`). **Still open:** a
 sitemap *index* before companies+tags approach the 50k-URL sitemap cap.
 
+### `text-ink-faint` de-emphasized text is below WCAG AA contrast [S] — P2
+Surfaced by the #193 provenance review: `--ink-faint` (#d4d4d4 on the #fafafa
+light canvas ≈ **1.42:1**; 1.82:1 dark) is used in ~30 places for de-emphasized
+supplementary text (footers, ranks, `app/page.tsx:253` "+N more", the
+`· includes semantic matches` note, etc.) — well below SC 1.4.3's 4.5:1 for text
+(and 3:1 for interactive controls). #193 fixed the two trust-critical provenance
+instances (the source `↗` glyph + the source-type tag → `text-ink-muted`). Do a
+system-wide pass: audit `text-ink-faint` sites, bump readable/interactive ones to
+a token ≥AA, or lift `--ink-faint`'s value. Token-level change — verify no
+regression in the intentionally-quiet spots.
+
 ---
 
 ## Product backlog — Wave 1: free wins

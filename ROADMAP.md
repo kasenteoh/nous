@@ -158,17 +158,22 @@ Built on top of the now-trustworthy foundation.
 
 Depends on the foundation being solid, so genuinely later.
 
-1. **Provenance UI, made public.** — **IN PROGRESS** (owner-approved 3-PR split;
-   spec `docs/superpowers/specs/2026-07-14-provenance-ui-design.md`). Inline
-   sources, "last verified," completeness/confidence badges on the profile — turn
-   "we don't hallucinate" from a claim into a *visible feature*. This is where
-   data quality becomes a distribution surface. **PR 1 SHIPPED (#191):** the
-   stored `completeness_score` (migration 0042 + `compute-completeness`). **PR 2
-   SHIPPED (#192):** the `/c/[slug]` "Data & provenance" panel (positive-only
-   badge, "last verified N days ago", sourcing line). **Next:** PR 3 — granular
-   per-fact source superscripts + source-type labels + confidence tooltips.
-   Framing: a **trust-builder**, never a data-gap advertiser (completeness ≠
-   trustworthiness — the badge is positive-only and hidden below threshold).
+1. **Provenance UI, made public.** — **MVP SHIPPED (#191–#193, 2026-07-14)**
+   (owner-approved 3-PR split; spec
+   `docs/superpowers/specs/2026-07-14-provenance-ui-design.md`). The moat ("every
+   fact is sourced / we don't hallucinate") is now a *visible*, positive,
+   trust-building feature on `/c/[slug]`: **#191** stored `completeness_score`
+   (migration 0042 + `compute-completeness`); **#192** the "Data & provenance"
+   panel (positive-only badge, "last verified N days ago", sourcing line);
+   **#193** granular per-fact source superscripts + typed citations + confidence
+   transparency. All $0 (surfaces existing data; no LLM). Framing held: a
+   **trust-builder**, never a data-gap advertiser (the badge is positive-only,
+   hidden below threshold). **Remaining (optional, separate bet):** the
+   DeepSeek-powered **source-verification** pass ("✓ Verified against source") —
+   husk-style (dry-run-gated, golden-set-gated, scraping etiquette), and a
+   *material DeepSeek volume* increase, so flag to the owner before building. The
+   LLM-*written* provenance narrative stays OFF (generative prose is what the moat
+   forbids). A public data-quality dashboard remains a separate Later item.
 
 2. **Sharpen AI-answer surfaces.** `llms.txt`, `/c/[slug].md`. As answer engines
    increasingly cite sources, "fully-sourced" is a structural advantage worth

@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import CompanyPage from "@/app/c/[slug]/page";
 import {
@@ -140,5 +140,33 @@ describe("company page husk placeholder", () => {
       screen.queryByText(/built a full profile yet/),
     ).not.toBeInTheDocument();
     expect(screen.getByText("Builds robots.")).toBeInTheDocument();
+  });
+});
+
+describe("company page provenance wiring", () => {
+  it("cites website provenance as a Sources row with its source-type label", async () => {
+    // Regression: the page must ADD website_source_url to the citations list
+    // (like total-raised/status), otherwise the "Website / Wikidata / VC
+    // portfolio" source-type labels are unreachable on the real page even though
+    // citationSourceType handles them in isolation.
+    vi.mocked(getCompanyBySlug).mockResolvedValue(
+      detail({
+        company: huskCompany({
+          description_short: "Builds robots.", // non-husk → full page renders
+          website: "https://acme.com",
+          website_source: "wikidata",
+          website_source_url: "https://www.wikidata.org/wiki/Q42",
+        }),
+      }),
+    );
+    await renderCompanyPage();
+
+    const section = screen
+      .getByRole("heading", { name: "Sources" })
+      .closest("section") as HTMLElement;
+    expect(section).not.toBeNull();
+    // The website provenance is listed and tagged by its source type.
+    expect(within(section).getByText("Website")).toBeInTheDocument();
+    expect(within(section).getByText("· Wikidata")).toBeInTheDocument();
   });
 });

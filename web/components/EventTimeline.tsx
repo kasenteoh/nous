@@ -16,8 +16,28 @@
 
 import { formatDate, formatUsd, formatUsdExact } from "@/lib/format";
 import type { FundingRoundWithInvestors, NewsArticleRow } from "@/lib/types";
+import { SourceLink } from "@/components/SourceLink";
 
 const EM_DASH = "—";
+
+/**
+ * Hover tooltip surfacing a round's extraction confidence on ALL rounds
+ * (transparency without a wall of pills — only `low` keeps a visible pill, the
+ * warning). Returns undefined for null/absent/unknown values so we never claim
+ * a confidence we don't have.
+ */
+function confidenceTooltip(confidence: string | null): string | undefined {
+  switch (confidence) {
+    case "high":
+      return "Extracted with high confidence";
+    case "medium":
+      return "Extracted with medium confidence";
+    case "low":
+      return "Extracted with low confidence";
+    default:
+      return undefined;
+  }
+}
 
 function joinNames(names: string[]): string {
   return names.length > 0 ? names.join(", ") : EM_DASH;
@@ -125,7 +145,12 @@ function FundingEntry({ round }: { round: FundingRoundWithInvestors }) {
     round.leadInvestors.length > 0 || round.otherInvestors.length > 0;
   return (
     <>
-      <p className="mt-1 flex flex-wrap items-baseline gap-x-2">
+      {/* title carries the extraction confidence for EVERY round (transparency);
+          the visible pill below stays low-only (the warning). */}
+      <p
+        className="mt-1 flex flex-wrap items-baseline gap-x-2"
+        title={confidenceTooltip(round.extraction_confidence)}
+      >
         <span className="font-medium text-ink">
           {round.round_type ?? "Funding round"}
         </span>
@@ -156,6 +181,9 @@ function FundingEntry({ round }: { round: FundingRoundWithInvestors }) {
             low confidence
           </span>
         )}
+        {/* Inline source affordance → the article that reported this round.
+            Self-omits when primary_news_url is absent/unparseable. */}
+        <SourceLink url={round.primary_news_url} label="Funding round" />
       </p>
       {hasInvestors && (
         <p className="mt-0.5 text-sm text-ink-soft">
