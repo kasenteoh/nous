@@ -41,7 +41,7 @@ import { Competitors } from "@/components/Competitors";
 import { RelatedCompanies } from "@/components/RelatedCompanies";
 import { RssLink } from "@/components/RssLink";
 import { ProvenancePanel } from "@/components/ProvenancePanel";
-import { Sources } from "@/components/Sources";
+import { Sources, hasRenderableCitations } from "@/components/Sources";
 
 // At or above this many consecutive failed homepage scrapes, the detail page
 // shows a muted "possibly inactive" rider. Deliberately a low-confidence
@@ -723,9 +723,14 @@ export default async function CompanyPage({ params }: Props) {
           and a sourcing line anchor-linking down to the Sources section. Each
           part self-omits, and the panel renders nothing when none applies, so it
           degrades cleanly when the completeness/freshness columns are absent
-          pre-migration (select("*") omits unknown columns). hasSources gates the
-          sourcing line on the same citation list the Sources section renders. */}
-      <ProvenancePanel company={company} hasSources={citations.length > 0} />
+          pre-migration (select("*") omits unknown columns). hasSources uses
+          hasRenderableCitations — the SAME survival predicate <Sources> applies —
+          so the sourcing line (and its #sources anchor) never shows when <Sources>
+          would render nothing (a dead anchor + false trust claim). */}
+      <ProvenancePanel
+        company={company}
+        hasSources={hasRenderableCitations(citations)}
+      />
 
       {/* ── Sources (D1: consolidated, labeled, at the bottom) ─────────── */}
       <Sources citations={citations} />

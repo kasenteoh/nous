@@ -7,6 +7,7 @@ import {
   completenessLabel,
   lastVerified,
 } from "@/components/ProvenancePanel";
+import { hasRenderableCitations } from "@/components/Sources";
 import type { CompanyRow } from "@/lib/types";
 
 // The panel reads only completeness_score + the six freshness stamps off the
@@ -210,5 +211,37 @@ describe("ProvenancePanel", () => {
       "title",
       "May 12, 2026",
     );
+  });
+});
+
+// ─── hasSources gate parity with <Sources> ────────────────────────────────────
+// The sourcing line / #sources anchor must appear iff <Sources> actually renders
+// a section — otherwise the anchor is dead and the "every figure links to a
+// recorded source" claim is false. Both gate on this SAME predicate.
+
+describe("hasRenderableCitations (the sourcing-line gate)", () => {
+  it("is true when at least one citation URL parses to a hostname", () => {
+    expect(
+      hasRenderableCitations([{ url: "https://techcrunch.com/x" }]),
+    ).toBe(true);
+    // Mixed: one good URL among unparseable ones still renders a Sources row.
+    expect(
+      hasRenderableCitations([{ url: "acme.com" }, { url: "https://sec.gov/y" }]),
+    ).toBe(true);
+  });
+
+  it("is false when EVERY citation URL is unparseable (scheme-less bare domain)", () => {
+    // The pipeline stores scheme-less website values like 'acme.com' (the
+    // total_raised / leadership source fallback), and `new URL('acme.com')`
+    // throws — <Sources> drops them and renders nothing, so the panel must not
+    // show a sourcing line pointing at a #sources anchor that won't exist.
+    expect(hasRenderableCitations([{ url: "acme.com" }])).toBe(false);
+    expect(
+      hasRenderableCitations([{ url: "acme.com" }, { url: "not a url" }]),
+    ).toBe(false);
+  });
+
+  it("is false for no citations", () => {
+    expect(hasRenderableCitations([])).toBe(false);
   });
 });
