@@ -75,6 +75,7 @@ function detail(): CompanyDetail {
     competitors: [],
     investors: [],
     news: [],
+    verifications: [],
   };
 }
 

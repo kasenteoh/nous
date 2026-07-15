@@ -13,9 +13,15 @@
 // news), undated news trails.
 
 import { formatDate, formatUsd, formatUsdExact } from "@/lib/format";
-import type { FundingRoundWithInvestors, NewsArticleRow } from "@/lib/types";
+import type {
+  FactVerification,
+  FundingRoundWithInvestors,
+  NewsArticleRow,
+} from "@/lib/types";
 import { buildTimeline, type CoverageLink } from "@/lib/timeline";
 import { SourceLink } from "@/components/SourceLink";
+import { VerifiedBadge } from "@/components/VerifiedBadge";
+import { verifiedAgainst } from "@/lib/verifications";
 
 const EM_DASH = "—";
 
@@ -52,9 +58,12 @@ function joinOthers(names: string[]): string {
 interface Props {
   rounds: FundingRoundWithInvestors[];
   news: NewsArticleRow[];
+  /** `supported` source-verifications keyed by (fact_kind, fact_ref) — a round's
+   *  ✓ shows when its id + current source match. Absent → no badges. */
+  verified?: Map<string, FactVerification>;
 }
 
-export function EventTimeline({ rounds, news }: Props) {
+export function EventTimeline({ rounds, news, verified }: Props) {
   const items = buildTimeline(rounds, news);
 
   return (
@@ -93,7 +102,20 @@ export function EventTimeline({ rounds, news }: Props) {
                 </p>
 
                 {item.kind === "funding" ? (
-                  <FundingEntry round={item.round} coverage={item.coverage} />
+                  <FundingEntry
+                    round={item.round}
+                    coverage={item.coverage}
+                    verified={
+                      verified
+                        ? verifiedAgainst(
+                            verified,
+                            "funding_round",
+                            item.round.id,
+                            item.round.primary_news_url,
+                          )
+                        : null
+                    }
+                  />
                 ) : (
                   <NewsEntry article={item.article} />
                 )}
@@ -109,9 +131,11 @@ export function EventTimeline({ rounds, news }: Props) {
 function FundingEntry({
   round,
   coverage,
+  verified,
 }: {
   round: FundingRoundWithInvestors;
   coverage: CoverageLink[];
+  verified?: FactVerification | null;
 }) {
   const hasInvestors =
     round.leadInvestors.length > 0 || round.otherInvestors.length > 0;
@@ -159,6 +183,10 @@ function FundingEntry({
         {coverage.length === 1 && (
           <SourceLink url={coverage[0].url} label="Funding round" />
         )}
+        {/* ✓ when this round's figure is verified against its cited source
+            (supported + source-matched upstream; shows regardless of how many
+            outlets covered it). */}
+        <VerifiedBadge verification={verified} label="Funding round" />
       </p>
       {hasInvestors && (
         <p className="mt-0.5 text-sm text-ink-soft">

@@ -22,6 +22,7 @@ import type {
   CompanyInvestorRow,
   CompanyListRow,
   CompanyRow,
+  FactVerification,
   CompareCompany,
   CompetitorRow,
   CompetitorWithResolved,
@@ -1824,8 +1825,14 @@ export async function getCompanyBySlug(
 
   // 2, 3 & 4: fetch people, funding rounds (with nested investor joins), and
   // competitors (with resolved company) in parallel.
-  const [peopleResult, roundsResult, competitorsResult, investorsResult, newsResult] =
-    await Promise.all([
+  const [
+    peopleResult,
+    roundsResult,
+    competitorsResult,
+    investorsResult,
+    newsResult,
+    verificationsResult,
+  ] = await Promise.all([
       supabase
         .from("people")
         .select("*")
@@ -1853,6 +1860,15 @@ export async function getCompanyBySlug(
         .select("id, url, title, source, published_date")
         .eq("company_id", companyId)
         .order("published_date", { ascending: false, nullsFirst: false }),
+
+      // Source-verification: only `supported` verdicts back the public "✓ Verified
+      // against source" affordance. Migration-order-free — a missing table / any
+      // error degrades to no badges (handled below), never a page failure.
+      supabase
+        .from("fact_verifications")
+        .select("fact_kind, fact_ref, source_url, supporting_quote")
+        .eq("company_id", companyId)
+        .eq("verdict", "supported"),
     ]);
 
   if (peopleResult.error) {
@@ -1959,6 +1975,16 @@ export async function getCompanyBySlug(
 
   const news = (newsResult.data ?? []) as NewsArticleRow[];
 
+  if (verificationsResult.error) {
+    // Table absent (pre-migration) or any other error → no ✓ badges; the page
+    // still renders (migration-order-free, same posture as momentum/map).
+    console.error(
+      "[getCompanyBySlug] fact_verifications query failed:",
+      verificationsResult.error.message,
+    );
+  }
+  const verifications = (verificationsResult.data ?? []) as FactVerification[];
+
   return {
     company: company as unknown as CompanyRow,
     people,
@@ -1966,6 +1992,7 @@ export async function getCompanyBySlug(
     competitors,
     investors,
     news,
+    verifications,
   };
 }
 

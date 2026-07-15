@@ -62,6 +62,7 @@ function detail(overrides: Partial<CompanyDetail> = {}): CompanyDetail {
     competitors: [],
     investors: [],
     news: [],
+    verifications: [],
     ...overrides,
   };
 }

@@ -440,6 +440,21 @@ export interface HuskFallbackRow {
   name: string;
 }
 
+/**
+ * A `supported` source-verification verdict (pipeline `fact_verifications`), used
+ * to render the "✓ Verified against source" affordance. Only `supported` rows are
+ * fetched — `uncertain`/`unsupported` are never a public badge. `fact_kind` +
+ * `fact_ref` identify the fact within the company (company-level facts use
+ * `fact_ref = ''`; a funding round uses the round's id); `source_url` is matched
+ * against the figure's CURRENT source so a stale verdict never shows a badge.
+ */
+export interface FactVerification {
+  fact_kind: string;
+  fact_ref: string;
+  source_url: string;
+  supporting_quote: string | null;
+}
+
 /** Full company detail assembled from the DB queries. */
 export interface CompanyDetail {
   company: CompanyRow;
@@ -448,6 +463,9 @@ export interface CompanyDetail {
   competitors: CompetitorWithResolved[]; // sorted by rank ascending
   investors: CompanyInvestorRow[]; // company-level investors (VC firms)
   news: NewsArticleRow[]; // recent news articles, newest first
+  /** `supported` source-verification verdicts (empty when the feature hasn't run
+   *  or the table is absent — the ✓ is migration-order-free / degrades to hidden). */
+  verifications: FactVerification[];
 }
 
 // ─── Compare view (Task C5) ───────────────────────────────────────────────────
