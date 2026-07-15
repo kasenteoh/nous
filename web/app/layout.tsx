@@ -2,7 +2,9 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import Link from "next/link";
 import { ThemeToggle } from "@/components/ThemeToggle";
+import { MobileNav } from "@/components/MobileNav";
 import { CompareBar } from "@/components/CompareBar";
+import { PRIMARY_NAV } from "@/lib/nav";
 import { SITE_NAME, repoIssueUrl, siteOrigin } from "@/lib/site";
 import "./globals.css";
 
@@ -109,74 +111,25 @@ export default function RootLayout({
                 ⌕
               </Link>
 
-              <nav aria-label="Primary">
+              {/* Desktop nav — shown at lg+ where all links fit; below lg the
+                  full row would overflow the viewport, so it collapses into
+                  <MobileNav>. Both draw from PRIMARY_NAV so they never drift. */}
+              <nav aria-label="Primary" className="hidden lg:block">
                 <ul className="flex items-center gap-3 sm:gap-5 text-ink-muted">
-                  <li>
-                    <Link
-                      href="/companies"
-                      className="hover:text-ink transition-colors"
-                    >
-                      Browse
-                    </Link>
-                  </li>
-                  <li>
-                    <Link
-                      href="/investors"
-                      className="hover:text-ink transition-colors"
-                    >
-                      Investors
-                    </Link>
-                  </li>
-                  <li>
-                    <Link
-                      href="/themes"
-                      className="hover:text-ink transition-colors"
-                    >
-                      Themes
-                    </Link>
-                  </li>
-                  <li>
-                    <Link
-                      href="/industry"
-                      className="hover:text-ink transition-colors"
-                    >
-                      Industries
-                    </Link>
-                  </li>
-                  <li>
-                    <Link
-                      href="/trends"
-                      className="hover:text-ink transition-colors"
-                    >
-                      Trends
-                    </Link>
-                  </li>
-                  <li>
-                    <Link
-                      href="/trending"
-                      className="hover:text-ink transition-colors whitespace-nowrap"
-                    >
-                      Heating up
-                    </Link>
-                  </li>
-                  <li>
-                    <Link
-                      href="/surprise"
-                      className="hover:text-ink transition-colors whitespace-nowrap"
-                    >
-                      Surprise me
-                    </Link>
-                  </li>
-                  <li>
-                    <Link
-                      href="/about"
-                      className="hover:text-ink transition-colors"
-                    >
-                      About
-                    </Link>
-                  </li>
+                  {PRIMARY_NAV.map((item) => (
+                    <li key={item.href}>
+                      <Link
+                        href={item.href}
+                        className="hover:text-ink transition-colors whitespace-nowrap"
+                      >
+                        {item.label}
+                      </Link>
+                    </li>
+                  ))}
                 </ul>
               </nav>
+
+              <MobileNav />
 
               <ThemeToggle />
             </div>
