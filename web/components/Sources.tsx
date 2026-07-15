@@ -54,10 +54,18 @@ const WEBSITE_SOURCE_LABELS: Record<string, SourceType> = {
   vc_portfolio: "VC portfolio",
 };
 
-/** Conservative allowlist of genuine press / press-wire hosts. Matched exactly
- *  or as a parent domain (so `feeds.reuters.com` still counts). Kept small on
- *  purpose: a host we don't recognize gets no label, never a mislabel. */
+/** Conservative allowlist of genuine press / press-wire hosts, plus Google News.
+ *  Matched exactly or as a parent domain (so `feeds.reuters.com` still counts).
+ *  Kept small on purpose: a host we don't recognize gets no label, never a
+ *  mislabel.
+ *
+ *  `news.google.com` is a news *aggregator*, not an outlet, but it is the host
+ *  behind the majority of funding citations (funding rounds cite their
+ *  `primary_news_url`, an `ingest-news` Google News RSS link), and Google News
+ *  only ever indexes news articles — so "News" is an accurate, never-wrong label
+ *  for it. Without this entry the dominant fact-source host renders untagged. */
 const NEWS_HOSTS: readonly string[] = [
+  "news.google.com",
   "techcrunch.com",
   "forbes.com",
   "reuters.com",

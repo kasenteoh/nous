@@ -113,6 +113,18 @@ describe("citationSourceType", () => {
     expect(citationSourceType("https://feeds.reuters.com/c")).toBe("News");
   });
 
+  it("labels Google News (the dominant funding-source host) 'News'", () => {
+    // Funding rounds cite their `primary_news_url`, a Google News RSS link;
+    // without this the majority of citations would render untagged.
+    expect(
+      citationSourceType(
+        "https://news.google.com/rss/articles/CBMiP0FVX3lxTE9L?oc=5",
+      ),
+    ).toBe("News");
+    // Only the news subdomain — a bare google.com host stays un-inferable.
+    expect(citationSourceType("https://google.com/search?q=acme")).toBeNull();
+  });
+
   it("omits the label for an un-inferable host (never a guess)", () => {
     expect(citationSourceType("https://some-random-blog.example/x")).toBeNull();
     // An unknown host is NOT the company domain, wikidata, or a known press host.
