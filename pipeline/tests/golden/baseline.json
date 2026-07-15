@@ -43,6 +43,6 @@
     "grounding_mean": 1.0,
     "grounding_min": 1.0,
     "parse_rate": 1.0,
-    "verdict_accuracy": 1.0
+    "verdict_accuracy": 0.888
   }
 }

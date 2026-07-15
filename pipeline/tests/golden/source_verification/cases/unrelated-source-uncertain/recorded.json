@@ -1,7 +1,9 @@
 {
-  "provenance": "simulated",
+  "provenance": "deepseek",
+  "model": "deepseek-chat",
+  "recorded_at": "2026-07-15T18:01:29+00:00",
   "response": {
-    "verdict": "uncertain",
+    "verdict": "unsupported",
     "supporting_quote": null
   }
 }

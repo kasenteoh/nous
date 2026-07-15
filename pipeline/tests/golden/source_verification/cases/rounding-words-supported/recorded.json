@@ -1,7 +1,9 @@
 {
-  "provenance": "simulated",
+  "provenance": "deepseek",
+  "model": "deepseek-chat",
+  "recorded_at": "2026-07-15T18:01:20+00:00",
   "response": {
     "verdict": "supported",
-    "supporting_quote": "nearly $5 million in seed funding"
+    "supporting_quote": "raised nearly $5 million in seed funding"
   }
 }

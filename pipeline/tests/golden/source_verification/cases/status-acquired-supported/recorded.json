@@ -1,5 +1,7 @@
 {
-  "provenance": "simulated",
+  "provenance": "deepseek",
+  "model": "deepseek-chat",
+  "recorded_at": "2026-07-15T18:01:23+00:00",
   "response": {
     "verdict": "supported",
     "supporting_quote": "Lumen Labs was acquired by Oracle"
