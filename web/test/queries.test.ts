@@ -421,6 +421,17 @@ describe("getCompanyBySlug", () => {
           };
         case "news_articles":
           return { data: [] };
+        case "fact_verifications":
+          return {
+            data: [
+              {
+                fact_kind: "total_raised",
+                fact_ref: "",
+                source_url: "https://techcrunch.com/acme",
+                supporting_quote: "raised $12 million",
+              },
+            ],
+          };
         default:
           throw new Error(`unexpected query on ${b.table}`);
       }

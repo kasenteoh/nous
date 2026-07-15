@@ -42,6 +42,8 @@ import { RelatedCompanies } from "@/components/RelatedCompanies";
 import { RssLink } from "@/components/RssLink";
 import { ProvenancePanel } from "@/components/ProvenancePanel";
 import { SourceLink } from "@/components/SourceLink";
+import { VerifiedBadge } from "@/components/VerifiedBadge";
+import { buildVerificationLookup, verifiedAgainst } from "@/lib/verifications";
 import { Sources, hasRenderableCitations } from "@/components/Sources";
 
 // At or above this many consecutive failed homepage scrapes, the detail page
@@ -296,7 +298,11 @@ export default async function CompanyPage({ params }: Props) {
     notFound();
   }
 
-  const { company, people, fundingRounds, competitors, investors, news } = detail;
+  const { company, people, fundingRounds, competitors, investors, news, verifications } =
+    detail;
+  // "✓ Verified against source" — supported verdicts keyed by fact (empty until
+  // the verify-sources apply pass runs; degrades to no badges).
+  const vlookup = buildVerificationLookup(verifications);
 
   // Relationship-graph fetches depend on the resolved company id, so they run
   // after getCompanyBySlug — but in parallel with each other (same idiom as the
@@ -460,6 +466,15 @@ export default async function CompanyPage({ params }: Props) {
                 sourceUrl={company.status_source_url}
               />
               <SourceLink url={company.status_source_url} label="Status" />
+              <VerifiedBadge
+                verification={verifiedAgainst(
+                  vlookup,
+                  "status",
+                  "",
+                  company.status_source_url,
+                )}
+                label="Status"
+              />
             </span>
           ) : (
             <StatusBadge
@@ -618,6 +633,17 @@ export default async function CompanyPage({ params }: Props) {
               {hasTotalRaised && (
                 <SourceLink url={totalRaisedSourceUrl} label="Total raised" />
               )}
+              {hasTotalRaised && (
+                <VerifiedBadge
+                  verification={verifiedAgainst(
+                    vlookup,
+                    "total_raised",
+                    "",
+                    totalRaisedSourceUrl,
+                  )}
+                  label="Total raised"
+                />
+              )}
             </dd>
             {/* "As of" freshness rider (not a citation) — kept inline. */}
             {hasTotalRaised && statedAsOf && (
@@ -705,7 +731,7 @@ export default async function CompanyPage({ params }: Props) {
 
       {/* ── Timeline: funding rounds + news, merged reverse-chronologically
              (replaces the old separate Funding History table + News list) ── */}
-      <EventTimeline rounds={fundingRounds} news={news} />
+      <EventTimeline rounds={fundingRounds} news={news} verified={vlookup} />
 
       {/* ── Investors ──────────────────────────────────────────────────── */}
       <Investors
