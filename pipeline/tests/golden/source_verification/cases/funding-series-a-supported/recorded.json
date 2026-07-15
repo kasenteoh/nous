@@ -1,5 +1,7 @@
 {
-  "provenance": "simulated",
+  "provenance": "deepseek",
+  "model": "deepseek-chat",
+  "recorded_at": "2026-07-15T18:01:14+00:00",
   "response": {
     "verdict": "supported",
     "supporting_quote": "raised $12 million in a Series A round"

@@ -1,7 +1,9 @@
 {
-  "provenance": "simulated",
+  "provenance": "deepseek",
+  "model": "deepseek-chat",
+  "recorded_at": "2026-07-15T18:01:16+00:00",
   "response": {
     "verdict": "supported",
-    "supporting_quote": "$40 million Series B financing"
+    "supporting_quote": "Cobalt has closed a $40 million Series B financing"
   }
 }
