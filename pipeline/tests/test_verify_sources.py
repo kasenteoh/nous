@@ -113,6 +113,8 @@ def test_format_usd_scales() -> None:
     assert _format_usd(Decimal("5500000")) == "$5.5M"
     assert _format_usd(Decimal("500000")) == "$500K"
     assert _format_usd(None) == "an undisclosed amount"
+    # A negative (data-error) amount never fabricates a figure in the claim.
+    assert _format_usd(Decimal("-100000")) == "an undisclosed amount"
 
 
 def test_total_raised_claim_includes_amount_and_as_of() -> None:

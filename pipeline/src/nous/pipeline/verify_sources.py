@@ -134,7 +134,9 @@ def classify_source(url: str | None, *, has_stored_text: bool) -> Bucket:
 
 def _format_usd(amount: Decimal | None) -> str:
     """A compact human dollar figure for a claim ("$12.4B", "$110M", "$500K")."""
-    if amount is None:
+    # None or a negative (a pre-existing data error) → don't fabricate a figure in
+    # the claim; "an undisclosed amount" keeps the claim well-formed for the model.
+    if amount is None or amount < 0:
         return "an undisclosed amount"
     value = float(amount)
     if value >= 1e9:
@@ -549,11 +551,24 @@ async def _collect_stored_text_facts(
     facts.sort(key=lambda f: f.prominence, reverse=True)
     selected = facts[:limit]
 
-    # Load source text for the final set only.
+    # Load source text for the final set only. The SQL already filtered to facts
+    # WHERE stored text exists, so a miss here means a concurrent delete removed
+    # the article/page between the SELECT and the load — log it and drop the fact
+    # (never verify a claim against empty text).
+    loaded: list[_Fact] = []
     for fact in selected:
         text = await _load_source_text(session, fact.company_id, fact.source_url)
         fact.source_text = truncate_to_chars(text or "", MAX_PROMPT_INPUT_CHARS)
-    return [f for f in selected if len(f.source_text) >= _MIN_SOURCE_CHARS]
+        if len(fact.source_text) >= _MIN_SOURCE_CHARS:
+            loaded.append(fact)
+        else:
+            logger.warning(
+                "verify-sources: %s (%s) lost its stored source text between "
+                "selection and load (concurrent change?) — skipping.",
+                fact.company_slug,
+                fact.fact_kind,
+            )
+    return loaded
 
 
 async def run_verify_sources(
