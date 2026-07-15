@@ -1936,6 +1936,89 @@ def extract_career_history_cmd(limit: int | None, dry_run: bool) -> None:
     asyncio.run(_run())
 
 
+@cli.command("verify-sources-probe")
+def verify_sources_probe_cmd() -> None:
+    """Census sourced facts by verifiability (read-only, no LLM, $0).
+
+    The prevalence gate before any source-verification spend: how many rendered
+    facts (total raised, non-active status, each funding round) carry a
+    source_url, bucketed stored / refetch / unreachable. No writes, no
+    pipeline_runs row (mirrors db-stats / career-history-probe). Emits a report
+    to the step summary.
+    """
+    import asyncio
+
+    from nous.db.session import AsyncSessionLocal
+    from nous.pipeline.verify_sources import (
+        emit_verify_sources_probe_summary,
+        run_verify_sources_probe,
+    )
+
+    async def _run() -> None:
+        async with AsyncSessionLocal() as session:
+            summary = await run_verify_sources_probe(session)
+        click.echo(summary.model_dump_json(indent=2))
+        emit_verify_sources_probe_summary(summary)
+
+    asyncio.run(_run())
+
+
+@cli.command("verify-sources")
+@click.option(
+    "--limit",
+    type=int,
+    default=25,
+    show_default=True,
+    help="Max facts to verify; bounds LLM spend.",
+)
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    default=False,
+    help=(
+        "Verify the slice + print the table WITHOUT writing (the only supported "
+        "mode today — the fact_verifications apply path lands with migration 0043)."
+    ),
+)
+def verify_sources_cmd(limit: int, dry_run: bool) -> None:
+    """Verify rendered facts against their cited sources — DeepSeek, paid.
+
+    Discriminative (supported / unsupported / uncertain + a grounded quote),
+    never generative. ``--dry-run`` measures support-rate + the fabrication proxy
+    (a 'supported' whose quote isn't a verbatim source substring) + the $/fact
+    over a bounded, prominence-ordered slice of stored-text facts, and writes
+    nothing. Apply (default) is not wired yet — it fails loudly until the
+    ``fact_verifications`` schema + persisting path land.
+    """
+    import asyncio
+
+    from nous.db.session import AsyncSessionLocal
+    from nous.observability import emit_run_telemetry, write_step_summary
+    from nous.pipeline.verify_sources import (
+        render_verify_sources_table,
+        run_verify_sources,
+    )
+
+    if not dry_run:
+        raise click.ClickException(
+            "verify-sources apply mode is not wired yet (needs migration 0043 / "
+            "fact_verifications). Run with --dry-run to measure."
+        )
+
+    async def _run() -> None:
+        # emit_run_telemetry in finally so the LLM $ table is written even if the
+        # stage raises mid-run (the ledger accrues per successful call).
+        try:
+            async with AsyncSessionLocal() as session:
+                summary = await run_verify_sources(session, limit=limit, dry_run=True)
+            click.echo(summary.model_dump_json(indent=2))
+            write_step_summary(render_verify_sources_table(summary))
+        finally:
+            emit_run_telemetry("verify-sources")
+
+    asyncio.run(_run())
+
+
 @cli.command("judge-eligibility")
 @click.option(
     "--limit",
