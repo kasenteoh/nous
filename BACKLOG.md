@@ -266,6 +266,38 @@ lift the token values), and normalize disclosure focus rings to the global
 standard. Token-level change — verify no regression in the intentionally-quiet spots.
 -->
 
+### ~~Mobile masthead nav overflows the viewport~~ [S] — SHIPPED (#196)
+The primary nav rendered all 8 links at every width, so on phones the row
+overflowed and the whole page scrolled horizontally (~90px at 570px, worse at
+375px). Collapsed into a `MobileNav` `☰` client island below `lg` (shared
+`PRIMARY_NAV`; desktop nav `hidden lg:block`); verified 0px overflow at 375px.
+
+### ~~`news.google.com` citations render untagged in Sources~~ [S] — SHIPPED (#196)
+It's the host behind most funding citations but was missing from `NEWS_HOSTS`, so
+only the "Website" self-citation carried a source-type tag. Added the exact host
+(not bare `google.com`) → "News" (Google News only indexes news, never a mislabel).
+
+### Populate prod `completeness_score` so the provenance badge renders [XS] — P2 — OPS, not code
+A live QA pass found the "Richly/Well documented" badge on **0 of ~350** companies.
+NOT a bug — `ProvenancePanel`/`completenessLabel` are correct; prod
+`completeness_score` is simply unpopulated (the `compute-completeness` stage,
+#191, runs on the weekly `discovery.yml`; it shipped 2026-07-14). Action: dispatch
+`discovery.yml` (its TTL-gated `compute-completeness` step runs) or wait for the
+Monday cron, then confirm the badge appears for high-score companies.
+
+### Coverage grouping degrades on undated funding rounds [M] — P2
+`buildTimeline` clusters news under a round by `announced_date` ±14d, so rounds
+with no `announced_date` (e.g. Perplexity's 7 rounds) don't group and the old
+~30-standalone-news-row clutter returns on the most prominent companies. The
+HANDOFF's own follow-up: persist a `news_articles.funding_round_id` link (pipeline
++ migration + read path) for exact grouping independent of dates.
+
+### Provenance sourcing line slightly overstates on unsourced figures [XS] — P3 — owner copy call
+`ProvenancePanel`'s "Every figure here links to a recorded source" shows whenever
+≥1 citation renders, but an individual figure can lack a `↗` (e.g. a total-raised
+with no `total_raised_source_url`, as on Milestone). Minor wording nuance; softening
+risks the "never advertise a gap" moat framing, so left for the owner to decide.
+
 ---
 
 ## Product backlog — Wave 1: free wins

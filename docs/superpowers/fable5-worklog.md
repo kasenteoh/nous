@@ -1350,3 +1350,30 @@ De-emphasized text tokens were below WCAG AA (4.5:1) for text.
   the diff was reviewed line-by-line (all 15 KEEPs confirmed untouched, no
   border/`--edge`/`--accent` change). **A visual change tests can't verify — the
   owner reviewed the Vercel preview and approved before merge.**
+
+## PR #196 — mobile masthead menu + news.google.com "News" label (merged 2026-07-14)
+
+Two web fixes surfaced by a live QA pass of the provenance/trust features on
+prod (Perplexity/Norm/Wave/Milestone + a ~350-company same-origin scan).
+- **NAV-1 — mobile nav overflow.** The primary masthead nav rendered all eight
+  links at every width with no collapse, so on phones the row overflowed the
+  viewport and the whole page scrolled horizontally (~90px at 570px, worse at
+  375px). Extracted the links to a shared `PRIMARY_NAV` (`lib/nav.ts`) used by
+  both the desktop nav (now `hidden lg:block`) and a new `MobileNav` client
+  island (`lg:hidden`) — an accessible `☰` dropdown (`aria-expanded`/
+  `aria-controls`) that closes on link click, Escape, and outside click.
+  Verified live at 375px: horizontal overflow 90px→**0px**; desktop unchanged.
+- **LABEL-1 — `news.google.com` was untagged.** Funding rounds cite their
+  `primary_news_url` (an `ingest-news` Google News RSS link), so `news.google.com`
+  is the host behind most fact citations, but it was absent from `NEWS_HOSTS` →
+  those rows rendered with no source-type tag (only the "Website" self-citation
+  was labelled). Added the exact host (not bare `google.com`); Google News only
+  indexes news, so "News" is never a mislabel.
+- Verified: lint + 398 tests (4 new: news.google.com labelling + MobileNav
+  behaviour) + `next build --webpack` + `check:bundle`, plus live-browser E2E of
+  the mobile menu.
+- **Not in this PR (same QA pass, logged to BACKLOG):** the completeness badge
+  renders nowhere — NOT a bug (`ProvenancePanel` is correct; prod
+  `completeness_score` is just unpopulated → run `compute-completeness`), and
+  coverage-grouping-on-undated-rounds needs a `news_articles.funding_round_id`
+  link (a pipeline/migration change).
