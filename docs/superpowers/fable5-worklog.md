@@ -1377,3 +1377,62 @@ prod (Perplexity/Norm/Wave/Milestone + a ~350-company same-origin scan).
   `completeness_score` is just unpopulated → run `compute-completeness`), and
   coverage-grouping-on-undated-rounds needs a `news_articles.funding_round_id`
   link (a pipeline/migration change).
+
+## PR #197 — source-verification probe + dry-run (husk gate) (merged 2026-07-15)
+
+The measure-first step of the owner-approved "✓ Verified against source"
+enhancement (spec 2026-07-14-provenance-ui-design.md), mirroring the talent-flow
+husk (#184/#185). Persists nothing — no migration.
+- `llm/prompts/source_verification.py`: a **discriminative** (never generative)
+  prompt + schema. `verdict ∈ supported|unsupported|uncertain` + a verbatim
+  `supporting_quote`; empty-not-fabricate (a quote-less "supported" → "uncertain");
+  `quote_is_grounded()` re-checks the quote is a real substring of the source.
+  `PROMPT_VERSION 2026-07-14.1`.
+- `verify-sources-probe` ($0): a prevalence census bucketing every sourced fact
+  stored / refetch / unreachable(Google News) / unparseable.
+- `verify-sources --dry-run` (paid, bounded): verifies stored-text facts, reports
+  support-rate + the **fabrication proxy** (a "supported" whose quote isn't
+  grounded — auto-downgraded, never a false ✓) + $ via `emit_run_telemetry`.
+- `verify-sources.yml` dispatch workflow. 19 unit + 2 DB tests; adversarial
+  review APPROVE (trust-safety chain verified end-to-end).
+
+**GATE (dispatched against prod, run 29382766684):** 1,594 sourced facts;
+**addressable 794 (49.8%)** — 691 stored + 103 refetch; **800 unreachable**
+Google News redirects. Dry-run (25 prominence-top stored-text facts): **16
+supported (64%)**, 7 unsupported (28%), 2 uncertain; **0 false ✓** (the 1
+fabrication attempt was caught + downgraded by the grounding guard). Cost
+**$0.0004/fact → ~$0.32 full-addressable backfill.** The 28% unsupported is
+mostly claim-construction artifacts (NULL-amount rounds → vague "undisclosed
+amount" claims; company-own-site sources), not falsehoods. **Owner call: GREEN —
+build the schema + apply, refined** (skip NULL-amount rounds, prefer news
+sources, log rejected quotes, unsupported = internal-only signal).
+
+## PR #198 — migration 0043 fact_verifications + model (merged 2026-07-15)
+
+The schema for the "✓ Verified against source" enhancement (2nd husk PR). One row
+per (company, rendered fact with a cited source_url) checked by verify-sources:
+`verdict` + a verbatim `supporting_quote` (supported only) + `source_url` + `claim`
++ `prompt_version`. The web will show ✓ for **supported ONLY**; unsupported =
+internal data-quality signal. `fact_kind` + text `fact_ref` key the fact within a
+company (company-level → `''`; funding round → round id as text) — **no FK to
+funding_rounds.id** (extract-funding wipes+re-inserts rounds, which would
+cascade-delete verifications; the text ref decouples). `UNIQUE(company_id,
+fact_kind, fact_ref)` = upsert key + web read path. Hand-written off head 0042;
+up/down/up round-trip container-verified; 5 DB tests; adversarial review APPROVE
+(0 issues). **Migration head is now 0043** (the 3h cron migrates prod).
+
+**➡️ REMAINING on the source-verification bet (husk sequence, not yet built):**
+1. **Apply PR** — the persisting `verify-sources` apply path: version+source-gated
+   idempotent upsert into `fact_verifications`, the gate refinements (skip
+   NULL-amount rounds; log the rejected quote on a fabrication flag; stored-text
+   only — the re-fetch bucket is a follow-up), the **golden set**
+   (`tests/golden/source_verification/`, ~15 cases + `score_source_verification`
+   in `evals/prompts.py` + a `claim` field on `CaseSpec` + baseline), CLI apply
+   mode, and the apply option on `verify-sources.yml`. Container DB tests +
+   adversarial review before merge.
+2. **Web PR** — the "✓ Verified against source" affordance on
+   `web/components/ProvenancePanel.tsx` / next to each figure, **supported-only**,
+   migration-order-free (hidden if the table/column is absent), a tooltip with the
+   supporting quote. Then dispatch a bounded apply backfill.
+3. **Live golden re-record** via `eval-record.yml`; review the delta before
+   committing recordings, then re-anchor the baseline.

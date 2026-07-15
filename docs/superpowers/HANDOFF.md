@@ -8,6 +8,38 @@ for the detail behind the Latest-update block below), then the two plan docs
 under `docs/superpowers/plans/` (2026-07-10 improvement plan; 2026-07-11
 hygiene + Wave 3). `BACKLOG.md` is annotated with what shipped.
 
+## LATEST UPDATE — source-verification husk IN PROGRESS (2026-07-15, PRs #197/#198)
+
+Building the owner-approved **"✓ Verified against source"** enhancement (spec
+`specs/2026-07-14-provenance-ui-design.md` → source-verification) husk-style. A
+**discriminative** (never generative) DeepSeek pass: per rendered fact with a
+cited source_url, "does this source support the claim?" → supported / unsupported
+/ uncertain + a verbatim quote. The public **✓ shows for `supported` ONLY**;
+`uncertain`/`unsupported` are never a badge (one false ✓ kills the moat).
+
+**Shipped so far:**
+- **#197 (probe + dry-run, $0/measure-first)** — the `source_verification` prompt
+  (`PROMPT_VERSION 2026-07-14.1`, `quote_is_grounded` guard) + `verify-sources-probe`
+  (prevalence) + `verify-sources --dry-run` + `verify-sources.yml`.
+- **#198 (schema)** — **migration head is now 0043** (`fact_verifications` table +
+  `FactVerification` model). The 3h cron migrates prod.
+
+**GATE (measured against prod, passed):** addressable **794/1594 (49.8%)** sourced
+facts (691 stored + 103 refetch; 800 unreachable Google News); dry-run **16/25
+supported (64%), 0 false ✓** (the 1 fabrication attempt was caught + downgraded),
+**~$0.0004/fact → ~$0.32 full backfill**. Owner: **GREEN, build refined.**
+
+**➡️ NEXT (not built):** (1) the **apply PR** — persisting version+source-gated
+idempotent upsert into `fact_verifications` + refinements (skip NULL-amount rounds;
+log rejected quote; stored-text only, re-fetch deferred) + the **golden set**
+(`tests/golden/source_verification/` ~15 cases + `score_source_verification` +
+`claim` on `CaseSpec` + baseline) + CLI/​workflow apply mode; (2) the **web ✓**
+affordance on `ProvenancePanel`/per-figure (supported-only, migration-order-free),
+then a bounded apply backfill; (3) **live golden re-record** via `eval-record.yml`.
+The `fable5/verify-sources-apply` branch exists (empty). A pgvector container may
+be running on :55432 (prune it: `docker rm -f nous-pg`). Read the worklog's #197/#198
+entries + `verify_sources.py` before continuing.
+
 ## LATEST UPDATE — Timeline coverage grouping (2026-07-14, PR #194)
 
 Owner-flagged `/c/[slug]` **Timeline clutter** fixed: because `ingest-news` only

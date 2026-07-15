@@ -24,6 +24,30 @@ bottom of the appropriate section; close items by deleting them.
 
 ---
 
+## 2026-07-15 source-verification ("✓ Verified against source") — IN PROGRESS
+
+The owner-approved DeepSeek enhancement to the provenance moat (ROADMAP Later #1):
+discriminatively verify each rendered fact against its cited source; show a ✓ for
+`supported` verdicts only. Husk-style. **Gate passed** (addressable 49.8%; dry-run
+64% supported, 0 false ✓, ~$0.0004/fact / ~$0.32 backfill — worklog #197).
+
+- ~~Probe + dry-run gate~~ **SHIPPED (#197)**; ~~schema (migration 0043 fact_verifications)~~ **SHIPPED (#198)**.
+- **Apply PR [M] — NEXT.** Persisting `verify-sources` apply path: version+source-gated
+  idempotent upsert into `fact_verifications`; refinements — **skip NULL-amount
+  funding rounds**, **log the rejected quote** on a fabrication flag, **stored-text
+  only** (re-fetch of the ~103 refetch-bucket facts is a follow-up). The **golden
+  set** (`tests/golden/source_verification/` ~15 cases + `score_source_verification`
+  in `evals/prompts.py` + a `claim` field on `CaseSpec` + baseline). CLI apply mode +
+  the apply option on `verify-sources.yml`. Container DB tests + adversarial review.
+- **Web PR [S].** "✓ Verified against source" on `ProvenancePanel` / next to each
+  figure, **supported-only**, migration-order-free (hidden if the table is absent),
+  tooltip with the supporting quote. Then dispatch a bounded apply backfill.
+- **Live golden re-record [S]** via `eval-record.yml`; review the delta, re-anchor baseline.
+- **Follow-ups:** the **re-fetch path** (verify the ~103 refetch-bucket facts with
+  scraping etiquette); surface `unsupported` counts in the `data-quality` report
+  (internal data-quality signal); a light prompt tighten to cut the 28% "unsupported"
+  from vague NULL-amount claims (then re-record).
+
 ## 2026-06-16 product review + remediation — SHIPPED
 
 Review: [2026-06-16-product-review-and-next-steps.md](docs/superpowers/plans/2026-06-16-product-review-and-next-steps.md).
