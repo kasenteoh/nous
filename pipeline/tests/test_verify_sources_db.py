@@ -193,6 +193,38 @@ async def test_apply_gate_excludes_verified_reselects_stale(db: AsyncSession) ->
     assert _has_tr(await _collect_stored_text_facts(db, limit=10, for_apply=True))
 
 
+async def test_apply_gate_reselects_on_source_change(db: AsyncSession) -> None:
+    tc = "https://techcrunch.com/nimbus-current"
+    n = _company(
+        "Nimbus",
+        latest_round_amount=Decimal("90000000"),
+        total_raised_usd=Decimal("30000000"),
+        total_raised_source_url=tc,
+    )
+    db.add(n)
+    await db.flush()
+    db.add(_news(n.id, tc))
+    # A verification at the CURRENT version but a DIFFERENT (old) source_url →
+    # the fact re-selects (the fact now cites a new article).
+    db.add(
+        FactVerification(
+            company_id=n.id,
+            fact_kind="total_raised",
+            fact_ref="",
+            source_url="https://old-source.example/stale",
+            claim="prior claim",
+            verdict="supported",
+            supporting_quote="q",
+            prompt_version=PROMPT_VERSION,
+        )
+    )
+    await db.flush()
+    facts = await _collect_stored_text_facts(db, limit=10, for_apply=True)
+    assert any(
+        f.company_name == "Nimbus" and f.fact_kind == "total_raised" for f in facts
+    )
+
+
 async def test_upsert_verdict_inserts_then_updates(db: AsyncSession) -> None:
     b = _company("Beta")
     db.add(b)

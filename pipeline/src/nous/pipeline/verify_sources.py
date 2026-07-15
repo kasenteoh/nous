@@ -450,9 +450,17 @@ def _not_verified(
     A fact is 'already verified' — skip it, don't re-bill — when a
     fact_verifications row matches its (company_id, fact_kind, fact_ref) AND was
     produced by the current ``PROMPT_VERSION`` AND against the same source_url. A
-    changed source, or a bumped ``PROMPT_VERSION``, re-selects it. (A changed claim
-    at the same source+version — rare, e.g. a corrected amount from the same
-    article — is re-checked in Python at write time.)
+    changed source, or a bumped ``PROMPT_VERSION``, re-selects it.
+
+    KNOWN GAP (rare, low-harm): a claim that changes at the SAME source + version
+    — e.g. a corrected amount from the same article, no new URL — is NOT
+    re-selected here, so its stale verdict persists until the next source change
+    or ``PROMPT_VERSION`` bump. Defenses: the row stores ``claim``, so the web read
+    compares the rendered claim to ``fact_verifications.claim`` before showing the
+    ✓ (never a stale badge); and any ``PROMPT_VERSION`` bump re-verifies the whole
+    cohort. Concurrent apply runs can't race the SELECT-then-upsert in
+    :func:`_upsert_verdict` — every DB-writing workflow shares the
+    ``nous-pipeline-db`` concurrency group, so they never overlap.
     """
     return ~exists().where(
         and_(
