@@ -878,6 +878,75 @@ class CareerMove(Base):
     )
 
 
+class FactVerification(Base):
+    """A discriminative verdict on a rendered fact vs its cited source.
+
+    One row per (company, fact) that has a cited source_url and has been checked
+    by the verify-sources stage (DeepSeek): does the source actually SUPPORT the
+    rendered claim? ``verdict`` ∈ supported | unsupported | uncertain, with a
+    verbatim ``supporting_quote`` for ``supported`` only. The web shows a "✓
+    Verified against source" affordance for ``supported`` verdicts ONLY —
+    ``uncertain`` / ``unsupported`` are never a public badge (empty-not-fabricate;
+    one false ✓ destroys the sourcing moat). An ``unsupported`` verdict is a
+    valuable INTERNAL data-quality signal (surfaced by the data-quality report).
+
+    ``fact_kind`` + ``fact_ref`` identify the fact within a company: company-level
+    facts (``total_raised`` / ``status``) use ``fact_ref = ''``; a funding round
+    uses ``fact_ref =`` the round's id as text (so each round is distinguished).
+    Deliberately NO FK to ``funding_rounds.id``: extract-funding wipes+re-inserts
+    rounds on reconcile, so an FK there would cascade-delete verifications on every
+    funding refresh — the text ref decouples this table from that churn (an orphan
+    verification simply isn't read; the stage re-verifies the live fact).
+
+    Idempotency: the apply stage version- and value-gates on
+    ``(prompt_version, source_url, claim)`` — a row whose stored triple matches the
+    current fact is skipped (not re-billed); a changed amount / source, or a bumped
+    ``PROMPT_VERSION``, re-verifies. UNIQUE(company_id, fact_kind, fact_ref) is the
+    upsert key and backs the web read path (WHERE company_id = X); no separate
+    index — the composite's leading column covers the FK / company-scoped reads,
+    and the table is small (~one row per verifiable fact).
+    """
+
+    __tablename__ = "fact_verifications"
+
+    company_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("companies.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    # 'total_raised' | 'status' | 'funding_round' (CHECK-constrained below).
+    fact_kind: Mapped[str] = mapped_column(String, nullable=False)
+    # '' for company-level facts; the funding round's id (as text) for a round.
+    fact_ref: Mapped[str] = mapped_column(String, nullable=False, server_default="")
+    # The cited source URL that was checked (provenance + a re-verify trigger).
+    source_url: Mapped[str] = mapped_column(Text, nullable=False)
+    # The exact claim string verified — value-gates re-verification + aids audit.
+    claim: Mapped[str] = mapped_column(Text, nullable=False)
+    # 'supported' | 'unsupported' | 'uncertain' (CHECK-constrained below).
+    verdict: Mapped[str] = mapped_column(String, nullable=False)
+    # Verbatim span from the source supporting the claim — set for 'supported' only.
+    supporting_quote: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # source_verification.PROMPT_VERSION that produced this verdict.
+    prompt_version: Mapped[str] = mapped_column(String, nullable=False)
+
+    __table_args__ = (
+        CheckConstraint(
+            "fact_kind IN ('total_raised', 'status', 'funding_round')",
+            name="ck_fact_verifications_fact_kind",
+        ),
+        CheckConstraint(
+            "verdict IN ('supported', 'unsupported', 'uncertain')",
+            name="ck_fact_verifications_verdict",
+        ),
+        UniqueConstraint(
+            "company_id",
+            "fact_kind",
+            "fact_ref",
+            name="uq_fact_verifications_company_fact",
+        ),
+    )
+
+
 class Theme(Base):
     """A named market segment: one embedding cluster within an industry_group.
 
