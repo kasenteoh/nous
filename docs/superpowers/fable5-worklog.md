@@ -1421,18 +1421,49 @@ fact_kind, fact_ref)` = upsert key + web read path. Hand-written off head 0042;
 up/down/up round-trip container-verified; 5 DB tests; adversarial review APPROVE
 (0 issues). **Migration head is now 0043** (the 3h cron migrates prod).
 
-**➡️ REMAINING on the source-verification bet (husk sequence, not yet built):**
-1. **Apply PR** — the persisting `verify-sources` apply path: version+source-gated
-   idempotent upsert into `fact_verifications`, the gate refinements (skip
-   NULL-amount rounds; log the rejected quote on a fabrication flag; stored-text
-   only — the re-fetch bucket is a follow-up), the **golden set**
-   (`tests/golden/source_verification/`, ~15 cases + `score_source_verification`
-   in `evals/prompts.py` + a `claim` field on `CaseSpec` + baseline), CLI apply
-   mode, and the apply option on `verify-sources.yml`. Container DB tests +
-   adversarial review before merge.
-2. **Web PR** — the "✓ Verified against source" affordance on
-   `web/components/ProvenancePanel.tsx` / next to each figure, **supported-only**,
-   migration-order-free (hidden if the table/column is absent), a tooltip with the
-   supporting quote. Then dispatch a bounded apply backfill.
-3. **Live golden re-record** via `eval-record.yml`; review the delta before
-   committing recordings, then re-anchor the baseline.
+## PR #199 — verify-sources apply path + golden gate (merged 2026-07-15)
+
+The persisting apply path. `run_verify_sources(dry_run=False)` upserts every
+verdict into `fact_verifications` (commits once); selection is **version+source-
+gated** (`_not_verified` NOT EXISTS) → idempotent, no re-bill. All three verdicts
+persist (unsupported = internal signal); the public ✓ is supported-only + only for
+a **grounded** quote. Gate refinements: skip NULL-amount rounds; log the rejected
+quote on a fabrication flag; stored-text only (re-fetch deferred). **Golden gate**:
+`tests/golden/source_verification/` 18 cases (9/4/5) + `score_source_verification`
+(parse_rate, verdict_accuracy, **grounding_min** = the no-fabrication proxy) + a
+`claim` field on `CaseSpec` + baseline. Multi-lens adversarial review (3× APPROVE);
+one docstring gap corrected (the claim-change-same-source case is a KNOWN GAP, not
+"re-checked at write time"). **Validated against prod** (a limit-25 apply run):
+**25 verdicts written, 18 supported (all grounded), 2 fabrication attempts caught +
+downgraded → 0 false ✓**, unsupported down to 12% (the NULL-amount refinement).
+
+## PR #200 — "✓ Verified against source" web affordance (merged 2026-07-15)
+
+The web surface. A subtle green ✓ next to total raised, status, and each funding
+round when the fact is verified. **Supported-only + source-matched**:
+`getCompanyBySlug` fetches `supported` verifications; `verifiedAgainst`
+(`lib/verifications`) shows the ✓ only when a verdict exists AND its `source_url`
+still matches the figure's CURRENT source — so a re-sourced fact never shows a
+stale ✓ (the web-side defense for the #199 claim/source gap). `VerifiedBadge`:
+`text-money` ✓ + sr-only label + the quote on the tooltip. Migration-order-free
+(query errors → `[]` → no badges). Adversarial review APPROVE (3-layer no-false-✓
+defense confirmed). 18 grounded verdicts already in prod → they light up on ISR.
+
+## PR #201 — live DeepSeek re-recording of source_verification (merged 2026-07-15)
+
+Re-recorded the golden set against live DeepSeek (via `eval-record.yml`),
+re-anchoring the baseline to reality: **parse_rate 1.0, verdict_accuracy 0.889
+(16/18), grounding_min 1.0** — **zero fabrication against the real model** (every
+"supported" carried a verbatim grounded quote; the no-fabrication gate holds at
+full strictness). The 2 verdict misses (`ipo-intent`, `unrelated-source`) are
+benign `uncertain↔unsupported` borderlines — DeepSeek never wrongly said
+"supported", so no ✓ trust risk.
+
+**✅ SOURCE-VERIFICATION COMPLETE** (#197→#201). The moat is now a verified, visible
+feature: each rendered fact is discriminatively checked against its cited source
+and, when supported by a verbatim quote, shows "✓ Verified against source".
+Operate it via `verify-sources.yml` (`run_apply=true -f limit=N`) — idempotent, so
+re-dispatch to widen coverage. **Follow-ups (BACKLOG, not started):** the
+**re-fetch path** (the ~103 refetch-bucket facts, with scraping etiquette); surface
+`unsupported` counts in the `data-quality` report; wire `verify-sources --apply`
+into a cron cadence once the one-time backfill drains.

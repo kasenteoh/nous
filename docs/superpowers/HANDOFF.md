@@ -8,37 +8,36 @@ for the detail behind the Latest-update block below), then the two plan docs
 under `docs/superpowers/plans/` (2026-07-10 improvement plan; 2026-07-11
 hygiene + Wave 3). `BACKLOG.md` is annotated with what shipped.
 
-## LATEST UPDATE — source-verification husk IN PROGRESS (2026-07-15, PRs #197/#198)
+## LATEST UPDATE — source-verification SHIPPED (2026-07-15, PRs #197–#201)
 
-Building the owner-approved **"✓ Verified against source"** enhancement (spec
-`specs/2026-07-14-provenance-ui-design.md` → source-verification) husk-style. A
-**discriminative** (never generative) DeepSeek pass: per rendered fact with a
-cited source_url, "does this source support the claim?" → supported / unsupported
-/ uncertain + a verbatim quote. The public **✓ shows for `supported` ONLY**;
-`uncertain`/`unsupported` are never a badge (one false ✓ kills the moat).
+The owner-approved **"✓ Verified against source"** enhancement (spec
+`specs/2026-07-14-provenance-ui-design.md` → source-verification) is **COMPLETE and
+LIVE**. A **discriminative** (never generative) DeepSeek pass verifies each rendered
+fact (total raised, non-active status, each funding round) against its cited source
+— supported / unsupported / uncertain + a verbatim quote — and `/c/[slug]` shows a
+subtle green **✓ for `supported` ONLY** (uncertain/unsupported never a badge; one
+false ✓ would kill the moat). Five husk PRs:
+- **#197** probe + dry-run gate ($0/measure-first) — the `source_verification`
+  prompt (`quote_is_grounded` guard) + prevalence + dry-run + `verify-sources.yml`.
+- **#198** schema — **migration head 0043** (`fact_verifications` + model).
+- **#199** apply path + golden gate — version+source-gated idempotent upsert;
+  refinements (skip NULL-amount rounds, log rejected quote, stored-text only);
+  golden set + `score_source_verification` (grounding_min = the no-fabrication gate).
+- **#200** web ✓ — `VerifiedBadge` on total raised / status / each round;
+  supported-only + source-matched (no stale ✓); migration-order-free.
+- **#201** live DeepSeek re-record — verdict_accuracy 0.889, **grounding_min 1.0
+  (zero fabrication against the real model)**; baseline re-anchored.
 
-**Shipped so far:**
-- **#197 (probe + dry-run, $0/measure-first)** — the `source_verification` prompt
-  (`PROMPT_VERSION 2026-07-14.1`, `quote_is_grounded` guard) + `verify-sources-probe`
-  (prevalence) + `verify-sources --dry-run` + `verify-sources.yml`.
-- **#198 (schema)** — **migration head is now 0043** (`fact_verifications` table +
-  `FactVerification` model). The 3h cron migrates prod.
+**Prod state:** a limit-25 apply run wrote **25 verdicts (18 grounded supported, 0
+false ✓)**. **To widen coverage:** dispatch `verify-sources.yml -f run_apply=true -f
+limit=N` (idempotent; the ~691 stored-text addressable facts drain over a few runs;
+~$0.0004/fact). The ✓ appears on each `/c/[slug]` after ISR revalidation.
 
-**GATE (measured against prod, passed):** addressable **794/1594 (49.8%)** sourced
-facts (691 stored + 103 refetch; 800 unreachable Google News); dry-run **16/25
-supported (64%), 0 false ✓** (the 1 fabrication attempt was caught + downgraded),
-**~$0.0004/fact → ~$0.32 full backfill**. Owner: **GREEN, build refined.**
-
-**➡️ NEXT (not built):** (1) the **apply PR** — persisting version+source-gated
-idempotent upsert into `fact_verifications` + refinements (skip NULL-amount rounds;
-log rejected quote; stored-text only, re-fetch deferred) + the **golden set**
-(`tests/golden/source_verification/` ~15 cases + `score_source_verification` +
-`claim` on `CaseSpec` + baseline) + CLI/​workflow apply mode; (2) the **web ✓**
-affordance on `ProvenancePanel`/per-figure (supported-only, migration-order-free),
-then a bounded apply backfill; (3) **live golden re-record** via `eval-record.yml`.
-The `fable5/verify-sources-apply` branch exists (empty). A pgvector container may
-be running on :55432 (prune it: `docker rm -f nous-pg`). Read the worklog's #197/#198
-entries + `verify_sources.py` before continuing.
+**Follow-ups (BACKLOG, not started):** the **re-fetch path** (the ~103 refetch-bucket
+facts, scraping etiquette); surface `unsupported` counts in the `data-quality`
+report (internal signal); wire `verify-sources --apply` into a cron cadence once the
+one-time backfill drains. Read the worklog's #197–#201 entries +
+`pipeline/src/nous/pipeline/verify_sources.py` before extending.
 
 ## LATEST UPDATE — Timeline coverage grouping (2026-07-14, PR #194)
 

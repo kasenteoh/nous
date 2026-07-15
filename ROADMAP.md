@@ -168,12 +168,17 @@ Depends on the foundation being solid, so genuinely later.
    **#193** granular per-fact source superscripts + typed citations + confidence
    transparency. All $0 (surfaces existing data; no LLM). Framing held: a
    **trust-builder**, never a data-gap advertiser (the badge is positive-only,
-   hidden below threshold). **Remaining (optional, separate bet):** the
-   DeepSeek-powered **source-verification** pass ("✓ Verified against source") —
-   husk-style (dry-run-gated, golden-set-gated, scraping etiquette), and a
-   *material DeepSeek volume* increase, so flag to the owner before building. The
-   LLM-*written* provenance narrative stays OFF (generative prose is what the moat
-   forbids). A public data-quality dashboard remains a separate Later item.
+   hidden below threshold). The DeepSeek-powered **source-verification** pass ("✓
+   Verified against source") is now **SHIPPED (#197–#201, 2026-07-15)** — the moat
+   went from *cited* to *verified*: a discriminative (never generative) DeepSeek
+   check per rendered fact against its source, showing a ✓ for `supported`
+   verdicts only (grounded quote required; 0 false ✓ — the live re-record scored
+   grounding_min 1.0). Husk-style: dry-run gate → schema (0043) → apply + golden
+   gate → web ✓ → live re-record. ~$0.0004/fact. **Remaining follow-ups** (BACKLOG):
+   the re-fetch path for the non-stored-source facts, `unsupported` as an internal
+   data-quality signal, and an apply cron cadence. The LLM-*written* provenance
+   narrative stays OFF (generative prose is what the moat forbids). A public
+   data-quality dashboard remains a separate Later item.
 
 2. **Sharpen AI-answer surfaces.** `llms.txt`, `/c/[slug].md`. As answer engines
    increasingly cite sources, "fully-sourced" is a structural advantage worth

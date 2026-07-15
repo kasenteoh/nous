@@ -24,29 +24,25 @@ bottom of the appropriate section; close items by deleting them.
 
 ---
 
-## 2026-07-15 source-verification ("✓ Verified against source") — IN PROGRESS
+## 2026-07-15 source-verification ("✓ Verified against source") — SHIPPED (#197–#201)
 
 The owner-approved DeepSeek enhancement to the provenance moat (ROADMAP Later #1):
 discriminatively verify each rendered fact against its cited source; show a ✓ for
-`supported` verdicts only. Husk-style. **Gate passed** (addressable 49.8%; dry-run
-64% supported, 0 false ✓, ~$0.0004/fact / ~$0.32 backfill — worklog #197).
+`supported` verdicts only. **Complete + live** — probe/gate (#197), schema 0043
+(#198), apply path + golden gate (#199), web ✓ (#200), live re-record (#200: 0.889
+verdict accuracy, grounding_min 1.0 = zero fabrication). Prod holds 18 grounded
+verdicts; widen with `verify-sources.yml -f run_apply=true -f limit=N` (idempotent).
 
-- ~~Probe + dry-run gate~~ **SHIPPED (#197)**; ~~schema (migration 0043 fact_verifications)~~ **SHIPPED (#198)**.
-- **Apply PR [M] — NEXT.** Persisting `verify-sources` apply path: version+source-gated
-  idempotent upsert into `fact_verifications`; refinements — **skip NULL-amount
-  funding rounds**, **log the rejected quote** on a fabrication flag, **stored-text
-  only** (re-fetch of the ~103 refetch-bucket facts is a follow-up). The **golden
-  set** (`tests/golden/source_verification/` ~15 cases + `score_source_verification`
-  in `evals/prompts.py` + a `claim` field on `CaseSpec` + baseline). CLI apply mode +
-  the apply option on `verify-sources.yml`. Container DB tests + adversarial review.
-- **Web PR [S].** "✓ Verified against source" on `ProvenancePanel` / next to each
-  figure, **supported-only**, migration-order-free (hidden if the table is absent),
-  tooltip with the supporting quote. Then dispatch a bounded apply backfill.
-- **Live golden re-record [S]** via `eval-record.yml`; review the delta, re-anchor baseline.
-- **Follow-ups:** the **re-fetch path** (verify the ~103 refetch-bucket facts with
-  scraping etiquette); surface `unsupported` counts in the `data-quality` report
-  (internal data-quality signal); a light prompt tighten to cut the 28% "unsupported"
-  from vague NULL-amount claims (then re-record).
+**Remaining follow-ups (not started):**
+- **Re-fetch path [M]** — verify the ~103 `refetch`-bucket facts (an http(s) source
+  with no stored text) by re-fetching politely (contact-email UA, robots.txt, 1
+  req/sec, SSRF guard); mirror `sources/news.py`. Grows addressable coverage ~13%.
+- **`unsupported` in the data-quality report [S]** — surface the count of
+  `unsupported` fact_verifications as an internal data-quality signal (a
+  mismatched/wrong figure the source contradicts), next to db-stats/data-quality.
+- **Apply cron cadence [S]** — once the one-time stored-text backfill drains, wire
+  `verify-sources --apply --limit N` into the pipeline cron so new/changed facts
+  get verified automatically (version+source-gated, so steady-state is cheap).
 
 ## 2026-06-16 product review + remediation — SHIPPED
 
