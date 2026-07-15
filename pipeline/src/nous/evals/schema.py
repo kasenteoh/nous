@@ -40,6 +40,14 @@ class CaseSpec(BaseModel):
             "allow-list input (career_history). Empty for prompts that don't."
         ),
     )
+    claim: str = Field(
+        default="",
+        description=(
+            "The single claim to check for a fact-verification prompt "
+            "(source_verification), e.g. 'Acme raised $12M in its Series A round.' "
+            "Empty for prompts that don't take a claim."
+        ),
+    )
     notes: str = Field(
         default="",
         description="Reviewer notes: what this case exercises and why.",

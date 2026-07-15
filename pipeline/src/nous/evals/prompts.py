@@ -58,6 +58,13 @@ from nous.llm.prompts.funding_extraction import (
 from nous.llm.prompts.funding_extraction import (
     build_website_prompt as build_funding_website_prompt,
 )
+from nous.llm.prompts.source_verification import (
+    SourceVerification,
+    quote_is_grounded,
+)
+from nous.llm.prompts.source_verification import (
+    build_prompt as build_source_verification_prompt,
+)
 from nous.util.industry import normalize_industry
 from nous.util.slugify import normalize_name
 from nous.util.text import truncate_to_chars
@@ -788,6 +795,85 @@ def score_career_history(cases: Sequence[CaseEvaluation]) -> PromptReport:
 
 
 # ---------------------------------------------------------------------------
+# source_verification (discriminative fact-vs-source verification)
+# ---------------------------------------------------------------------------
+
+
+def _build_source_verification_prompt(case: CaseSpec, input_text: str) -> str:
+    # Mirror verify-sources: truncate the source to the shared 32k budget; the
+    # claim to check rides on the case spec.
+    source = truncate_to_chars(input_text, MAX_PROMPT_INPUT_CHARS)
+    return build_source_verification_prompt(claim=case.claim, source_text=source)
+
+
+def score_source_verification(cases: Sequence[CaseEvaluation]) -> PromptReport:
+    """Score source_verification recordings against ground truth.
+
+    Gated metrics:
+    - parse_rate — recordings surviving runtime schema validation.
+    - verdict_accuracy — exact match of the supported/unsupported/uncertain
+      verdict (the key dial). The schema's quote-discipline validator has already
+      run on the recorded response, so a quote-less 'supported' has become
+      'uncertain' before scoring.
+    - grounding_mean / grounding_min — the no-fabrication proxy: every
+      'supported' verdict's quote MUST be a verbatim substring of the source. A
+      'supported' with a non-grounded quote scores 0, so grounding_min → 0 the
+      instant one fabrication slips through (the gate's sharpest tooth).
+    """
+    issues: dict[str, list[str]] = {}
+    parse = Accuracy()
+    verdict = Accuracy()
+    groundings: list[float] = []
+    provenance: dict[str, int] = {}
+
+    for case in cases:
+        expected = case.expected
+        assert isinstance(expected, SourceVerification)
+        parse.add(case.recorded is not None)
+        if case.recorded is None:
+            _issue(issues, case.case_id, "recorded response failed runtime schema validation")
+            continue
+        recorded = case.recorded
+        assert isinstance(recorded, SourceVerification)
+
+        verdict.add(recorded.verdict == expected.verdict)
+        if recorded.verdict != expected.verdict:
+            _issue(
+                issues,
+                case.case_id,
+                f"verdict: expected {expected.verdict!r}, got {recorded.verdict!r}",
+            )
+
+        # No-fabrication: a 'supported' verdict must quote the source verbatim.
+        if recorded.verdict == "supported":
+            grounded = quote_is_grounded(recorded.supporting_quote, case.input_text)
+            groundings.append(1.0 if grounded else 0.0)
+            if not grounded:
+                _issue(
+                    issues,
+                    case.case_id,
+                    "grounding: 'supported' quote is not a verbatim source substring",
+                )
+        else:
+            groundings.append(1.0)  # nothing asserted → nothing to fabricate
+
+    metrics: dict[str, float] = {
+        "parse_rate": parse.value,
+        "verdict_accuracy": verdict.value,
+        "grounding_mean": mean(groundings),
+        "grounding_min": min(groundings) if groundings else 1.0,
+    }
+    return PromptReport(
+        prompt="source_verification",
+        case_count=len(cases),
+        provenance_counts=provenance,
+        metrics=metrics,
+        gated=["parse_rate", "verdict_accuracy", "grounding_mean", "grounding_min"],
+        issues=issues,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Registry
 # ---------------------------------------------------------------------------
 
@@ -815,6 +901,12 @@ PROMPT_SPECS: tuple[PromptSpec, ...] = (
         schema=CareerHistoryExtraction,
         build_prompt=_build_career_history_prompt,
         score=score_career_history,
+    ),
+    PromptSpec(
+        name="source_verification",
+        schema=SourceVerification,
+        build_prompt=_build_source_verification_prompt,
+        score=score_source_verification,
     ),
 )
 

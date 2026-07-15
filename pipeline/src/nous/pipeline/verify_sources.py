@@ -50,7 +50,9 @@ from pydantic import BaseModel
 from sqlalchemy import (
     ColumnElement,
     Select,
+    String,
     and_,
+    cast,
     exists,
     func,
     nulls_last,
@@ -60,7 +62,13 @@ from sqlalchemy import (
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import InstrumentedAttribute
 
-from nous.db.models import Company, FundingRound, NewsArticle, RawPage
+from nous.db.models import (
+    Company,
+    FactVerification,
+    FundingRound,
+    NewsArticle,
+    RawPage,
+)
 from nous.llm.client import LLMError, complete_json
 from nous.llm.prompts.source_verification import (
     PROMPT_VERSION,
@@ -365,6 +373,14 @@ class _Fact:
     claim: str
     prominence: float
     source_text: str = ""
+    # Funding rounds only — the round's id, which keys the fact_ref. None for the
+    # company-level facts (total_raised / status), whose fact_ref is ''.
+    round_id: UUID | None = None
+
+    @property
+    def fact_ref(self) -> str:
+        """The fact's identity within its company (round id, or '' company-level)."""
+        return str(self.round_id) if self.round_id is not None else ""
 
 
 class FactVerdict(BaseModel):
@@ -423,17 +439,59 @@ async def _load_source_text(
     return None
 
 
+def _not_verified(
+    fact_kind: str,
+    company_id_col: InstrumentedAttribute[UUID],
+    source_col: InstrumentedAttribute[str | None],
+    fact_ref: ColumnElement[str] | str,
+) -> ColumnElement[bool]:
+    """NOT EXISTS a current verification for this fact (apply-mode idempotency).
+
+    A fact is 'already verified' — skip it, don't re-bill — when a
+    fact_verifications row matches its (company_id, fact_kind, fact_ref) AND was
+    produced by the current ``PROMPT_VERSION`` AND against the same source_url. A
+    changed source, or a bumped ``PROMPT_VERSION``, re-selects it. (A changed claim
+    at the same source+version — rare, e.g. a corrected amount from the same
+    article — is re-checked in Python at write time.)
+    """
+    return ~exists().where(
+        and_(
+            FactVerification.company_id == company_id_col,
+            FactVerification.fact_kind == fact_kind,
+            FactVerification.fact_ref == fact_ref,
+            FactVerification.prompt_version == PROMPT_VERSION,
+            FactVerification.source_url == source_col,
+        )
+    )
+
+
 async def _collect_stored_text_facts(
-    session: AsyncSession, *, limit: int
+    session: AsyncSession, *, limit: int, for_apply: bool = False
 ) -> list[_Fact]:
     """Prominence-ordered stored-text facts across the three kinds, capped at limit.
 
     Each kind is queried has-stored-text-only and prominence-ordered, then merged
-    and re-capped — so a small ``limit`` covers marquee facts first. Source text
-    is loaded only for the final selected facts (not the candidate pool).
+    and re-capped — so a small ``limit`` covers marquee facts first. In apply mode
+    (``for_apply``) facts already verified at the current ``PROMPT_VERSION`` +
+    source are excluded (idempotent, no re-bill). NULL-amount funding rounds are
+    always skipped — a "raised an undisclosed amount" claim can't cleanly verify
+    (the #197 dry-run gate refinement). Source text is loaded only for the final
+    set (not the candidate pool).
     """
     facts: list[_Fact] = []
 
+    tr_where = [
+        _shown(),
+        Company.total_raised_usd.is_not(None),
+        Company.total_raised_source_url.is_not(None),
+        _has_stored_text(Company.total_raised_source_url, Company.id),
+    ]
+    if for_apply:
+        tr_where.append(
+            _not_verified(
+                "total_raised", Company.id, Company.total_raised_source_url, ""
+            )
+        )
     tr_rows = (
         await session.execute(
             select(
@@ -445,12 +503,7 @@ async def _collect_stored_text_facts(
                 Company.total_raised_source_url,
                 Company.latest_round_amount,
             )
-            .where(
-                _shown(),
-                Company.total_raised_usd.is_not(None),
-                Company.total_raised_source_url.is_not(None),
-                _has_stored_text(Company.total_raised_source_url, Company.id),
-            )
+            .where(*tr_where)
             .order_by(nulls_last(Company.latest_round_amount.desc()), Company.id)
             .limit(limit)
         )
@@ -471,6 +524,16 @@ async def _collect_stored_text_facts(
             )
         )
 
+    st_where = [
+        _shown(),
+        Company.status != "active",
+        Company.status_source_url.is_not(None),
+        _has_stored_text(Company.status_source_url, Company.id),
+    ]
+    if for_apply:
+        st_where.append(
+            _not_verified("status", Company.id, Company.status_source_url, "")
+        )
     st_rows = (
         await session.execute(
             select(
@@ -481,12 +544,7 @@ async def _collect_stored_text_facts(
                 Company.status_source_url,
                 Company.latest_round_amount,
             )
-            .where(
-                _shown(),
-                Company.status != "active",
-                Company.status_source_url.is_not(None),
-                _has_stored_text(Company.status_source_url, Company.id),
-            )
+            .where(*st_where)
             .order_by(nulls_last(Company.latest_round_amount.desc()), Company.id)
             .limit(limit)
         )
@@ -507,9 +565,27 @@ async def _collect_stored_text_facts(
             )
         )
 
+    fr_where = [
+        _shown(),
+        FundingRound.primary_news_url.is_not(None),
+        # Skip NULL-amount rounds — "raised an undisclosed amount" can't cleanly
+        # verify (the #197 gate refinement; drove much of the 28% unsupported).
+        FundingRound.amount_raised.is_not(None),
+        _has_stored_text(FundingRound.primary_news_url, FundingRound.company_id),
+    ]
+    if for_apply:
+        fr_where.append(
+            _not_verified(
+                "funding_round",
+                FundingRound.company_id,
+                FundingRound.primary_news_url,
+                cast(FundingRound.id, String),
+            )
+        )
     fr_rows = (
         await session.execute(
             select(
+                FundingRound.id,
                 FundingRound.company_id,
                 Company.slug,
                 Company.name,
@@ -522,16 +598,12 @@ async def _collect_stored_text_facts(
             )
             .select_from(FundingRound)
             .join(Company, Company.id == FundingRound.company_id)
-            .where(
-                _shown(),
-                FundingRound.primary_news_url.is_not(None),
-                _has_stored_text(FundingRound.primary_news_url, FundingRound.company_id),
-            )
+            .where(*fr_where)
             .order_by(nulls_last(Company.latest_round_amount.desc()), FundingRound.id)
             .limit(limit)
         )
     ).all()
-    for cid, slug, name, amount, rtype, val, adate, url, prom in fr_rows:
+    for rid, cid, slug, name, amount, rtype, val, adate, url, prom in fr_rows:
         if url is None:
             continue
         facts.append(
@@ -544,6 +616,7 @@ async def _collect_stored_text_facts(
                 source_url=url,
                 claim=funding_round_claim(name, amount, rtype, val, adate),
                 prominence=float(prom) if prom is not None else 0.0,
+                round_id=rid,
             )
         )
 
@@ -571,20 +644,66 @@ async def _collect_stored_text_facts(
     return loaded
 
 
+async def _upsert_verdict(
+    session: AsyncSession, fact: _Fact, *, verdict: str, quote: str | None
+) -> None:
+    """Insert or update the fact_verifications row for one fact (idempotent).
+
+    The apply selection already skips facts verified at the current version +
+    source; an existing row found here is stale (a changed source/claim at the
+    same fact_ref) and is overwritten. All three verdicts persist — ``unsupported``
+    is a deliberate internal data-quality signal. ``quote`` is stored only for a
+    grounded ``supported`` (the caller passes None otherwise).
+    """
+    existing = (
+        await session.execute(
+            select(FactVerification).where(
+                FactVerification.company_id == fact.company_id,
+                FactVerification.fact_kind == fact.fact_kind,
+                FactVerification.fact_ref == fact.fact_ref,
+            )
+        )
+    ).scalar_one_or_none()
+    if existing is not None:
+        existing.source_url = fact.source_url
+        existing.claim = fact.claim
+        existing.verdict = verdict
+        existing.supporting_quote = quote
+        existing.prompt_version = PROMPT_VERSION
+    else:
+        session.add(
+            FactVerification(
+                company_id=fact.company_id,
+                fact_kind=fact.fact_kind,
+                fact_ref=fact.fact_ref,
+                source_url=fact.source_url,
+                claim=fact.claim,
+                verdict=verdict,
+                supporting_quote=quote,
+                prompt_version=PROMPT_VERSION,
+            )
+        )
+
+
 async def run_verify_sources(
     session: AsyncSession, *, limit: int = 25, dry_run: bool = True
 ) -> VerifySourcesSummary:
     """Verify a bounded, prominence-ordered slice of stored-text facts via DeepSeek.
 
-    Dry-run only today (persists nothing); the apply path lands with migration
-    0043 / ``fact_verifications``. One ``complete_json`` call per fact. A
-    ``supported`` verdict whose quote is not a verbatim substring of the source
-    is downgraded to ``uncertain`` and flagged (never a false ✓).
+    One ``complete_json`` call per fact. A ``supported`` verdict whose quote is not
+    a verbatim substring of the source is downgraded to ``uncertain`` and flagged
+    (never a false ✓). Apply (``dry_run=False``) upserts every verdict into
+    ``fact_verifications`` (version+source-gated selection → idempotent, no
+    re-bill) and commits once at the end; dry-run persists nothing. The re-fetch
+    (``refetch`` bucket) path is a follow-up — this stage verifies stored-text
+    facts only.
     """
     summary = VerifySourcesSummary(
         dry_run=dry_run, prompt_version=PROMPT_VERSION, results=[]
     )
-    facts = await _collect_stored_text_facts(session, limit=limit)
+    facts = await _collect_stored_text_facts(
+        session, limit=limit, for_apply=not dry_run
+    )
 
     for fact in facts:
         summary.facts_seen += 1
@@ -624,8 +743,17 @@ async def run_verify_sources(
             if not grounded:
                 # The model claimed support but the quote isn't in the source —
                 # a fabrication signal. Never mark verified; downgrade to uncertain.
+                # Log the rejected quote so the flag is auditable (gate refinement).
                 summary.fabrication_flags += 1
                 verdict = "uncertain"
+                logger.warning(
+                    "verify-sources: rejected ungrounded 'supported' quote for %s "
+                    "(%s): claim=%r quote=%r",
+                    fact.company_slug,
+                    fact.fact_kind,
+                    fact.claim[:120],
+                    (result.supporting_quote or "")[:160],
+                )
 
         if verdict == "supported":
             summary.supported += 1
@@ -634,6 +762,7 @@ async def run_verify_sources(
         else:
             summary.uncertain += 1
 
+        stored_quote = result.supporting_quote if grounded else None
         summary.results.append(
             FactVerdict(
                 slug=fact.company_slug,
@@ -644,18 +773,27 @@ async def run_verify_sources(
                 source_host=source_host,
                 verdict=verdict,
                 grounded=grounded,
-                quote=result.supporting_quote if grounded else None,
+                quote=stored_quote,
             )
         )
+        if not dry_run:
+            await _upsert_verdict(session, fact, verdict=verdict, quote=stored_quote)
+            summary.rows_written += 1
+
+    if not dry_run:
+        # One commit for the whole bounded run. A crash before this persists
+        # nothing; the next run re-selects the same facts (idempotent).
+        await session.commit()
 
     logger.info(
         "verify-sources: seen=%d supported=%d unsupported=%d uncertain=%d "
-        "fabrication_flags=%d errors=%d dry_run=%s",
+        "fabrication_flags=%d rows_written=%d errors=%d dry_run=%s",
         summary.facts_seen,
         summary.supported,
         summary.unsupported,
         summary.uncertain,
         summary.fabrication_flags,
+        summary.rows_written,
         summary.errors,
         dry_run,
     )
@@ -682,6 +820,11 @@ def render_verify_sources_table(summary: VerifySourcesSummary) -> str:
         f"{summary.fabrication_flags}"
     )
     lines.append(f"- **Errors:** {summary.errors}")
+    if not summary.dry_run:
+        lines.append(
+            f"- **Persisted:** {summary.rows_written} verdicts upserted into "
+            f"`fact_verifications` (supported → public ✓; the rest internal)."
+        )
     lines.append("- **Cost:** see the LLM-usage block below (DeepSeek, paid).")
     lines.append("")
     lines.append("### Per-fact detail")

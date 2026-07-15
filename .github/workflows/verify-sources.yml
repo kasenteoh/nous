@@ -25,12 +25,17 @@ on:
   workflow_dispatch:
     inputs:
       run_dry_run:
-        description: "Also run the PAID DeepSeek verification dry-run over a bounded slice."
+        description: "Also run the PAID DeepSeek verification dry-run (measures, writes nothing)."
+        required: false
+        type: boolean
+        default: false
+      run_apply:
+        description: "Run the PAID DeepSeek verification in APPLY mode (upserts verdicts to fact_verifications)."
         required: false
         type: boolean
         default: false
       limit:
-        description: "Max facts the dry-run verifies (bounds LLM spend)."
+        description: "Max facts the dry-run / apply verifies (bounds LLM spend)."
         required: false
         type: string
         default: "25"
@@ -88,3 +93,13 @@ jobs:
         run: |
           set -o pipefail
           uv run nous verify-sources --dry-run --limit "${OP_LIMIT:-25}"
+
+      - name: Verification apply (paid, persists)
+        # Upserts verdicts into fact_verifications (idempotent). Only when
+        # explicitly requested; start with a small --limit and widen once clean.
+        if: ${{ inputs.run_apply }}
+        env:
+          OP_LIMIT: ${{ inputs.limit }}
+        run: |
+          set -o pipefail
+          uv run nous verify-sources --limit "${OP_LIMIT:-25}"

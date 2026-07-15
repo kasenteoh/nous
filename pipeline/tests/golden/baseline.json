@@ -38,5 +38,11 @@
     "investors_precision": 0.894,
     "investors_recall": 0.944,
     "parse_rate": 1.0
+  },
+  "source_verification": {
+    "grounding_mean": 1.0,
+    "grounding_min": 1.0,
+    "parse_rate": 1.0,
+    "verdict_accuracy": 1.0
   }
 }

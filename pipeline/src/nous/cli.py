@@ -1987,32 +1987,47 @@ def verify_sources_cmd(limit: int, dry_run: bool) -> None:
     never generative. ``--dry-run`` measures support-rate + the fabrication proxy
     (a 'supported' whose quote isn't a verbatim source substring) + the $/fact
     over a bounded, prominence-ordered slice of stored-text facts, and writes
-    nothing. Apply (default) is not wired yet — it fails loudly until the
-    ``fact_verifications`` schema + persisting path land.
+    nothing. Apply (default) additionally upserts every verdict into
+    ``fact_verifications`` (version+source-gated → idempotent, no re-bill); the
+    web shows the ✓ for ``supported`` only. Verifies stored-text facts only —
+    the re-fetch bucket is a follow-up.
     """
     import asyncio
+    from datetime import UTC, datetime
 
     from nous.db.session import AsyncSessionLocal
-    from nous.observability import emit_run_telemetry, write_step_summary
+    from nous.observability import (
+        emit_run_telemetry,
+        record_pipeline_run,
+        write_step_summary,
+    )
     from nous.pipeline.verify_sources import (
         render_verify_sources_table,
         run_verify_sources,
     )
 
-    if not dry_run:
-        raise click.ClickException(
-            "verify-sources apply mode is not wired yet (needs migration 0043 / "
-            "fact_verifications). Run with --dry-run to measure."
-        )
-
     async def _run() -> None:
+        started = datetime.now(UTC)
         # emit_run_telemetry in finally so the LLM $ table is written even if the
         # stage raises mid-run (the ledger accrues per successful call).
         try:
             async with AsyncSessionLocal() as session:
-                summary = await run_verify_sources(session, limit=limit, dry_run=True)
+                summary = await run_verify_sources(
+                    session, limit=limit, dry_run=dry_run
+                )
             click.echo(summary.model_dump_json(indent=2))
             write_step_summary(render_verify_sources_table(summary))
+            if not dry_run:
+                # flag_empty=False: writing zero rows is a VALID outcome (every
+                # in-scope fact already verified at the current version + source).
+                await record_pipeline_run(
+                    "verify-sources",
+                    started_at=started,
+                    inputs_seen=summary.facts_seen,
+                    rows_written=summary.rows_written,
+                    summary=summary,
+                    flag_empty=False,
+                )
         finally:
             emit_run_telemetry("verify-sources")
 

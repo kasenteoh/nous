@@ -13,11 +13,15 @@ import os
 from decimal import Decimal
 
 import pytest
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from nous.db.models import Company, FundingRound, NewsArticle
+from nous.db.models import Company, FactVerification, FundingRound, NewsArticle
+from nous.llm.prompts.source_verification import PROMPT_VERSION
 from nous.pipeline.verify_sources import (
     _collect_stored_text_facts,
+    _Fact,
+    _upsert_verdict,
     run_verify_sources_probe,
 )
 
@@ -138,3 +142,132 @@ async def test_probe_empty_cohort_is_zeroed(db: AsyncSession) -> None:
     assert summary.total_facts == 0
     assert summary.addressable_pct == 0.0
     assert summary.stored_pct == 0.0
+
+
+# ── apply path ────────────────────────────────────────────────────────────────
+
+
+async def test_apply_gate_excludes_verified_reselects_stale(db: AsyncSession) -> None:
+    tc = "https://techcrunch.com/acme-tr"
+    a = _company(
+        "Acme",
+        latest_round_amount=Decimal("100000000"),
+        total_raised_usd=Decimal("12000000"),
+        total_raised_source_url=tc,
+    )
+    db.add(a)
+    await db.flush()
+    db.add(_news(a.id, tc))
+    await db.flush()
+
+    def _has_tr(facts: list[_Fact]) -> bool:
+        return any(
+            f.company_name == "Acme" and f.fact_kind == "total_raised" for f in facts
+        )
+
+    # Unverified → apply collection includes it.
+    assert _has_tr(await _collect_stored_text_facts(db, limit=10, for_apply=True))
+
+    # Verify at the CURRENT version + same source → excluded from apply selection…
+    db.add(
+        FactVerification(
+            company_id=a.id,
+            fact_kind="total_raised",
+            fact_ref="",
+            source_url=tc,
+            claim="prior claim",
+            verdict="supported",
+            supporting_quote="q",
+            prompt_version=PROMPT_VERSION,
+        )
+    )
+    await db.flush()
+    assert not _has_tr(await _collect_stored_text_facts(db, limit=10, for_apply=True))
+    # …but dry-run collection ignores the gate (still verifies it).
+    assert _has_tr(await _collect_stored_text_facts(db, limit=10, for_apply=False))
+
+    # A stale verification (old prompt version) re-selects it in apply mode.
+    fv = (await db.execute(select(FactVerification))).scalar_one()
+    fv.prompt_version = "2000-01-01.0"
+    await db.flush()
+    assert _has_tr(await _collect_stored_text_facts(db, limit=10, for_apply=True))
+
+
+async def test_upsert_verdict_inserts_then_updates(db: AsyncSession) -> None:
+    b = _company("Beta")
+    db.add(b)
+    await db.flush()
+    fact = _Fact(
+        company_id=b.id,
+        company_slug=b.slug,
+        company_name="Beta",
+        fact_kind="status",
+        fact_label="status: acquired",
+        source_url="https://techcrunch.com/beta",
+        claim="Beta has been acquired.",
+        prominence=0.0,
+        source_text=_BODY,
+    )
+    await _upsert_verdict(db, fact, verdict="supported", quote="acquired by X")
+    await db.flush()
+    row = (
+        await db.execute(
+            select(FactVerification).where(FactVerification.company_id == b.id)
+        )
+    ).scalar_one()
+    assert row.verdict == "supported"
+    assert row.fact_ref == ""
+    assert row.supporting_quote == "acquired by X"
+
+    # Re-upsert (same company/kind/ref) with a new verdict → SAME row updated.
+    await _upsert_verdict(db, fact, verdict="unsupported", quote=None)
+    await db.flush()
+    rows = (
+        await db.execute(
+            select(FactVerification).where(FactVerification.company_id == b.id)
+        )
+    ).scalars().all()
+    assert len(rows) == 1
+    assert rows[0].verdict == "unsupported"
+    assert rows[0].supporting_quote is None
+
+
+async def test_null_amount_round_is_skipped(db: AsyncSession) -> None:
+    tc = "https://techcrunch.com/gamma"
+    g = _company("Gamma", latest_round_amount=Decimal("50000000"))
+    db.add(g)
+    await db.flush()
+    db.add(_news(g.id, tc))
+    db.add(FundingRound(company_id=g.id, primary_news_url=tc, amount_raised=None))
+    await db.flush()
+    facts = await _collect_stored_text_facts(db, limit=10, for_apply=False)
+    assert not any(
+        f.fact_kind == "funding_round" and f.company_name == "Gamma" for f in facts
+    )
+
+
+async def test_apply_upsert_carries_round_fact_ref(db: AsyncSession) -> None:
+    tc = "https://techcrunch.com/delta-round"
+    d = _company("Delta", latest_round_amount=Decimal("80000000"))
+    db.add(d)
+    await db.flush()
+    db.add(_news(d.id, tc))
+    fr = FundingRound(
+        company_id=d.id, primary_news_url=tc, amount_raised=Decimal("40000000")
+    )
+    db.add(fr)
+    await db.flush()
+    [fact] = [
+        f
+        for f in await _collect_stored_text_facts(db, limit=10, for_apply=True)
+        if f.fact_kind == "funding_round"
+    ]
+    assert fact.fact_ref == str(fr.id)  # the round's id keys the fact_ref
+    await _upsert_verdict(db, fact, verdict="uncertain", quote=None)
+    await db.flush()
+    row = (
+        await db.execute(
+            select(FactVerification).where(FactVerification.fact_kind == "funding_round")
+        )
+    ).scalar_one()
+    assert row.fact_ref == str(fr.id)
