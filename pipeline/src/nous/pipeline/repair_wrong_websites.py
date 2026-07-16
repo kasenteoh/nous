@@ -54,13 +54,16 @@ Repair action for (a)/(b)/(d)/(e):
       primary_category, tags, last_enriched_at, last_enriched_payload,
       eligibility_checked_at, last_scrape_attempt_at
     - Drop raw_pages rows (stale content from the wrong site)
-    - Delete funding rounds + news articles SOURCED FROM the wrong site itself
-      (primary_news_url / article url on the same host as the cleared website):
-      a news/aggregator "homepage" gets mined by the website-funding gap-fill
-      and ingested as coverage, attributing OTHER companies' rounds to this row
-      (2026-07-16 QA: helix carried Kinoa/Coval/ChatSee rounds from
-      machinebrief.com). Same-host-only — third-party-publisher rounds are kept
-      and the survivor count is logged for audit.
+    - WRONG-COMPANY resets only (pass (e), or pass (a) with a confirmed
+      description-subject mismatch): delete funding rounds + news articles
+      SOURCED FROM the wrong site itself (primary_news_url / article url on
+      the same host as the cleared website) — a news/aggregator "homepage"
+      gets mined by the website-funding gap-fill and ingested as coverage,
+      attributing OTHER companies' rounds to this row (2026-07-16 QA: helix
+      carried Kinoa/Coval/ChatSee rounds from machinebrief.com). Same-host
+      only, and NEVER on a bare aggregator-URL reset — AGGREGATOR_HOSTS
+      includes real news publishers (techcrunch/reuters), which are invalid
+      as homepages but the legitimate source of most rounds.
 
 Repair action for (c):
     - Clear: exclusion_reason, exclusion_detail, excluded_at,
@@ -224,8 +227,18 @@ async def run_repair_wrong_websites(
         )
         summary.aggregator_url_reset += 1
         if not dry_run:
+            # Purge same-host rounds/articles only when the stored profile
+            # confirms the site was treated as the company's identity (the
+            # helix/machinebrief class) — a mere aggregator-URL website (e.g.
+            # techcrunch.com) must keep its legitimately news-sourced rounds.
+            purge = bool(
+                company.description_short
+                and description_subject_mismatches(
+                    company.description_short, company.name
+                )
+            )
             rounds_gone, articles_gone = await _reset_website_fields(
-                session, company, now
+                session, company, now, purge_wrong_site=purge
             )
             summary.wrong_site_rounds_deleted += rounds_gone
             summary.wrong_site_articles_deleted += articles_gone
@@ -420,7 +433,7 @@ async def run_repair_wrong_websites(
         summary.wrong_company_reset += 1
         if not dry_run:
             rounds_gone, articles_gone = await _reset_website_fields(
-                session, company, now
+                session, company, now, purge_wrong_site=True
             )
             summary.wrong_site_rounds_deleted += rounds_gone
             summary.wrong_site_articles_deleted += articles_gone
@@ -477,7 +490,11 @@ async def _homepage_page(session: AsyncSession, company: Company) -> RawPage | N
 
 
 async def _reset_website_fields(
-    session: AsyncSession, company: Company, now: datetime
+    session: AsyncSession,
+    company: Company,
+    now: datetime,
+    *,
+    purge_wrong_site: bool = False,
 ) -> tuple[int, int]:
     """Clear all website + enrichment fields and drop stale raw_pages.
 
@@ -498,7 +515,13 @@ async def _reset_website_fields(
     rounds_deleted = 0
     articles_deleted = 0
     bad_host = hostname(company.website) if company.website else ""
-    if bad_host:
+    # purge_wrong_site gates the deletion on WRONG-COMPANY evidence (pass (e),
+    # or pass (a) with a confirmed description-subject mismatch). It must NOT
+    # fire for a bare aggregator-URL reset: AGGREGATOR_HOSTS includes real news
+    # publishers (techcrunch/reuters/bloomberg) that are invalid as HOMEPAGES
+    # but are the legitimate source of most rounds — same-host deletion there
+    # would destroy correct news-sourced rounds.
+    if purge_wrong_site and bad_host:
         round_rows = (
             await session.execute(
                 select(FundingRound.id, FundingRound.primary_news_url).where(

@@ -997,3 +997,41 @@ async def test_wrong_site_rounds_and_articles_deleted_on_reset(
     await db.refresh(co)
     assert co.website is None
     assert co.funding_round_count == 1  # denormalized count refreshed
+
+
+async def test_aggregator_reset_never_deletes_news_sourced_rounds(
+    db: AsyncSession,
+) -> None:
+    """The techcrunch hazard: a company whose website was wrongly set to a NEWS
+    publisher (in AGGREGATOR_HOSTS) gets its website reset by pass (a), but its
+    legitimately news-sourced rounds on that SAME host must survive — the purge
+    requires wrong-company evidence, and this profile correctly names itself."""
+    co = _co(
+        "Acme Robotics",
+        "acme-rww-tc",
+        website="https://techcrunch.com/2026/01/acme-profile",
+        description_short="Acme Robotics is a warehouse automation startup.",
+    )
+    db.add(co)
+    await db.flush()
+    legit_round = FundingRound(
+        company_id=co.id,
+        round_type="Series A",
+        amount_raised=40_000_000,
+        primary_news_url="https://techcrunch.com/2026/01/acme-raises-40m",
+    )
+    db.add(legit_round)
+    await db.flush()
+    round_id = legit_round.id
+    await db.commit()
+
+    summary = await run_repair_wrong_websites(db)
+    assert summary.aggregator_url_reset == 1
+    assert summary.wrong_site_rounds_deleted == 0  # legit rounds untouched
+
+    await db.refresh(co)
+    assert co.website is None  # the bad homepage IS reset
+    survivor = (
+        await db.execute(select(FundingRound).where(FundingRound.id == round_id))
+    ).scalar_one_or_none()
+    assert survivor is not None
