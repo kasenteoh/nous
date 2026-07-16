@@ -53,7 +53,19 @@ verdicts; widen with `verify-sources.yml -f run_apply=true -f limit=N` (idempote
 Full lane reports in the session transcript; quick wins shipped same-day
 (#212 web polish, #213 portfolio_count cohort). What remains, by priority:
 
-### P0 — corrupted merged-entity records poison /trends [M]
+### ~~P0 — corrupted merged-entity records~~ — root-caused + repair SHIPPED (#215)
+NOT dedup merges: article-URLs-as-homepages (helix→machinebrief,
+away→marketspy, amiato→failory) — wrong-site descriptions + rounds mined off
+the news site. Pass (e) detected the class all along but the repair was
+never dispatched; it now runs every 3h cron WITH same-host round/article
+purge (double-confirmed only), and the three hosts are blocklisted.
+improbable excluded via ops (wrong entity + UK). **Residual to watch:** helix
+rounds whose primary_news_url is on a third-party syndicator (aithority)
+survive the same-host purge — the news-attribution arc (below) owns those;
+check helix on the data-quality/unsupported report after re-enrichment.
+
+<!-- original finding, kept for context -->
+### (was) P0 — corrupted merged-entity records poison /trends [M]
 QA H1/H2: `helix-digital-infrastructure` carries ANOTHER company's description
 ("Machine Brief is an AI news...") and four mis-merged rounds incl. a **$10B
 KKR/Nvidia round** that single-handedly crowns media-entertainment the
@@ -81,14 +93,15 @@ aggregator URL. ingest-news company matching needs a name-ambiguity guard
 (generic dictionary-word names demand a stronger entity match), and the
 existing news mis-attribution guard (#116) needs a second pass.
 
-### P1 — "in talks" rumor language verified as a completed round [S–M]
-QA: nous-research shows "$75M at $1.5B" with a ✓ whose source headline says
-"in talks for new funding". Two-layer fix: funding_extraction prompt must not
-extract announced-intent as a closed round (golden case), and
-source_verification must treat in-talks/raising/seeks/reportedly as NOT
-supporting a raised-amount claim (prompt rule + golden cases + eval-record
-re-record). Fix the extraction root first — the verifier catching it is the
-backstop, not the cure.
+### ~~P1 — "in talks" rumor language verified as a completed round~~ — SHIPPED (#214)
+Both layers hardened (funding_extraction 2026-07-16.1 + source_verification
+2026-07-16.2), live-re-recorded (verdict_accuracy 0.888→0.947, the new
+in-talks case verifies `unsupported`); the cron's version-gated re-verify
+strips existing rumor ✓s. **Deferred follow-ups [S]:** a clarifying
+parenthetical on the valuation rule (it says "Always capture" while the rumor
+rule nulls it — works live, latent ambiguity) + a mixed golden case (source
+with a COMPLETED $50M and "in talks for more" → claim about the $50M =
+supported). Batch both with the next eval-record run.
 
 ### P2 — smaller QA items
 - **/trends backfill artifact framing [S]:** growth %s read as data-collection

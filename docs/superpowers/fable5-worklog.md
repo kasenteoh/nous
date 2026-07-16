@@ -1600,3 +1600,49 @@ infrastructure carrying another company's description + a mis-attributed
 $10B round that pollutes /trends) and aggregation-without-dedup (terrafirma
 double-counted round, sambanova/blue-origin repeated events, the
 nous-research "in talks" round verified as closed — prompt hardening queued).
+
+## Third arc — QA P0 forensics + rumor guard (2026-07-16, PRs #214–#215)
+
+Owner: "let's do it" (the QA P0s). Both adversarially reviewed (APPROVE).
+
+## PR #214 — feat(pipeline): rumor guard ("in talks" ≠ closed round)
+
+- funding_extraction **2026-07-16.1**: closed-round rule (in-talks/raising/
+  unclosed → not a funding announcement; stated "$X to date" still →
+  total_raised_usd). source_verification **2026-07-16.2**: completed-vs-
+  intended rule (an in-talks source CONTRADICTS a raised claim →
+  unsupported; the cron's version-gated re-verify strips any existing rumor
+  ✓s automatically). Two new golden cases; **all recordings re-recorded
+  live** via eval-record from the branch (the funding set's FIRST live
+  recording). Live results: the new in-talks case verifies `unsupported`;
+  **verdict_accuracy 0.888 → 0.947** (the rule also fixed both old
+  borderline misses); grounding_min 1.0; every floor green.
+- Deferred (review, non-blocking): a clarifying parenthetical on the
+  valuation rule + a mixed completed/in-talks golden case — batch with the
+  next re-record (BACKLOG).
+
+## PR #215 — fix(pipeline): wrong-site purge + cron-wired poisoned-row repair
+
+- **Root cause of QA P0 #1 found via 4 prod inspect-company dispatches** —
+  NOT dedup merges: the old resolver accepted news-site ARTICLE URLs as
+  homepages (helix→machinebrief, away→marketspy, amiato→failory); scrape
+  crawled the news site's root, enrichment described the wrong company, and
+  the website-funding gap-fill mined OTHER companies' rounds off the news
+  site (Kinoa/Coval/ChatSee on helix; the $10B round is a separate
+  SiliconANGLE "Helix launches" story). Pass (e) already detected this class
+  — but repair-wrong-websites was dispatch-gated and NEVER dispatched.
+- Changes: wrong-company resets now DELETE same-host rounds/articles
+  (funding_round_count refreshed; third-party rounds kept + survivor count
+  logged); machinebrief/marketspy/failory joined AGGREGATOR_HOSTS; the
+  repair runs EVERY 3h cron (run_repair_websites input removed — one slot
+  back from the 25 cap).
+- **Two hazards caught in review passes:** (1) self-caught — an
+  unconditional purge on pass (a) would have deleted legitimate
+  techcrunch-sourced rounds (AGGREGATOR_HOSTS includes real news
+  publishers); (2) reviewer — pass (a)'s purge needed pass (e)'s full
+  double confirmation (page-title corroboration), not just the description
+  mismatch. Both fixed + regression-tested. Suite 1762 green.
+- Ops this arc: improbable excluded (improbable.com = Ig Nobel Prizes;
+  the gaming company is UK — non_us); a sweep with the pre-extension
+  detector dispatched (descriptions heal immediately; the round purge
+  lands with the next cron).
