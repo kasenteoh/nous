@@ -528,6 +528,22 @@ jobs:
           fi
           uv run nous judge-eligibility --limit "$JUDGE_LIMIT" $REJUDGE
 
+      - name: Verify sources
+        id: verify_sources
+        # Discriminative source-verification (the "✓ Verified against source"
+        # feature, #197–#201): checks up to 40 stored-text facts per run
+        # against their cited sources and upserts verdicts into
+        # fact_verifications. Selection is version+source-gated NOT EXISTS
+        # (idempotent, never re-bills a verified fact), so steady state is a
+        # handful of new/changed facts per run (~$0.0004/fact ≈ $0.02 max);
+        # the one-time stored-text backlog drains here in a few runs. Runs
+        # after judge so facts extracted earlier in this run verify in the
+        # same pass. No dispatch knob — the 25-input cap is full; the manual
+        # verify-sources.yml lever covers bounded backfills / dry runs.
+        timeout-minutes: 15
+        continue-on-error: true
+        run: uv run nous verify-sources --limit 40
+
       - name: Infer HQ country (non-US detection backfill)
         if: ${{ github.event.inputs.run_infer_country == 'true' }}
         # Dispatch-gated repair: fetch about/contact/legal pages for shown
