@@ -48,6 +48,66 @@ verdicts; widen with `verify-sources.yml -f run_apply=true -f limit=N` (idempote
   "..."-elided quotes now ground (fail-closed); bump re-verifies the cohort
   (~$0.30) via the cron step.
 
+## 2026-07-16 fresh customer-perspective QA (3 lanes vs prod) — triage
+
+Full lane reports in the session transcript; quick wins shipped same-day
+(#212 web polish, #213 portfolio_count cohort). What remains, by priority:
+
+### P0 — corrupted merged-entity records poison /trends [M]
+QA H1/H2: `helix-digital-infrastructure` carries ANOTHER company's description
+("Machine Brief is an AI news...") and four mis-merged rounds incl. a **$10B
+KKR/Nvidia round** that single-handedly crowns media-entertainment the
+top-funded industry on /trends and /industry. Same wrong-description class on
+the media-entertainment page: "Away"→Market Spy, "Amiato"→Failory,
+"Improbable"→Ig Nobel. Likely dedup false-merges or enrichment writing to the
+wrong row. Investigate via `nous inspect-company` (ops.yml), identify the
+merge/enrich bug, repair rows (repair-catalog pass or targeted ops), add a
+regression guard. THE top trust item.
+
+### P0 — aggregation-without-dedup on marquee pages [M]
+QA: terrafirma total double-counts one Series A reported at $115M and $100M
+(compatible types, amounts differ → reconcile misses; repair-duplicate-rounds
+only merges EQUAL amounts). sambanova renders the same Series F ~8×
+(near-identical Google News URLs beat the canonical-URL dedup) and its named
+rounds don't reach the $4.1B total. blue-origin repeats one $10B event ~12×.
+Fixes: near-amount merge gate (same type+date window, amounts within ~15% →
+merge keep-larger? needs design), canonical-URL normalization for
+news.google.com articles, and a data-quality "suspect duplicate rounds" signal.
+
+### P1 — wrong-entity news attribution (aardvark class) [M]
+QA: `/c/aardvark` timeline is keyword-scrape garbage (Arthur cartoon, rugby
+memorial, day-care funding) and its $85M Series C cites only a Google News
+aggregator URL. ingest-news company matching needs a name-ambiguity guard
+(generic dictionary-word names demand a stronger entity match), and the
+existing news mis-attribution guard (#116) needs a second pass.
+
+### P1 — "in talks" rumor language verified as a completed round [S–M]
+QA: nous-research shows "$75M at $1.5B" with a ✓ whose source headline says
+"in talks for new funding". Two-layer fix: funding_extraction prompt must not
+extract announced-intent as a closed round (golden case), and
+source_verification must treat in-talks/raising/seeks/reportedly as NOT
+supporting a raised-amount claim (prompt rule + golden cases + eval-record
+re-record). Fix the extraction root first — the verifier catching it is the
+backstop, not the cure.
+
+### P2 — smaller QA items
+- **/trends backfill artifact framing [S]:** growth %s read as data-collection
+  ramp (funding history starts ~Q1 2026 for much of the catalog) — add a
+  coverage caveat line to /trends & industry charts, or gate "new" labels on
+  coverage age.
+- **Blue Origin in a "US software startups" catalog:** judge-eligibility
+  scope leak — re-judge; also "Jeff Bezos"/"Bezos" investor dup.
+- **Google News URLs as visible sources:** resolve-at-ingest missed a cohort;
+  consider a bounded re-resolve backfill for primary_news_url redirects.
+- **/new missing descriptions** (husk cards) + **future-dated entries** (UTC
+  display reads a day ahead) [S].
+- **/vs + /alternatives:** indexable but absent from sitemaps — add to a
+  sitemap shard (they're not thin) or noindex; decide policy [S].
+- **404 page server-rendered `<title>`** is the generic homepage title [S].
+- **VerifiedBadge hover quote** reported absent in served HTML — verify
+  whether the title attribute survives streaming; may be a QA-tooling
+  artifact [S].
+
 ## 2026-06-16 product review + remediation — SHIPPED
 
 Review: [2026-06-16-product-review-and-next-steps.md](docs/superpowers/plans/2026-06-16-product-review-and-next-steps.md).
