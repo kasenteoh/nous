@@ -1553,3 +1553,50 @@ reach prod via the 3h cron) BEFORE #207.
 - verify-sources backlog: ~525/691 stored-text facts applied via the owner's
   dispatches; the remainder (and the #208 re-verify) drains via #205's cron
   step once merged.
+
+## Second arc — QA pass + AI-answer surfaces (2026-07-16, PRs #211–#213)
+
+Owner said "let's start these" (the UX list): a fresh 3-lane customer-
+perspective QA sweep against prod, then builds. All merged same-day
+(reviews: #211 APPROVE; #212/#213 COMMENT-no-blocking, both MEDIUMs fixed
+in-branch pre-merge).
+
+## PR #211 — feat(web): AI-answer surfaces — /llms.txt + /c/[slug].md
+
+- ROADMAP Later #2 shipped. /llms.txt (llmstxt.org) + a markdown sibling per
+  company page via a next.config rewrite (`/c/:slug([a-z0-9-]+)\.md` →
+  `app/c/[slug]/md/route.ts` — no middleware). Pure `lib/company-md.ts`:
+  per-fact source URLs inline, grounded-verification annotations via the
+  SAME claim-drift guard as the page, competitor meta-leak guard,
+  computeTotalRaised invariant, omit-when-unknown. text/markdown alternate
+  on /c/[slug]. permanentRedirect-in-route-handler verified against the
+  bundled Next 16 docs.
+
+## PR #212 — fix(web): QA polish (homepage strip, investor coherence, export, RSS)
+
+- Homepage strip is momentum-driven "Heating up" (matches /trending; kills
+  the "Trending now"-vs-empty-momentum contradiction; spotlight fallback is
+  a neutral "More to watch") — closes the deferred homepage-strip item.
+- Investor header/meta use portfolioTotal (page can't contradict its own
+  list); /api/export accepts industry slugs; homepage RSS autodiscovery
+  restored (page-level `alternates` shallow-replaces the layout's — gotcha
+  worth remembering for any canonical-only page).
+- Review fixes: listHeatingUpCompanies joined the homepage Promise.all
+  (was serial); getInvestorBySlug's company_investors path now enforces
+  the catalog bar (matching #213 — the rounds path has a round by
+  construction).
+
+## PR #213 — fix(pipeline): portfolio_count counts SHOWN companies only
+
+- Both UNION legs now filter on the shown predicate; index ranking, index
+  count, and detail header agree after the next refresh-investor-counts.
+  QA finding H3 (YC "backs 841" above a 757-row list) closed end-to-end
+  with #212. Full suite 1760 green.
+
+**QA triage** (3 lanes vs prod, 2026-07-16): quick wins fixed in #212/#213;
+the remaining findings live in BACKLOG "2026-07-16 fresh customer-perspective
+QA" — headline P0s: corrupted merged-entity records (helix-digital-
+infrastructure carrying another company's description + a mis-attributed
+$10B round that pollutes /trends) and aggregation-without-dedup (terrafirma
+double-counted round, sambanova/blue-origin repeated events, the
+nous-research "in talks" round verified as closed — prompt hardening queued).
