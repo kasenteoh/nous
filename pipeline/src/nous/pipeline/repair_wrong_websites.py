@@ -54,6 +54,13 @@ Repair action for (a)/(b)/(d)/(e):
       primary_category, tags, last_enriched_at, last_enriched_payload,
       eligibility_checked_at, last_scrape_attempt_at
     - Drop raw_pages rows (stale content from the wrong site)
+    - Delete funding rounds + news articles SOURCED FROM the wrong site itself
+      (primary_news_url / article url on the same host as the cleared website):
+      a news/aggregator "homepage" gets mined by the website-funding gap-fill
+      and ingested as coverage, attributing OTHER companies' rounds to this row
+      (2026-07-16 QA: helix carried Kinoa/Coval/ChatSee rounds from
+      machinebrief.com). Same-host-only — third-party-publisher rounds are kept
+      and the survivor count is logged for audit.
 
 Repair action for (c):
     - Clear: exclusion_reason, exclusion_detail, excluded_at,
@@ -82,14 +89,15 @@ from pydantic import BaseModel
 from sqlalchemy import delete, exists, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from nous.db.models import Company, RawPage
+from nous.db.models import Company, FundingRound, NewsArticle, RawPage
+from nous.db.upsert import refresh_funding_round_count
 from nous.sources.parked import page_is_for_sale_lander
 from nous.sources.reject_hosts import is_aggregator_url
 from nous.util.title_subject import (
     description_subject_mismatches,
     name_is_dominant_subject,
 )
-from nous.util.url import canonical_domain
+from nous.util.url import canonical_domain, hostname
 
 logger = logging.getLogger(__name__)
 
@@ -176,6 +184,10 @@ class RepairWrongWebsitesSummary(BaseModel):
     page_content_reset: int = 0
     false_exclusion_requeued: int = 0
     wrong_company_reset: int = 0
+    # Rounds/articles sourced from the wrong site itself (same host as the
+    # cleared website), deleted alongside the reset — see _reset_website_fields.
+    wrong_site_rounds_deleted: int = 0
+    wrong_site_articles_deleted: int = 0
     dry_run: bool = False
 
 
@@ -212,7 +224,11 @@ async def run_repair_wrong_websites(
         )
         summary.aggregator_url_reset += 1
         if not dry_run:
-            await _reset_website_fields(session, company, now)
+            rounds_gone, articles_gone = await _reset_website_fields(
+                session, company, now
+            )
+            summary.wrong_site_rounds_deleted += rounds_gone
+            summary.wrong_site_articles_deleted += articles_gone
 
     if not dry_run:
         await session.commit()
@@ -251,7 +267,11 @@ async def run_repair_wrong_websites(
         )
         summary.parked_desc_reset += 1
         if not dry_run:
-            await _reset_website_fields(session, company, now)
+            rounds_gone, articles_gone = await _reset_website_fields(
+                session, company, now
+            )
+            summary.wrong_site_rounds_deleted += rounds_gone
+            summary.wrong_site_articles_deleted += articles_gone
 
     if not dry_run:
         await session.commit()
@@ -338,7 +358,11 @@ async def run_repair_wrong_websites(
         )
         summary.page_content_reset += 1
         if not dry_run:
-            await _reset_website_fields(session, company, now)
+            rounds_gone, articles_gone = await _reset_website_fields(
+                session, company, now
+            )
+            summary.wrong_site_rounds_deleted += rounds_gone
+            summary.wrong_site_articles_deleted += articles_gone
 
     if not dry_run:
         await session.commit()
@@ -395,7 +419,11 @@ async def run_repair_wrong_websites(
         )
         summary.wrong_company_reset += 1
         if not dry_run:
-            await _reset_website_fields(session, company, now)
+            rounds_gone, articles_gone = await _reset_website_fields(
+                session, company, now
+            )
+            summary.wrong_site_rounds_deleted += rounds_gone
+            summary.wrong_site_articles_deleted += articles_gone
 
     if not dry_run:
         await session.commit()
@@ -450,13 +478,68 @@ async def _homepage_page(session: AsyncSession, company: Company) -> RawPage | N
 
 async def _reset_website_fields(
     session: AsyncSession, company: Company, now: datetime
-) -> None:
+) -> tuple[int, int]:
     """Clear all website + enrichment fields and drop stale raw_pages.
 
     The bad URL is appended to rejected_urls so the hardened resolver never
     re-picks it.  All enrichment timestamps are cleared so resolve→scrape→enrich
     run again cleanly.
+
+    Also deletes funding rounds and news articles sourced from the WRONG site
+    itself (same host as the cleared website): with a news/aggregator site as
+    the "homepage", the website-funding gap-fill mines its pages and ingest
+    attributes its syndicated posts — producing OTHER companies' rounds on this
+    row (2026-07-16 QA: helix carried Kinoa/Coval/ChatSee rounds mined from
+    machinebrief.com). Same-host-only is deliberate: rounds citing real
+    third-party publishers are left alone (a cross-host misattribution is the
+    news-attribution arc's job), and what remains is logged for audit. Returns
+    ``(rounds_deleted, articles_deleted)``.
     """
+    rounds_deleted = 0
+    articles_deleted = 0
+    bad_host = hostname(company.website) if company.website else ""
+    if bad_host:
+        round_rows = (
+            await session.execute(
+                select(FundingRound.id, FundingRound.primary_news_url).where(
+                    FundingRound.company_id == company.id,
+                    FundingRound.primary_news_url.is_not(None),
+                )
+            )
+        ).all()
+        bad_round_ids = [
+            rid for rid, url in round_rows if url and hostname(url) == bad_host
+        ]
+        if bad_round_ids:
+            await session.execute(
+                delete(FundingRound).where(FundingRound.id.in_(bad_round_ids))
+            )
+            rounds_deleted = len(bad_round_ids)
+            await refresh_funding_round_count(session, company.id)
+            logger.info(
+                "repair-wrong-websites: deleted %d round(s) sourced from the "
+                "wrong site %s for %r (%d round(s) with other sources kept)",
+                rounds_deleted,
+                bad_host,
+                company.name,
+                len(round_rows) - rounds_deleted,
+            )
+        article_rows = (
+            await session.execute(
+                select(NewsArticle.id, NewsArticle.url).where(
+                    NewsArticle.company_id == company.id
+                )
+            )
+        ).all()
+        bad_article_ids = [
+            aid for aid, url in article_rows if url and hostname(url) == bad_host
+        ]
+        if bad_article_ids:
+            await session.execute(
+                delete(NewsArticle).where(NewsArticle.id.in_(bad_article_ids))
+            )
+            articles_deleted = len(bad_article_ids)
+
     if company.website:
         existing: list[str] = list(company.rejected_urls or [])
         if company.website not in existing:
@@ -480,3 +563,4 @@ async def _reset_website_fields(
 
     session.add(company)
     _ = now  # reserved for future audit-timestamp use
+    return rounds_deleted, articles_deleted

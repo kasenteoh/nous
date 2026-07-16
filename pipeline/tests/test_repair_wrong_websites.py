@@ -19,7 +19,7 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from nous.db.models import Company, RawPage
+from nous.db.models import Company, FundingRound, NewsArticle, RawPage
 from nous.pipeline.repair_wrong_websites import run_repair_wrong_websites
 
 pytestmark = pytest.mark.skipif(
@@ -899,3 +899,101 @@ async def test_wrong_company_dry_run_writes_nothing(db: AsyncSession) -> None:
         )
         == 1
     )
+
+
+async def test_wrong_site_rounds_and_articles_deleted_on_reset(
+    db: AsyncSession,
+) -> None:
+    """The helix/machinebrief incident (2026-07-16 QA): a news site accepted as
+    the homepage gets its mined rounds + syndicated articles deleted on reset —
+    same host only; a round citing a real third-party publisher survives."""
+    co = _co(
+        "Helix Digital",
+        "helix-rww-rounds",
+        website="https://machinebrief.example",
+        description_short=(
+            "Machine Brief is an AI news and analysis platform covering "
+            "startups and enterprise adoption."
+        ),
+    )
+    db.add(co)
+    await db.flush()
+    db.add(
+        RawPage(
+            company_id=co.id,
+            url="https://machinebrief.example/",
+            content=(
+                "Machine Brief — AI news and analysis\n"
+                "Daily coverage of AI startups and funding."
+            ),
+        )
+    )
+    # A round mined FROM the wrong site (same host) and a round citing a real
+    # publisher (different host) — only the first must go.
+    bad_round = FundingRound(
+        company_id=co.id,
+        round_type="Series A",
+        amount_raised=28_000_000,
+        primary_news_url="https://machinebrief.example/news/coval-raises-28m",
+    )
+    good_round = FundingRound(
+        company_id=co.id,
+        round_type=None,
+        amount_raised=10_000_000_000,
+        primary_news_url="https://siliconangle.example/helix-launches",
+    )
+    db.add_all([bad_round, good_round])
+    await db.flush()
+    good_round_id = good_round.id
+    db.add_all(
+        [
+            NewsArticle(
+                company_id=co.id,
+                url="https://machinebrief.example/news/coval-raises-28m",
+                title="Coval raises $28M",
+                source="machinebrief.example",
+                raw_content="body",
+                processed=True,
+            ),
+            NewsArticle(
+                company_id=co.id,
+                url="https://siliconangle.example/helix-launches",
+                title="Helix launches with $10B+",
+                source="siliconangle.example",
+                raw_content="body",
+                processed=True,
+            ),
+        ]
+    )
+    await db.commit()
+
+    summary = await run_repair_wrong_websites(db)
+    assert summary.wrong_company_reset == 1
+    assert summary.wrong_site_rounds_deleted == 1
+    assert summary.wrong_site_articles_deleted == 1
+
+    rounds = (
+        (
+            await db.execute(
+                select(FundingRound).where(FundingRound.company_id == co.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert [r.id for r in rounds] == [good_round_id]  # third-party round kept
+    articles = (
+        (
+            await db.execute(
+                select(NewsArticle).where(NewsArticle.company_id == co.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert [a.url for a in articles] == [
+        "https://siliconangle.example/helix-launches"
+    ]
+    await db.refresh(co)
+    assert co.website is None
+    assert co.funding_round_count == 1  # denormalized count refreshed

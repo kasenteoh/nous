@@ -92,11 +92,6 @@ on:
         description: "Judge eligibility: max companies to judge this run (drains the backlog). Default: 30."
         required: false
         type: string
-      run_repair_websites:
-        description: "Run the one-off repair-wrong-websites poisoned-row cleanup (Task 2.2). Default: false."
-        required: false
-        type: boolean
-        default: false
       run_funding_backfill:
         description: "Run backfill-funding-history (Task A3): long-lookback Google News sweep over funded/notable companies, then extract-funding, for multi-round trajectories. Default: false."
         required: false
@@ -272,12 +267,15 @@ jobs:
 
       - name: Repair wrong websites
         id: repair_websites
-        if: ${{ inputs.run_repair_websites == true }}
-        # One-off (Task 2.2): reset companies whose website is a directory/
-        # aggregator/parked host or whose description is parked prose, and
-        # re-queue false exclusions, so the hardened resolver re-resolves them
-        # cleanly on the next run. Gated off by default; dispatch with
-        # run_repair_websites=true to apply the cleanup once.
+        # Poisoned-row repair (Task 2.2 + the 2026-07-16 wrong-site cleanup):
+        # reset companies whose website is a directory/aggregator/parked host,
+        # whose description is parked prose or names a DIFFERENT company, and
+        # delete rounds/articles mined from the wrong site itself. Was a
+        # dispatch-gated one-off that never got dispatched — the 2026-07-16 QA
+        # pass found month-old poisoned rows still live — so it now runs every
+        # cron: idempotent, $0 (regex/heuristics, no LLM), selection self-noops
+        # when nothing is poisoned. (Its former run_repair_websites input was
+        # removed — one slot back from the 25-input cap.)
         timeout-minutes: 15
         continue-on-error: true
         run: uv run nous repair-wrong-websites

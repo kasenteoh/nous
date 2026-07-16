@@ -28,6 +28,12 @@ AGGREGATOR_HOSTS: frozenset[str] = frozenset(
         "f6s.com",
         "getlatka.com",
         "growjo.com",
+        # Startup-news aggregators / content sites the old resolver accepted as
+        # company homepages (2026-07-16 QA: helix→machinebrief, away→marketspy,
+        # amiato→failory — the wrong-site descriptions + mined rounds followed).
+        "machinebrief.com",
+        "marketspy.com",
+        "failory.com",
         # VC / investor databases
         "crunchbase.com",
         "pitchbook.com",
