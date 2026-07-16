@@ -428,6 +428,7 @@ describe("getCompanyBySlug", () => {
                 fact_kind: "total_raised",
                 fact_ref: "",
                 source_url: "https://techcrunch.com/acme",
+                claim: "Acme has raised a total of $12.0M.",
                 supporting_quote: "raised $12 million",
               },
             ],

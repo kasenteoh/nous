@@ -452,6 +452,9 @@ export interface FactVerification {
   fact_kind: string;
   fact_ref: string;
   source_url: string;
+  /** The exact claim text the verdict was checked against — the web compares it
+   *  to the currently-rendered figure before showing a ✓ (claim-drift guard). */
+  claim: string;
   supporting_quote: string | null;
 }
 

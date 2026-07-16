@@ -472,6 +472,7 @@ export default async function CompanyPage({ params }: Props) {
                   "status",
                   "",
                   company.status_source_url,
+                  { kind: "status", status: company.status },
                 )}
                 label="Status"
               />
@@ -640,6 +641,7 @@ export default async function CompanyPage({ params }: Props) {
                     "total_raised",
                     "",
                     totalRaisedSourceUrl,
+                    { kind: "amount", amountUsd: displayedTotal },
                   )}
                   label="Total raised"
                 />

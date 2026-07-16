@@ -112,6 +112,7 @@ export function EventTimeline({ rounds, news, verified }: Props) {
                             "funding_round",
                             item.round.id,
                             item.round.primary_news_url,
+                            { kind: "amount", amountUsd: item.round.amount_raised },
                           )
                         : null
                     }
