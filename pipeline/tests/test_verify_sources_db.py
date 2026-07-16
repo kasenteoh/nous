@@ -22,7 +22,9 @@ from nous.pipeline.verify_sources import (
     _collect_stored_text_facts,
     _Fact,
     _upsert_verdict,
+    funding_round_claim,
     run_verify_sources_probe,
+    total_raised_claim,
 )
 
 pytestmark = pytest.mark.skipif(
@@ -168,14 +170,15 @@ async def test_apply_gate_excludes_verified_reselects_stale(db: AsyncSession) ->
     # Unverified → apply collection includes it.
     assert _has_tr(await _collect_stored_text_facts(db, limit=10, for_apply=True))
 
-    # Verify at the CURRENT version + same source → excluded from apply selection…
+    # Verify at the CURRENT version + same source + the claim rendered today →
+    # excluded from apply selection…
     db.add(
         FactVerification(
             company_id=a.id,
             fact_kind="total_raised",
             fact_ref="",
             source_url=tc,
-            claim="prior claim",
+            claim=total_raised_claim("Acme", Decimal("12000000"), None),
             verdict="supported",
             supporting_quote="q",
             prompt_version=PROMPT_VERSION,
@@ -186,8 +189,18 @@ async def test_apply_gate_excludes_verified_reselects_stale(db: AsyncSession) ->
     # …but dry-run collection ignores the gate (still verifies it).
     assert _has_tr(await _collect_stored_text_facts(db, limit=10, for_apply=False))
 
-    # A stale verification (old prompt version) re-selects it in apply mode.
+    # A claim that drifts under the SAME version + source (a corrected amount
+    # re-extracted from the same article — the #199 known gap) re-selects via
+    # the stale-claim sweep.
     fv = (await db.execute(select(FactVerification))).scalar_one()
+    fv.claim = "Acme has raised a total of $9.0M."
+    await db.flush()
+    assert _has_tr(await _collect_stored_text_facts(db, limit=10, for_apply=True))
+    fv.claim = total_raised_claim("Acme", Decimal("12000000"), None)
+    await db.flush()
+    assert not _has_tr(await _collect_stored_text_facts(db, limit=10, for_apply=True))
+
+    # A stale verification (old prompt version) re-selects it in apply mode.
     fv.prompt_version = "2000-01-01.0"
     await db.flush()
     assert _has_tr(await _collect_stored_text_facts(db, limit=10, for_apply=True))
@@ -303,3 +316,63 @@ async def test_apply_upsert_carries_round_fact_ref(db: AsyncSession) -> None:
         )
     ).scalar_one()
     assert row.fact_ref == str(fr.id)
+
+
+async def test_stale_claim_sweep_reselects_drifted_round(db: AsyncSession) -> None:
+    """A round verified at the current version + source whose amount then changes
+    (same article) re-selects via the stale-claim sweep; a matching claim stays
+    excluded."""
+    tc = "https://techcrunch.com/epsilon-round"
+    e = _company("Epsilon", latest_round_amount=Decimal("60000000"))
+    db.add(e)
+    await db.flush()
+    db.add(_news(e.id, tc))
+    fr = FundingRound(
+        company_id=e.id,
+        primary_news_url=tc,
+        amount_raised=Decimal("60000000"),
+        round_type="Series B",
+    )
+    db.add(fr)
+    await db.flush()
+
+    db.add(
+        FactVerification(
+            company_id=e.id,
+            fact_kind="funding_round",
+            fact_ref=str(fr.id),
+            source_url=tc,
+            claim=funding_round_claim(
+                "Epsilon", Decimal("60000000"), "Series B", None, None
+            ),
+            verdict="supported",
+            supporting_quote="q",
+            prompt_version=PROMPT_VERSION,
+        )
+    )
+    await db.flush()
+
+    def _round_facts(facts: list[_Fact]) -> list[_Fact]:
+        return [
+            f
+            for f in facts
+            if f.fact_kind == "funding_round" and f.company_name == "Epsilon"
+        ]
+
+    # Claim matches what nous renders today → gated out, no re-bill.
+    assert not _round_facts(
+        await _collect_stored_text_facts(db, limit=10, for_apply=True)
+    )
+
+    # The extracted amount is corrected from the same article → the rebuilt
+    # claim drifts from the verified one → the sweep re-queues the fact, with
+    # the CURRENT claim and the round id as its fact_ref.
+    fr.amount_raised = Decimal("65000000")
+    await db.flush()
+    [fact] = _round_facts(
+        await _collect_stored_text_facts(db, limit=10, for_apply=True)
+    )
+    assert fact.fact_ref == str(fr.id)
+    assert fact.claim == funding_round_claim(
+        "Epsilon", Decimal("65000000"), "Series B", None, None
+    )

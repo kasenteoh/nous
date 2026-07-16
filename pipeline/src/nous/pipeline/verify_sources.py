@@ -452,13 +452,15 @@ def _not_verified(
     produced by the current ``PROMPT_VERSION`` AND against the same source_url. A
     changed source, or a bumped ``PROMPT_VERSION``, re-selects it.
 
-    KNOWN GAP (rare, low-harm): a claim that changes at the SAME source + version
-    — e.g. a corrected amount from the same article, no new URL — is NOT
-    re-selected here, so its stale verdict persists until the next source change
-    or ``PROMPT_VERSION`` bump. Defenses: the row stores ``claim``, so the web read
-    compares the rendered claim to ``fact_verifications.claim`` before showing the
-    ✓ (never a stale badge); and any ``PROMPT_VERSION`` bump re-verifies the whole
-    cohort. Concurrent apply runs can't race the SELECT-then-upsert in
+    A claim that changes at the SAME source + version — e.g. a corrected amount
+    re-extracted from the same article, no new URL — is invisible to this SQL
+    gate (claim text is built in Python). :func:`_collect_stale_claim_facts`
+    closes that gap in apply mode: it sweeps current-version verifications whose
+    stored claim no longer matches the rebuilt claim and re-queues them. The web
+    additionally refuses to show a ✓ whose verified claim no longer contains the
+    figure it is rendered next to (``web/lib/verifications.ts``), so even the
+    window between a drift and the next apply run can't show a stale badge.
+    Concurrent apply runs can't race the SELECT-then-upsert in
     :func:`_upsert_verdict` — every DB-writing workflow shares the
     ``nous-pipeline-db`` concurrency group, so they never overlap.
     """
@@ -473,6 +475,173 @@ def _not_verified(
     )
 
 
+async def _collect_stale_claim_facts(session: AsyncSession) -> list[_Fact]:
+    """Verified-but-drifted facts: the claim rendered today no longer matches the
+    claim its current-version verification was checked against.
+
+    The complement of :func:`_not_verified`, closing its known gap: that gate
+    skips a fact verified at the current ``PROMPT_VERSION`` + source_url, but the
+    fact's *content* can change under the same source (a corrected total
+    re-extracted from the same article). Claim text is built in Python, so the
+    comparison can't live in the SQL gate; this sweep joins every current-version
+    verification to its live fact, rebuilds the claim, and re-queues the
+    mismatches — :func:`_upsert_verdict` then overwrites the stale row. The
+    verified set is at most one row per verifiable fact, so the sweep is a cheap
+    bounded scan.
+    """
+    stale: list[_Fact] = []
+
+    tr_rows = (
+        await session.execute(
+            select(
+                Company.id,
+                Company.slug,
+                Company.name,
+                Company.total_raised_usd,
+                Company.total_raised_as_of,
+                Company.total_raised_source_url,
+                Company.latest_round_amount,
+                FactVerification.claim,
+            )
+            .join(
+                FactVerification,
+                and_(
+                    FactVerification.company_id == Company.id,
+                    FactVerification.fact_kind == "total_raised",
+                    FactVerification.fact_ref == "",
+                    FactVerification.prompt_version == PROMPT_VERSION,
+                    FactVerification.source_url == Company.total_raised_source_url,
+                ),
+            )
+            .where(
+                _shown(),
+                Company.total_raised_usd.is_not(None),
+                Company.total_raised_source_url.is_not(None),
+                _has_stored_text(Company.total_raised_source_url, Company.id),
+            )
+        )
+    ).all()
+    for cid, slug, name, amount, as_of, url, prom, old_claim in tr_rows:
+        claim = total_raised_claim(name, amount, as_of)
+        if url is None or claim == old_claim:
+            continue
+        stale.append(
+            _Fact(
+                company_id=cid,
+                company_slug=slug,
+                company_name=name,
+                fact_kind="total_raised",
+                fact_label=f"total raised {_format_usd(amount)}",
+                source_url=url,
+                claim=claim,
+                prominence=float(prom) if prom is not None else 0.0,
+            )
+        )
+
+    st_rows = (
+        await session.execute(
+            select(
+                Company.id,
+                Company.slug,
+                Company.name,
+                Company.status,
+                Company.status_source_url,
+                Company.latest_round_amount,
+                FactVerification.claim,
+            )
+            .join(
+                FactVerification,
+                and_(
+                    FactVerification.company_id == Company.id,
+                    FactVerification.fact_kind == "status",
+                    FactVerification.fact_ref == "",
+                    FactVerification.prompt_version == PROMPT_VERSION,
+                    FactVerification.source_url == Company.status_source_url,
+                ),
+            )
+            .where(
+                _shown(),
+                Company.status != "active",
+                Company.status_source_url.is_not(None),
+                _has_stored_text(Company.status_source_url, Company.id),
+            )
+        )
+    ).all()
+    for cid, slug, name, status, url, prom, old_claim in st_rows:
+        claim = status_claim(name, status)
+        if url is None or claim == old_claim:
+            continue
+        stale.append(
+            _Fact(
+                company_id=cid,
+                company_slug=slug,
+                company_name=name,
+                fact_kind="status",
+                fact_label=f"status: {status}",
+                source_url=url,
+                claim=claim,
+                prominence=float(prom) if prom is not None else 0.0,
+            )
+        )
+
+    fr_rows = (
+        await session.execute(
+            select(
+                FundingRound.id,
+                FundingRound.company_id,
+                Company.slug,
+                Company.name,
+                FundingRound.amount_raised,
+                FundingRound.round_type,
+                FundingRound.valuation_post_money,
+                FundingRound.announced_date,
+                FundingRound.primary_news_url,
+                Company.latest_round_amount,
+                FactVerification.claim,
+            )
+            .select_from(FundingRound)
+            .join(Company, Company.id == FundingRound.company_id)
+            .join(
+                FactVerification,
+                and_(
+                    FactVerification.company_id == FundingRound.company_id,
+                    FactVerification.fact_kind == "funding_round",
+                    FactVerification.fact_ref == cast(FundingRound.id, String),
+                    FactVerification.prompt_version == PROMPT_VERSION,
+                    FactVerification.source_url == FundingRound.primary_news_url,
+                ),
+            )
+            .where(
+                _shown(),
+                FundingRound.primary_news_url.is_not(None),
+                FundingRound.amount_raised.is_not(None),
+                _has_stored_text(
+                    FundingRound.primary_news_url, FundingRound.company_id
+                ),
+            )
+        )
+    ).all()
+    for rid, cid, slug, name, amount, rtype, val, adate, url, prom, old_claim in fr_rows:
+        claim = funding_round_claim(name, amount, rtype, val, adate)
+        if url is None or claim == old_claim:
+            continue
+        stale.append(
+            _Fact(
+                company_id=cid,
+                company_slug=slug,
+                company_name=name,
+                fact_kind="funding_round",
+                fact_label=f"{rtype or 'round'} {_format_usd(amount)}",
+                source_url=url,
+                claim=claim,
+                prominence=float(prom) if prom is not None else 0.0,
+                round_id=rid,
+            )
+        )
+
+    return stale
+
+
 async def _collect_stored_text_facts(
     session: AsyncSession, *, limit: int, for_apply: bool = False
 ) -> list[_Fact]:
@@ -481,7 +650,9 @@ async def _collect_stored_text_facts(
     Each kind is queried has-stored-text-only and prominence-ordered, then merged
     and re-capped — so a small ``limit`` covers marquee facts first. In apply mode
     (``for_apply``) facts already verified at the current ``PROMPT_VERSION`` +
-    source are excluded (idempotent, no re-bill). NULL-amount funding rounds are
+    source are excluded (idempotent, no re-bill), except those whose rebuilt
+    claim no longer matches the verified one — the stale-claim sweep re-queues
+    those for re-verification. NULL-amount funding rounds are
     always skipped — a "raised an undisclosed amount" claim can't cleanly verify
     (the #197 dry-run gate refinement). Source text is loaded only for the final
     set (not the candidate pool).
@@ -627,6 +798,13 @@ async def _collect_stored_text_facts(
                 round_id=rid,
             )
         )
+
+    if for_apply:
+        # The _not_verified gate above skips facts verified at the current
+        # version + source; the sweep re-queues the ones whose CLAIM drifted
+        # under that same gate (a corrected figure from the same article). By
+        # definition disjoint from the gated queries, so no fact appears twice.
+        facts.extend(await _collect_stale_claim_facts(session))
 
     # Prominence-first merge across kinds, then cap.
     facts.sort(key=lambda f: f.prominence, reverse=True)

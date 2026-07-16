@@ -1866,7 +1866,7 @@ export async function getCompanyBySlug(
       // error degrades to no badges (handled below), never a page failure.
       supabase
         .from("fact_verifications")
-        .select("fact_kind, fact_ref, source_url, supporting_quote")
+        .select("fact_kind, fact_ref, source_url, claim, supporting_quote")
         .eq("company_id", companyId)
         .eq("verdict", "supported"),
     ]);
