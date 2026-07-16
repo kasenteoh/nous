@@ -6,9 +6,11 @@
 // the browser (the response is plain CSV).
 
 import { createSupabaseServerClient } from "@/lib/db";
+import { resolveIndustrySlug } from "@/lib/industry";
 import {
   applyCompanyFilters,
   CATALOG_BAR_OR,
+  listCanonicalIndustries,
   sanitizeIlikeTerm,
   type CompanyListOptions,
 } from "@/lib/queries";
@@ -136,6 +138,19 @@ function rowToCsv(r: ExportRow): string {
 export async function GET(request: Request): Promise<Response> {
   const params = new URL(request.url).searchParams;
   const opts = optionsFromParams(params);
+
+  // The industry filter accepts the display label ("AI infrastructure") AND
+  // the URL slug ("ai-infrastructure") — customers copy the slug straight out
+  // of /industry URLs, and the silent zero-row export it used to produce was
+  // a 2026-07 QA finding. An unresolvable value passes through unchanged
+  // (same zero-row behavior as any unknown label).
+  if (opts.industry_group) {
+    const canonical = (await listCanonicalIndustries()).map((i) => i.group);
+    if (!canonical.includes(opts.industry_group)) {
+      const resolved = resolveIndustrySlug(opts.industry_group, canonical);
+      if (resolved) opts.industry_group = resolved;
+    }
+  }
 
   let supabase: ReturnType<typeof createSupabaseServerClient>;
   try {
