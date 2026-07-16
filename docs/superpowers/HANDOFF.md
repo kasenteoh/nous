@@ -1,4 +1,4 @@
-# Handoff — state of the world as of 2026-07-14
+# Handoff — state of the world as of 2026-07-16
 
 Written for the next agent (any model) picking this project up cold. Read
 this, then root `CLAUDE.md` (conventions), then the worklog
@@ -7,6 +7,37 @@ authoritative history; **read its "Opus 4.8 pickup — 2026-07-12" section**
 for the detail behind the Latest-update block below), then the two plan docs
 under `docs/superpowers/plans/` (2026-07-10 improvement plan; 2026-07-11
 hygiene + Wave 3). `BACKLOG.md` is annotated with what shipped.
+
+## LATEST UPDATE — known-issues sweep + verification hardening (2026-07-15/16, PRs #202–#209)
+
+Eight PRs, all CI-green and adversarially reviewed, **awaiting owner merge**
+(the session's permission mode gated `gh pr merge` + workflow dispatch — see
+the worklog's session block for per-PR detail):
+- **#202** claim-drift gap (a REAL false-✓ path — corrected figure at the same
+  source kept a stale ✓): pipeline stale-claim sweep + web grammar-anchored
+  claim guard. Merge early — the verification stack PRs stack on main.
+- **#203** momentum exit-cohort clear (consistency; shared `_shown_predicate`).
+- **#204** `unsupported` verdicts itemized in the data-quality report.
+- **#205** verify-sources in the 3h cron (`--limit 40`, no new input) — drains
+  the stored-text remainder (~166 facts) and the #208 re-verify automatically.
+- **#206** migration **0044** `news_articles.funding_round_id` (exact
+  article→round link; repair-catalog pass 4 heals; repair-duplicate-rounds
+  repoints). **Head becomes 0044.**
+- **#207** timeline groups coverage by the persisted link — **merge ONLY after
+  #206's migration reaches prod** (3h cron applies it; pre-migration the
+  explicit select 400s and news render empty).
+- **#208** ellipsis-aware grounding, PROMPT_VERSION **2026-07-16.1** (recovers
+  legit ✓s lost to "..."-elided quotes; still fail-closed; golden gate green).
+- **#209** sharded sitemaps (`/sitemap/core.xml` + `companies-<i>` 40k-shards;
+  robots lists every shard).
+
+**Ops still needed (owner):** dispatch `discovery.yml` once — it has NOT run
+since #191, so prod `completeness_score` is unpopulated and the provenance
+badge renders on 0 companies. Everything else self-drains on the crons once
+merged. **Next up (BACKLOG):** the verification re-fetch path [M] (~103 facts;
+build after #202/#205/#208 land — same files), then ROADMAP Later #2
+(llms.txt / `/c/[slug].md`) + platform health (embedding decoupling,
+pipeline.yml input-cap refactor, observability).
 
 ## LATEST UPDATE — source-verification SHIPPED (2026-07-15, PRs #197–#201)
 
