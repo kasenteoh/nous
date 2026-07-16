@@ -29,7 +29,10 @@ from nous.llm.client import MAX_PROMPT_INPUT_CHARS
 # schema and evolve together. Scheme: "<date>.<same-day-counter>". Bump on ANY
 # semantic change to either template or the schema — even a wording tweak — so
 # data from a bad revision can be found and re-run.
-PROMPT_VERSION: str = "2026-07-10.1"
+# 2026-07-16.1: rumor guard — "in talks" / "raising" / unclosed rounds are NOT
+# funding announcements (the 2026-07-16 QA pass found an in-talks headline
+# extracted, persisted, and then ✓-verified as a completed $75M round).
+PROMPT_VERSION: str = "2026-07-16.1"
 
 # News articles are usually well under the shared ceiling, but we truncate
 # defensively so a malformed scrape can't blow the prompt budget.
@@ -156,6 +159,15 @@ Company name being asked about: {company_name}
 Return JSON matching the schema. Rules:
 - If the article is NOT primarily a funding announcement for {company_name},
   set is_funding_announcement=false and leave other fields null/empty.
+- A funding announcement means the round has CLOSED — the money has been
+  raised. If the article says {company_name} is "in talks", "raising",
+  "seeking", "looking to raise", "reportedly raising", "in discussions", or
+  that the round is not yet finalized/closed, set
+  is_funding_announcement=false and leave the round fields (round_type,
+  amount_raised_usd, valuation_post_money_usd, announced_date, investors)
+  null/empty — a rumored or in-progress raise is NOT a funding round. A
+  cumulative "$X raised to date" figure stated in such an article still goes
+  in total_raised_usd.
 - Do not invent numbers. If the round size or valuation is not stated, return null.
 - amount_raised_usd is in raw USD (e.g. 50000000 for "$50M").
 - valuation_post_money_usd: Always capture the post-money valuation whenever

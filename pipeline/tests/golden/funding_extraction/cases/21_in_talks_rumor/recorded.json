@@ -1,7 +1,7 @@
 {
   "provenance": "deepseek",
   "model": "deepseek-chat",
-  "recorded_at": "2026-07-16T15:34:09+00:00",
+  "recorded_at": "2026-07-16T15:34:21+00:00",
   "response": {
     "is_funding_announcement": false,
     "round_type": null,
@@ -14,6 +14,6 @@
     "confidence": "low",
     "status_event": null,
     "status_confidence": null,
-    "total_raised_usd": "120000000"
+    "total_raised_usd": "25000000"
   }
 }

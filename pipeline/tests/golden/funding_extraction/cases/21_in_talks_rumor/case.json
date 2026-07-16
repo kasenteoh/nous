@@ -1,0 +1,5 @@
+{
+  "company_name": "Meridian Labs",
+  "variant": "news",
+  "notes": "Rumor guard: an in-talks/unclosed raise must NOT extract as a funding announcement (2026-07-16 QA: an in-talks headline was persisted and ✓-verified as a completed round). The stated cumulative total still extracts."
+}

@@ -45,11 +45,11 @@ def test_build_prompt_truncates_long_article_text() -> None:
     assert "a" * (MAX_ARTICLE_CHARS + 1) not in prompt
     # Sanity: the rest of the template is a small fixed overhead, so the
     # rendered prompt length is the truncated body plus the template scaffolding.
-    # (Ceiling bumped 2,000 → 2,500 when the total_raised_usd rule landed, then
-    # → 3,000 when the Task A4 always-capture-post-money-valuation rule landed;
-    # it still guards against runaway template bloat.)
+    # (Ceiling bumped 2,000 → 2,500 when the total_raised_usd rule landed,
+    # → 3,000 for the Task A4 always-capture-valuation rule, → 3,500 for the
+    # 2026-07-16 in-talks rumor guard; it still guards runaway template bloat.)
     template_overhead = len(prompt) - MAX_ARTICLE_CHARS
-    assert 0 < template_overhead < 3_000
+    assert 0 < template_overhead < 3_500
 
 
 def test_build_prompt_short_article_is_unchanged() -> None:

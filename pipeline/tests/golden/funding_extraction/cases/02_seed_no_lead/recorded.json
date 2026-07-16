@@ -1,23 +1,23 @@
 {
-  "provenance": "simulated",
-  "model": null,
-  "recorded_at": null,
+  "provenance": "deepseek",
+  "model": "deepseek-chat",
+  "recorded_at": "2026-07-16T15:33:53+00:00",
   "response": {
+    "is_funding_announcement": true,
     "round_type": "Seed",
-    "amount_raised_usd": 3500000,
+    "amount_raised_usd": "3500000",
     "valuation_post_money_usd": null,
     "valuation_source": null,
     "announced_date": null,
-    "lead_investors": [
-      "Cindercone Ventures"
-    ],
+    "lead_investors": [],
     "other_investors": [
-      "Harbor Street Capital"
+      "Cindercone Ventures",
+      "Harbor Street Capital",
+      "a group of angel investors from the logistics industry"
     ],
+    "confidence": "medium",
     "status_event": null,
     "status_confidence": null,
-    "total_raised_usd": null,
-    "is_funding_announcement": true,
-    "confidence": "medium"
+    "total_raised_usd": null
   }
 }
