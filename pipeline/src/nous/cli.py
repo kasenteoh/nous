@@ -1976,8 +1976,9 @@ def verify_sources_probe_cmd() -> None:
     is_flag=True,
     default=False,
     help=(
-        "Verify the slice + print the table WITHOUT writing (the only supported "
-        "mode today — the fact_verifications apply path lands with migration 0043)."
+        "Verify the slice + print the table WITHOUT writing. Default (no flag) "
+        "is APPLY: verdicts upsert into fact_verifications, version+source-"
+        "gated so already-verified facts never re-bill."
     ),
 )
 def verify_sources_cmd(limit: int, dry_run: bool) -> None:
