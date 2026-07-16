@@ -41,7 +41,12 @@ from pydantic import BaseModel, Field, model_validator
 # "<date>.<same-day-counter>"; bump on ANY semantic change to the template,
 # schema, or validators so a claim verified by a bad revision can be found and
 # re-verified (mirrors the enrichment / career-history version stamps).
-PROMPT_VERSION: str = "2026-07-14.1"
+# 2026-07-16.1: quote_is_grounded accepts ellipsis-elided quotes (every
+# fragment verbatim, in order, ≥ _MIN_FRAGMENT_CHARS). A semantic change to
+# what persists as grounded 'supported', so the bump re-selects the cohort —
+# including the facts the stricter check wrongly downgraded to 'uncertain'
+# (12 of 500 in the 2026-07-15 apply run were "..."-elided legitimate quotes).
+PROMPT_VERSION: str = "2026-07-16.1"
 
 Verdict = Literal["supported", "unsupported", "uncertain"]
 
@@ -100,6 +105,13 @@ def _normalize(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip().casefold()
 
 
+# An elided quote's fragments, split on "..." / "…". Each fragment must clear
+# this length so a trivial connective ("the", "and it") can't stitch unrelated
+# source text into a fake supporting span.
+_ELLIPSIS_RE = re.compile(r"\.{3}|…")
+_MIN_FRAGMENT_CHARS = 12
+
+
 def quote_is_grounded(quote: str | None, source_text: str) -> bool:
     """True when *quote* appears in *source_text* (whitespace/case-normalized).
 
@@ -108,10 +120,34 @@ def quote_is_grounded(quote: str | None, source_text: str) -> bool:
     the claim is not actually verified. Normalization tolerates reformatting
     (collapsed whitespace, case) but not invented content. An empty quote is
     never grounded.
+
+    Ellipsis-elided quotes ("Acme ... raised $80 million ... led by X") are
+    accepted iff EVERY fragment is itself a verbatim (normalized) substring,
+    the fragments appear in order without overlapping, and each is at least
+    ``_MIN_FRAGMENT_CHARS`` long — the model often elides mid-sentence
+    boilerplate, and rejecting those wholesale cost legitimate ✓s (12/500 in
+    the 2026-07-15 apply run) without adding safety: in-order verbatim
+    fragments are still the source's own words about the claim. A fragment
+    that fails any condition rejects the WHOLE quote (fail closed).
     """
     if not quote or not quote.strip():
         return False
-    return _normalize(quote) in _normalize(source_text)
+    src = _normalize(source_text)
+    fragments = [f for f in (_normalize(p) for p in _ELLIPSIS_RE.split(quote)) if f]
+    if not fragments:
+        return False
+    if len(fragments) == 1:
+        # Non-elided quote: the original exact-substring rule, no length floor.
+        return fragments[0] in src
+    pos = 0
+    for fragment in fragments:
+        if len(fragment) < _MIN_FRAGMENT_CHARS:
+            return False
+        idx = src.find(fragment, pos)
+        if idx == -1:
+            return False
+        pos = idx + len(fragment)
+    return True
 
 
 PROMPT_TEMPLATE = """\
