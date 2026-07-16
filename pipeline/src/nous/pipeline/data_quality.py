@@ -320,8 +320,11 @@ def emit_data_quality_summary(summary: DataQualitySummary) -> None:
             lines.append("| Company | Fact | Claim checked | Source |")
             lines.append("|---|---|---|---|")
             for u in summary.unsupported_facts:
+                # Claims are pipeline-built (no pipes/newlines today), but keep
+                # the table well-formed if that ever changes.
+                claim = u.claim[:96].replace("|", "\\|").replace("\n", " ")
                 lines.append(
-                    f"| {u.slug} | {u.fact_kind} | {u.claim[:96]} | {u.source_host} |"
+                    f"| {u.slug} | {u.fact_kind} | {claim} | {u.source_host} |"
                 )
             overflow = (
                 summary.verification_counts.get("unsupported", 0)
