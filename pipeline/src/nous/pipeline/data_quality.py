@@ -16,6 +16,10 @@ completeness score) becomes measurable. It reports, over the *shown* cohort
   aggregated: mean + a bucket histogram + husk / fully-complete counts.
 - **Duplicate rate** — companies sharing a ``normalized_name`` (dedup residue).
 - **Staleness** — ``last_enriched_at`` age buckets.
+- **Source verification** — ``fact_verifications`` verdict counts, with the
+  ``unsupported`` facts itemized: a rendered figure its cited source contradicts
+  or doesn't state (the #199 internal data-quality signal — never a public
+  badge; investigate the extraction, not the badge).
 
 No writes, no ``pipeline_runs`` row (mirrors db-stats / pipeline-health).
 """
@@ -27,16 +31,17 @@ from collections import Counter
 from datetime import UTC, datetime, timedelta
 
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from nous.db.models import Company, Person
+from nous.db.models import Company, FactVerification, Person
 from nous.observability import write_step_summary
 from nous.util.completeness import (
     FIELD_WEIGHTS,
     completeness_fields,
     completeness_score,
 )
+from nous.util.url import hostname
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +73,20 @@ class ScoreBucket(BaseModel):
     count: int
 
 
+class UnsupportedFact(BaseModel):
+    """One `unsupported` verification — a fact its cited source contradicts."""
+
+    slug: str
+    fact_kind: str
+    claim: str
+    source_host: str
+
+
+# Itemized `unsupported` rows shown in the report (the counts above the table are
+# never capped — a truncated list says "+N more" so nothing hides silently).
+UNSUPPORTED_DETAIL_LIMIT: int = 25
+
+
 class DataQualitySummary(BaseModel):
     """One data-quality report."""
 
@@ -81,6 +100,9 @@ class DataQualitySummary(BaseModel):
     duplicate_groups: int = 0  # normalized_names shared by ≥2 shown companies
     companies_in_duplicates: int = 0
     staleness: dict[str, int] = Field(default_factory=dict)
+    # fact_verifications verdict → count (all rows; empty dict = none recorded).
+    verification_counts: dict[str, int] = Field(default_factory=dict)
+    unsupported_facts: list[UnsupportedFact] = Field(default_factory=list)
 
 
 def _pct(present: int, total: int) -> float:
@@ -185,12 +207,50 @@ async def run_data_quality(session: AsyncSession) -> DataQualitySummary:
     summary.companies_in_duplicates = sum(name_counts[n] for n in dup_names)
     summary.staleness = dict(staleness)
 
+    # Source-verification verdicts (all fact_verifications rows — a verification
+    # outlives its company's cohort membership; it's an internal signal either
+    # way). `unsupported` rows are itemized (slug + the checked claim + source
+    # host) so a contradicted figure is investigable straight from the report.
+    verdict_rows = (
+        await session.execute(
+            select(FactVerification.verdict, func.count()).group_by(
+                FactVerification.verdict
+            )
+        )
+    ).all()
+    summary.verification_counts = {verdict: int(n) for verdict, n in verdict_rows}
+    unsupported_rows = (
+        await session.execute(
+            select(
+                Company.slug,
+                FactVerification.fact_kind,
+                FactVerification.claim,
+                FactVerification.source_url,
+            )
+            .join(Company, Company.id == FactVerification.company_id)
+            .where(FactVerification.verdict == "unsupported")
+            .order_by(Company.slug, FactVerification.fact_kind)
+            .limit(UNSUPPORTED_DETAIL_LIMIT)
+        )
+    ).all()
+    summary.unsupported_facts = [
+        UnsupportedFact(
+            slug=slug,
+            fact_kind=fact_kind,
+            claim=claim,
+            source_host=hostname(source_url) or source_url,
+        )
+        for slug, fact_kind, claim, source_url in unsupported_rows
+    ]
+
     logger.info(
-        "data-quality: shown=%d mean_completeness=%.3f husks=%d dupes=%d",
+        "data-quality: shown=%d mean_completeness=%.3f husks=%d dupes=%d "
+        "unsupported_verifications=%d",
         summary.shown_total,
         summary.mean_completeness,
         summary.husks,
         summary.duplicate_groups,
+        summary.verification_counts.get("unsupported", 0),
     )
     return summary
 
@@ -235,6 +295,41 @@ def emit_data_quality_summary(summary: DataQualitySummary) -> None:
         summary.website_source_counts.items(), key=lambda kv: -kv[1]
     ):
         lines.append(f"| {src} | {count} |")
+    lines.append("")
+    lines.append("### Source verification (fact_verifications)")
+    if not summary.verification_counts:
+        lines.append(
+            "_No verifications recorded yet — dispatch `verify-sources.yml` "
+            "(`run_apply=true`) to populate._"
+        )
+    else:
+        counts = summary.verification_counts
+        lines.append(
+            f"**supported:** {counts.get('supported', 0)}  ·  "
+            f"**unsupported:** {counts.get('unsupported', 0)}  ·  "
+            f"**uncertain:** {counts.get('uncertain', 0)}"
+        )
+        if summary.unsupported_facts:
+            lines.append("")
+            lines.append(
+                "`unsupported` = the cited source contradicts or doesn't state "
+                "the rendered claim — an extraction/data bug to investigate "
+                "(never shown publicly)."
+            )
+            lines.append("")
+            lines.append("| Company | Fact | Claim checked | Source |")
+            lines.append("|---|---|---|---|")
+            for u in summary.unsupported_facts:
+                lines.append(
+                    f"| {u.slug} | {u.fact_kind} | {u.claim[:96]} | {u.source_host} |"
+                )
+            overflow = (
+                summary.verification_counts.get("unsupported", 0)
+                - len(summary.unsupported_facts)
+            )
+            if overflow > 0:
+                lines.append("")
+                lines.append(f"_…and {overflow} more (table capped)._")
     lines.append("")
     lines.append(
         f"**Duplicates:** {summary.duplicate_groups} shared-name groups "
