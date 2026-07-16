@@ -472,6 +472,17 @@ class NewsArticle(Base):
     processed: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default="false", index=True
     )
+    # The round this article's funding extraction reconciled into (0044) — the
+    # EXACT article→round link the web timeline groups coverage by; read-time
+    # date proximity is the fallback for unlinked articles. ON DELETE SET NULL:
+    # round rows get deleted by repair/dedup, and the link is derived data — it
+    # re-heals via the repair-catalog primary_news_url pass or the next
+    # extraction that reconciles the same round.
+    funding_round_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("funding_rounds.id", ondelete="SET NULL"),
+        index=True,
+    )
 
 
 class FundingRound(Base):

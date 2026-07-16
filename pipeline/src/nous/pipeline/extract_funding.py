@@ -372,12 +372,14 @@ async def _persist_round_and_investors(
     extraction: FundingExtraction,
     primary_news_url: str,
     proximity_days: int,
-) -> None:
+) -> FundingRound:
     """Reconcile a funding round and link its investors, updating *counts*.
 
     Shared by the news (primary) and website-fallback paths. Reconciliation is
     fill-nulls + first-write-wins on primary_news_url, so running the website
-    path after the news path can only fill gaps TechCrunch left.
+    path after the news path can only fill gaps TechCrunch left. Returns the
+    reconciled round so the news path can stamp the article→round link
+    (news_articles.funding_round_id, 0044).
     """
     funding_round, created = await reconcile_funding_round(
         session,
@@ -413,6 +415,8 @@ async def _persist_round_and_investors(
                 is_lead=is_lead,
             )
             counts.investor_links_created += 1
+
+    return funding_round
 
 
 class ExtractFundingSummary(_RoundPersistCounts):
@@ -620,7 +624,7 @@ async def _apply_news_outcome(
     # pre-A1 row), de-redirect it here before it lands in primary_news_url.
     # Non-Google-News URLs return unchanged with no network call.
     source_url = await _resolve_primary_news_url(article.url, resolver)
-    await _persist_round_and_investors(
+    funding_round = await _persist_round_and_investors(
         session,
         summary,
         company_id=company.id,
@@ -628,6 +632,11 @@ async def _apply_news_outcome(
         primary_news_url=source_url,
         proximity_days=proximity_days,
     )
+
+    # The exact article→round link (0044): this article's extraction reconciled
+    # into that round, so the web timeline groups it there without guessing
+    # from dates. Overwrites a stale link if the article re-reconciles later.
+    article.funding_round_id = funding_round.id
 
     article.processed = True
     session.add(article)
