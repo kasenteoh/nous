@@ -46,7 +46,10 @@ from pydantic import BaseModel, Field, model_validator
 # what persists as grounded 'supported', so the bump re-selects the cohort —
 # including the facts the stricter check wrongly downgraded to 'uncertain'
 # (12 of 500 in the 2026-07-15 apply run were "..."-elided legitimate quotes).
-PROMPT_VERSION: str = "2026-07-16.1"
+# 2026-07-16.2: completed-vs-intended rule — a source stating an "in talks" /
+# unclosed raise CONTRADICTS a completed-raise claim (the QA pass found a
+# rumored $75M round wearing a ✓ against its own "in talks" headline).
+PROMPT_VERSION: str = "2026-07-16.2"
 
 Verdict = Literal["supported", "unsupported", "uncertain"]
 
@@ -178,6 +181,11 @@ Rules:
   "$12 million", and "$12,000,000" as the same; treat rounding words ("about",
   "nearly") as compatible. A near-but-different figure (e.g. $12M vs $15M) is
   "unsupported".
+- Completed vs intended: a CLAIM that the company RAISED an amount is
+  supported only when the SOURCE states the raise as completed/closed. A
+  source saying the company is "in talks", "raising", "seeking", "looking to
+  raise", or that the round has not closed describes an INTENT, not a raise —
+  that is incompatible with a completed-raise claim: return "unsupported".
 - Leave `supporting_quote` null for "unsupported" and "uncertain".
 
 CLAIM: {claim}
