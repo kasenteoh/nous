@@ -34,6 +34,7 @@ function news(overrides: Partial<NewsArticleRow> = {}): NewsArticleRow {
     title: `Headline ${seq}`,
     source: "techcrunch.com",
     published_date: "2026-03-04",
+    funding_round_id: null,
     ...overrides,
   };
 }
@@ -288,6 +289,47 @@ describe("buildTimeline — primary pinning & unrenderable URLs (review fixes)",
       primaryUrl,
     );
     expect(b?.kind === "funding" ? b.coverage : []).toHaveLength(0);
+    expect(items.filter((i) => i.kind === "news")).toHaveLength(0);
+  });
+
+  it("attaches by the persisted funding_round_id even to an UNDATED round (the exact link beats date proximity)", () => {
+    // The motivating case: an undated round can never win date clustering, so
+    // pre-0044 its coverage rendered as standalone news clutter.
+    const undated = round({
+      id: "r-undated",
+      announced_date: null,
+      primary_news_url: null,
+    });
+    const datedNeighbor = round({ id: "r-near", announced_date: "2026-03-05" });
+    const article = news({
+      published_date: "2026-03-04", // date-nearest to r-near…
+      funding_round_id: "r-undated", // …but the pipeline KNOWS it covers r-undated
+    });
+    const items = buildTimeline([undated, datedNeighbor], [article]);
+    const target = items.find(
+      (i) => i.kind === "funding" && i.round.id === "r-undated",
+    );
+    const neighbor = items.find(
+      (i) => i.kind === "funding" && i.round.id === "r-near",
+    );
+    expect(
+      target?.kind === "funding" ? target.coverage.map((c) => c.url) : [],
+    ).toContain(article.url);
+    expect(neighbor?.kind === "funding" ? neighbor.coverage : []).toHaveLength(0);
+    expect(items.filter((i) => i.kind === "news")).toHaveLength(0);
+  });
+
+  it("falls back to date clustering when funding_round_id is orphaned (round deleted/merged)", () => {
+    const r = round({ id: "r-live", announced_date: "2026-03-05" });
+    const article = news({
+      published_date: "2026-03-04",
+      funding_round_id: "r-gone", // stale link — not among the passed rounds
+    });
+    const items = buildTimeline([r], [article]);
+    const live = items.find((i) => i.kind === "funding" && i.round.id === "r-live");
+    expect(
+      live?.kind === "funding" ? live.coverage.map((c) => c.url) : [],
+    ).toContain(article.url);
     expect(items.filter((i) => i.kind === "news")).toHaveLength(0);
   });
 });

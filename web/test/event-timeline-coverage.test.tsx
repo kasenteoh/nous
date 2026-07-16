@@ -35,6 +35,7 @@ function news(overrides: Partial<NewsArticleRow> = {}): NewsArticleRow {
     title: `Headline ${seq}`,
     source: "techcrunch.com",
     published_date: "2026-03-04",
+    funding_round_id: null,
     ...overrides,
   };
 }

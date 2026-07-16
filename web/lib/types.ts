@@ -380,6 +380,10 @@ export interface NewsArticleRow {
   title: string;
   source: string;
   published_date: string | null;
+  /** The round this article's extraction reconciled into (pipeline 0044) — the
+   *  EXACT coverage link; null for legacy/unlinked articles (date-proximity
+   *  fallback applies). */
+  funding_round_id: string | null;
 }
 
 // ─── Relationship graph (similar / also-backed-by) ────────────────────────────
