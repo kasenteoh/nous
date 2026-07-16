@@ -14,13 +14,12 @@ company always has description (0.20) or funding (0.15), so the stored floor is
 0.15, not 0.0. Every shown company is (re)scored each run (one that loses a field
 while staying shown drops to a lower score). A company that EXITS the shown cohort
 entirely (loses BOTH description and funding, or becomes excluded) is cleared back
-to NULL — a deliberate divergence from compute_momentum, which leaves such
-companies stale: a stale "richly documented" provenance badge would be a false
-trust claim (the whole feature is a trust-builder), whereas a stale momentum chip
-is benign. So the stored column stays self-consistent — only currently-shown
-companies carry a score — and the web can trust ``completeness_score >= 0.5``
-(its positive-only badge gate) without any staleness caveat, never re-deriving
-richness in TS.
+to NULL — a stale "richly documented" provenance badge would be a false trust
+claim (the whole feature is a trust-builder). compute_momentum now does the same
+exit-cohort clear. So the stored column stays self-consistent — only
+currently-shown companies carry a score — and the web can trust
+``completeness_score >= 0.5`` (its positive-only badge gate) without any
+staleness caveat, never re-deriving richness in TS.
 """
 
 from __future__ import annotations
@@ -148,8 +147,8 @@ async def run_compute_completeness(
     # synchronize_session=False: the cleared rows are disjoint from the shown ORM
     # objects just scored (not in the identity map), and the session is committed
     # immediately after. Skipped on a bounded --limit run — a partial/testing run
-    # must not do global cleanup. A deliberate divergence from compute_momentum
-    # (see the module docstring).
+    # must not do global cleanup. compute_momentum applies the same clear at the
+    # end of its run.
     if limit is None:
         # An UPDATE returns a CursorResult whose rowcount is the rows changed;
         # session.execute is typed as the broader Result, so narrow explicitly

@@ -208,6 +208,33 @@ async def test_excluded_company_is_skipped(db: AsyncSession) -> None:
     assert got.momentum_computed_at is None
 
 
+async def test_exited_cohort_momentum_is_cleared(db: AsyncSession) -> None:
+    """A company scored while shown that has since EXITED the cohort (here:
+    became excluded) has its momentum columns cleared back to NULL — only
+    currently-shown companies carry a score (mirrors compute-completeness's
+    exit-cohort clear)."""
+    co = _company(
+        "mom-exited",
+        exclusion_reason="not_a_startup",
+        funding_round_count=1,
+        latest_round_date=AS_OF - timedelta(days=7),
+    )
+    co.momentum_score = 0.9  # stale from when it was shown
+    co.momentum_why = ["funding recency"]
+    co.momentum_computed_at = NOW - timedelta(days=7)
+    db.add(co)
+    await db.commit()
+
+    summary = await run_compute_momentum(db, as_of_week=AS_OF, now=NOW)
+
+    db.expire_all()
+    got = await _reload(db, "mom-exited")
+    assert got.momentum_score is None
+    assert got.momentum_why is None
+    assert got.momentum_computed_at is None
+    assert summary.companies_cleared >= 1
+
+
 # ---------------------------------------------------------------------------
 # Stale high score is cleared when the signal disappears
 # ---------------------------------------------------------------------------
