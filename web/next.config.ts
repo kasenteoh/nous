@@ -47,6 +47,18 @@ const nextConfig: NextConfig = {
   serverExternalPackages: ["@huggingface/transformers", "onnxruntime-node"],
   outputFileTracingExcludes: perRoute(excludeGlobs),
   outputFileTracingIncludes: perRoute(includeGlobs),
+  async rewrites() {
+    return [
+      // /c/<slug>.md → the markdown route (llms.txt convention: a page's .md
+      // sibling). A dynamic segment can't carry a literal ".md" suffix, so the
+      // rewrite maps it onto app/c/[slug]/md/route.ts. The param regex pins
+      // slugs to the slugify alphabet so nothing else matches.
+      {
+        source: "/c/:slug([a-z0-9-]+)\\.md",
+        destination: "/c/:slug/md",
+      },
+    ];
+  },
 };
 
 export default nextConfig;
