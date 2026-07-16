@@ -1467,3 +1467,89 @@ re-dispatch to widen coverage. **Follow-ups (BACKLOG, not started):** the
 **re-fetch path** (the ~103 refetch-bucket facts, with scraping etiquette); surface
 `unsupported` counts in the `data-quality` report; wire `verify-sources --apply`
 into a cron cadence once the one-time backfill drains.
+
+## Fable 5 session — known-issues sweep + verification hardening (2026-07-15/16, PRs #202–#209)
+
+Eight-PR series worked as one session (each adversarially reviewed by a
+separate code-reviewer agent; merges pending owner action — the session's
+permission mode gated `gh pr merge` and workflow dispatch). Verify each PR's
+full statusCheckRollup before merging; #206 must merge (and its migration
+reach prod via the 3h cron) BEFORE #207.
+
+## PR #202 — fix: verify-sources claim-drift gap (stale-claim sweep + web claim guard)
+
+- The #199 apply gate keyed on (version, source_url) but NOT the claim, and
+  the web compared only source_url — a corrected amount at the same source
+  kept a stale ✓ (a false-✓ path; the docstrings claimed defenses that did
+  not exist). Two-sided fix: `_collect_stale_claim_facts` re-queues verified
+  facts whose rebuilt claim drifted (disjoint from the gated selection — no
+  double-billing); web `verifiedAgainst` requires the verified claim to
+  contain the rendered figure via grammar-anchored matching ("a total of $X"
+  / "raised $X" — bare containment could false-match the round claim's
+  OTHER figure, the valuation). Fail-closed: formatter-parity ties hide a ✓,
+  never show a wrong one. fact_verifications select/type gain `claim`.
+- Review: APPROVE (3 LOW coverage suggestions; 2 adopted as tests).
+
+## PR #203 — fix(pipeline): clear momentum on exit from the shown cohort
+
+- Mirrors compute-completeness's exit-cohort clear via a shared
+  `_shown_predicate()` (scoring SELECT + clear UPDATE can't drift). Not a
+  live bug (every read path re-filters shown) — consistency hardening;
+  retires the "deliberate divergence" note. Review: APPROVE.
+
+## PR #204 — feat(pipeline): fact_verifications verdicts in the data-quality report
+
+- Verdict counts + itemized `unsupported` facts (slug, claim checked, source
+  host; capped 25 with explicit "+N more") in the cron report — the #199
+  internal signal made visible. Review: APPROVE (LOW markdown-escape fixed).
+
+## PR #205 — feat(ci): verify-sources apply step in the 3h cron
+
+- `verify-sources --limit 40` after Judge eligibility; version+source-gated
+  so steady state is pennies; drains the remaining stored-text backlog
+  (~166 facts after the owner's limit-25 + limit-500 dispatch applies) — the
+  BACKLOG cron-cadence follow-up, with no new workflow input (25-cap intact).
+  Also fixed the stale `--dry-run` help text. Review: APPROVE.
+
+## PR #206 — feat(pipeline): exact news article → funding round link (migration 0044)
+
+- `news_articles.funding_round_id` (FK ON DELETE SET NULL, indexed; **head
+  is now 0044**); extract-funding stamps it at the reconcile call;
+  repair-catalog pass 4 backfills historical primaries + re-heals SET-NULLed
+  links every cron; repair-duplicate-rounds now repoints article links from
+  loser to survivor (review MEDIUM, fixed in-branch). Review: APPROVE.
+- Verified: 0044 up/down/up round-trip on local pgvector; full suite 1749+.
+
+## PR #207 — feat(web): timeline groups coverage by the persisted link
+
+- buildTimeline precedence (a0): a persisted funding_round_id naming a
+  passed round attaches there outright — finally groups coverage under
+  UNDATED rounds (the Perplexity clutter); primary-pin + ±14d proximity stay
+  as fallbacks; orphaned links fall back rather than vanish. **MERGE AFTER
+  #206's migration is on prod** (explicit select 400s pre-migration → news
+  would render empty). Review: APPROVE after a missed test-factory field
+  (fixed in-branch).
+
+## PR #208 — feat(pipeline): ellipsis-aware quote grounding (PROMPT_VERSION 2026-07-16.1)
+
+- 12/500 facts in the owner's apply run were legit "..."-elided quotes
+  rejected as fabrication → uncertain (lost ✓s). quote_is_grounded now
+  accepts elided quotes iff every fragment is verbatim, in order,
+  non-overlapping, ≥12 chars — still fail-closed. Version bump re-selects
+  the cohort (~$0.30, drains on the #205 cron step). Golden gate unchanged
+  (grounding_min 1.0).
+
+## PR #209 — feat(web): sharded sitemaps ahead of the 50k cap
+
+- generateSitemaps (v16 Promise<string> id): /sitemap/core.xml +
+  /sitemap/companies-<i>.xml (40k/shard, stable slug order); robots.txt
+  lists every shard (Next emits no index file); always ≥1 company shard so
+  an advertised URL never 404s.
+
+**Session ops findings (need owner action):**
+- `discovery.yml` has NOT run since #191 merged → prod `completeness_score`
+  is unpopulated and the provenance badge renders nowhere. Dispatch
+  `discovery.yml` once (or wait for the Monday cron).
+- verify-sources backlog: ~525/691 stored-text facts applied via the owner's
+  dispatches; the remainder (and the #208 re-verify) drains via #205's cron
+  step once merged.

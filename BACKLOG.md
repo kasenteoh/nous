@@ -33,16 +33,20 @@ discriminatively verify each rendered fact against its cited source; show a ✓ 
 verdict accuracy, grounding_min 1.0 = zero fabrication). Prod holds 18 grounded
 verdicts; widen with `verify-sources.yml -f run_apply=true -f limit=N` (idempotent).
 
-**Remaining follow-ups (not started):**
+**Remaining follow-ups:**
 - **Re-fetch path [M]** — verify the ~103 `refetch`-bucket facts (an http(s) source
   with no stored text) by re-fetching politely (contact-email UA, robots.txt, 1
   req/sec, SSRF guard); mirror `sources/news.py`. Grows addressable coverage ~13%.
-- **`unsupported` in the data-quality report [S]** — surface the count of
-  `unsupported` fact_verifications as an internal data-quality signal (a
-  mismatched/wrong figure the source contradicts), next to db-stats/data-quality.
-- **Apply cron cadence [S]** — once the one-time stored-text backfill drains, wire
-  `verify-sources --apply --limit N` into the pipeline cron so new/changed facts
-  get verified automatically (version+source-gated, so steady-state is cheap).
+  Build AFTER #202/#205/#208 merge (all touch the verification stack).
+- ~~**`unsupported` in the data-quality report [S]**~~ — **SHIPPED (#204)**:
+  verdict counts + itemized unsupported facts in the cron report.
+- ~~**Apply cron cadence [S]**~~ — **SHIPPED (#205)**: `verify-sources --limit 40`
+  in the 3h cron (no new input; drains the backlog remainder too).
+- **Claim-drift gap closed (#202)** — stale-claim sweep (pipeline) + grammar-
+  anchored claim guard (web); a corrected figure can no longer keep a stale ✓.
+- **Ellipsis-aware grounding (#208)** — PROMPT_VERSION 2026-07-16.1; legit
+  "..."-elided quotes now ground (fail-closed); bump re-verifies the cohort
+  (~$0.30) via the cron step.
 
 ## 2026-06-16 product review + remediation — SHIPPED
 
@@ -252,10 +256,10 @@ carries a `title={formatUsdExact(amount)}` exact-dollars tooltip.
 ### ~~`hq_state` values are unnormalized (CA vs California) — location pages render stored casing; normalize at enrichment time.~~ [S] SHIPPED (#176)
 Canonical form = the 2-letter UPPERCASE USPS code (the form the `/location/[state]` route already matches on — routing-safe). Applied at the enrich-companies write site via `canonical_us_state` (`util/us_state.py`, 50 states + DC; non-US → None → left untouched) plus the bounded, idempotent `normalize-hq-state` backfill stage (`--limit` / `--dry-run`, self-bounding SELECT, per-row commit). No migration (content-only), no URL change (full-name `/location/California` links 404 today and start resolving to the working `/location/CA`).
 
-### Tag sitemap min-companies threshold [S] — **partly SHIPPED (#177)**
-Thin single-company tag pages: `/tag/[tag]` now `noindex` when <3 companies, and
-`sitemap.ts` already excludes tags with <3 (`listAllTags`). **Still open:** a
-sitemap *index* before companies+tags approach the 50k-URL sitemap cap.
+### ~~Tag sitemap min-companies threshold~~ [S] — SHIPPED (#177 noindex; #209 shards)
+`/tag/[tag]` noindexes when <3 companies (#177); **#209 sharded the sitemap**
+(`/sitemap/core.xml` + `/sitemap/companies-<i>.xml` at 40k/shard, robots.txt
+lists every shard) so the catalog grows past the 50k-URL cap without rework.
 
 ### De-emphasized text/controls below WCAG AA contrast (`text-ink-faint`/`-muted`) [S] — SHIPPED (#195)
 **#195 did the system-wide pass:** lifted `--ink-muted` to AA (#8a8a8a→#6d6d6d
@@ -305,12 +309,13 @@ NOT a bug — `ProvenancePanel`/`completenessLabel` are correct; prod
 `discovery.yml` (its TTL-gated `compute-completeness` step runs) or wait for the
 Monday cron, then confirm the badge appears for high-score companies.
 
-### Coverage grouping degrades on undated funding rounds [M] — P2
-`buildTimeline` clusters news under a round by `announced_date` ±14d, so rounds
-with no `announced_date` (e.g. Perplexity's 7 rounds) don't group and the old
-~30-standalone-news-row clutter returns on the most prominent companies. The
-HANDOFF's own follow-up: persist a `news_articles.funding_round_id` link (pipeline
-+ migration + read path) for exact grouping independent of dates.
+### ~~Coverage grouping degrades on undated funding rounds~~ [M] — SHIPPED (#206 pipeline / #207 web)
+Migration **0044** `news_articles.funding_round_id` (FK SET NULL, self-healing
+via repair-catalog pass 4 + repair-duplicate-rounds repointing); extract-funding
+stamps the exact link at reconcile time; `buildTimeline` attaches by it first
+(date proximity stays the fallback for legacy/unlinked articles). **Merge order:
+#207 only after #206's migration reaches prod.** Historical non-primary articles
+covering undated rounds remain heuristic until re-extraction.
 
 ### Provenance sourcing line slightly overstates on unsourced figures [XS] — P3 — owner copy call
 `ProvenancePanel`'s "Every figure here links to a recorded source" shows whenever
