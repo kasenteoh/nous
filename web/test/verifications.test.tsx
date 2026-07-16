@@ -105,6 +105,16 @@ describe("verification lookup helpers", () => {
         { kind: "amount", amountUsd: null },
       ),
     ).toBeNull();
+    // statedWins=false invariant: when the summed-rounds total wins, the page
+    // renders a figure larger than the verified stated total. The source URL
+    // usually already differs (sum cites the company site), but even when the
+    // URLs coincide the claim guard hides the ✓ — the amounts format apart.
+    expect(
+      verifiedAgainst(map, "total_raised", "", "https://techcrunch.com/acme", {
+        kind: "amount",
+        amountUsd: 15_000_000, // computed sum, exceeds the verified $12.0M
+      }),
+    ).toBeNull();
   });
 });
 
@@ -116,6 +126,10 @@ describe("claim-drift guard primitives", () => {
     expect(pipelineUsd(8_500_000)).toBe("$8.5M");
     expect(pipelineUsd(500_000)).toBe("$500K");
     expect(pipelineUsd(950)).toBe("$950");
+    // Known rounding-tie divergence, pinned: Python's :.1f rounds half-even
+    // ($12.2M) while toFixed rounds ties up ($12.3M). The mismatch makes the
+    // guard HIDE a ✓ it could have shown — fail-closed, never a wrong badge.
+    expect(pipelineUsd(12_250_000)).toBe("$12.3M");
   });
 
   it("matches status claims by lifecycle phrase", () => {
