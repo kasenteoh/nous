@@ -72,7 +72,7 @@ from pydantic import BaseModel
 from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from nous.db.models import FundingRound, FundingRoundInvestor
+from nous.db.models import FundingRound, FundingRoundInvestor, NewsArticle
 from nous.db.upsert import _CONFIDENCE_RANK, refresh_funding_round_count
 from nous.pipeline.extract_funding import _is_junk_source_url
 
@@ -217,13 +217,24 @@ def _is_more_complete_round(row: FundingRound) -> bool:
 async def _repoint_round_investors(
     session: AsyncSession, *, survivor_id: UUID, loser_id: UUID
 ) -> None:
-    """Move a loser round's investor links onto the survivor.
+    """Move a loser round's investor links AND article links onto the survivor.
 
-    Respects uq_funding_round_investors_round_investor: promote is_lead on
-    links the survivor already has for the same investor, delete the loser's
-    now-duplicate links, then repoint the rest. Same pattern as
+    Investor links respect uq_funding_round_investors_round_investor: promote
+    is_lead on links the survivor already has for the same investor, delete the
+    loser's now-duplicate links, then repoint the rest. Same pattern as
     merge_investors' funding_round_investors handling.
+
+    Article links (news_articles.funding_round_id, migration 0044) repoint
+    wholesale — without this, deleting the loser would SET NULL them and only
+    the survivor's primary article re-heals via repair-catalog pass 4; the
+    non-primary coverage would permanently fall back to date-proximity
+    grouping (which cannot group under undated rounds).
     """
+    await session.execute(
+        update(NewsArticle)
+        .where(NewsArticle.funding_round_id == loser_id)
+        .values(funding_round_id=survivor_id)
+    )
     survivor_investor_ids_subq = select(FundingRoundInvestor.investor_id).where(
         FundingRoundInvestor.funding_round_id == survivor_id
     )
