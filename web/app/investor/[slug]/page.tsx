@@ -51,9 +51,12 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
     return { title: "Investor not found" };
   }
 
-  // Use portfolioCount (the denormalized total from migration 0025) for the
-  // SEO description so it matches the /investors index count.
-  const count = investor.portfolioCount;
+  // Use portfolioTotal (the resolved SHOWN portfolio — what this page's list
+  // actually paginates) so the description can never contradict the page
+  // (2026-07 QA: header said "backs 841" above "Showing … of 757"). The
+  // /investors index ranks on the denormalized portfolio_count; a pipeline
+  // change aligns that column to the shown cohort.
+  const count = investor.portfolioTotal;
   const description =
     investor.description ??
     (count > 0
@@ -120,7 +123,7 @@ export default async function InvestorPage({ params, searchParams }: Props) {
     getInvestorPortfolioMomentum(slug),
   ]);
 
-  const { name, type, description, website, portfolioCount, portfolioTotal, rounds } =
+  const { name, type, description, website, portfolioTotal, rounds } =
     investor;
 
   // ── Portfolio pagination over the resolved union (portfolioTotal) ──────────
@@ -191,13 +194,14 @@ export default async function InvestorPage({ params, searchParams }: Props) {
           )}
           <div>
             <dt className="sr-only">Portfolio size</dt>
-            {/* portfolioCount uses the denormalized column from migration 0025:
-                counts companies via EITHER company_investors OR funding rounds,
-                matching the /investors index. The portfolio cards below now show
-                that same union (company-level links + funded companies). */}
+            {/* portfolioTotal is the resolved SHOWN union the portfolio list
+                below paginates — the header and the "Showing … of N" line can
+                never disagree (2026-07 QA: the denormalized portfolio_count
+                also counts excluded/non-shown companies, so it read "841"
+                above a 757-company list). */}
             <dd>
-              Backs {portfolioCount.toLocaleString("en-US")}{" "}
-              {portfolioCount === 1 ? "company" : "companies"}
+              Backs {portfolioTotal.toLocaleString("en-US")}{" "}
+              {portfolioTotal === 1 ? "company" : "companies"}
             </dd>
           </div>
           {leadCount > 0 && (

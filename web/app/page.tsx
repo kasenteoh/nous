@@ -11,6 +11,7 @@ import {
   countCompanies,
   countNewThisWeek,
   getIndustrySummary,
+  listHeatingUpCompanies,
   listNewestCompanies,
   listRecentFundings,
   type TrendingCompany,
@@ -19,16 +20,27 @@ import { formatDate, formatUsd, formatUsdExact } from "@/lib/format";
 import { SITE_NAME, siteOrigin } from "@/lib/site";
 
 // Title and description inherit the layout defaults; only the canonical is
-// page-specific (resolved against metadataBase).
+// page-specific (resolved against metadataBase). NOTE: a page-level
+// `alternates` replaces the layout's object wholesale (Next's metadata merge
+// is shallow per key), so the RSS autodiscovery link must be restated here —
+// the bare `{ canonical }` form silently dropped it on the homepage only
+// (2026-07 QA finding).
 export const metadata: Metadata = {
-  alternates: { canonical: "/" },
+  alternates: {
+    canonical: "/",
+    types: {
+      "application/rss+xml": [
+        { url: "/feed.xml", title: "nous — new funding & news" },
+      ],
+    },
+  },
 };
 
 const labelClass =
   "text-[11px] font-medium uppercase tracking-[0.14em] text-ink-muted";
 
 export default async function FrontPage() {
-  const [spotlights, fundings, newest, industries, total, newCounts] =
+  const [spotlights, fundings, newest, industries, total, newCounts, heating] =
     await Promise.all([
       buildSpotlightPool(),
       listRecentFundings(5),
@@ -36,23 +48,34 @@ export default async function FrontPage() {
       getIndustrySummary(6),
       countCompanies(),
       countNewThisWeek(),
+      listHeatingUpCompanies(6),
     ]);
 
   const hasMarginNotes = fundings.length > 0 || newest.length > 0;
 
-  // "Trending now" strip — derived from the SAME spotlight pool the deck above
-  // consumes (funding-gated, scored by recent rounds + news volume), so it costs
-  // no extra query. The deck foregrounds entry #0 and rotates; the strip surfaces
-  // the next-ranked companies so it complements rather than echoes the headline.
-  // Structurally a Spotlight is a TrendingCompany (slug/name/oneLiner/facts), so
-  // we map straight across. The standalone getTrendingCompanies() helper in
-  // queries.ts exposes the same list to callers that don't already hold the pool.
-  const trending: TrendingCompany[] = spotlights.slice(1, 7).map((s) => ({
-    slug: s.slug,
-    name: s.name,
-    oneLiner: s.oneLiner,
-    facts: s.facts,
+  // Company strip below the deck. Preferred source: the top momentum-scored
+  // companies — the SAME signal /trending ranks by, labeled "Heating up" to
+  // match it, so the homepage can never claim trending picks while /trending
+  // reports no scores (2026-07 QA finding: the old spotlight-derived
+  // "Trending now" strip contradicted the empty momentum page). Until scores
+  // exist on prod, fall back to the spotlight pool under a neutral label that
+  // makes no momentum claim. The momentum "why" chips ride as the fact line.
+  const momentumStrip: TrendingCompany[] = heating.map((c) => ({
+    slug: c.slug,
+    name: c.name,
+    oneLiner: c.description_short ?? "",
+    facts: c.momentumWhy.slice(0, 2),
   }));
+  const stripIsMomentum = momentumStrip.length > 1;
+  const trending: TrendingCompany[] = stripIsMomentum
+    ? momentumStrip
+    : spotlights.slice(1, 7).map((s) => ({
+        slug: s.slug,
+        name: s.name,
+        oneLiner: s.oneLiner,
+        facts: s.facts,
+      }));
+  const stripLabel = stripIsMomentum ? "Heating up" : "More to watch";
 
   const origin = siteOrigin();
 
@@ -200,16 +223,30 @@ export default async function FrontPage() {
         )}
       </div>
 
-      {/* ── "Trending now" strip ──────────────────────────────────────────
-          Compact, server-rendered cards from the same funding-gated spotlight
-          pool (recent rounds + news volume). Renders nothing when the pool has
-          ≤1 entry, so it never shows a lonely or empty row. */}
+      {/* ── Company strip ─────────────────────────────────────────────────
+          "Heating up" (momentum-ranked, matching /trending) once scores
+          exist; otherwise a neutral "More to watch" from the spotlight pool.
+          Renders nothing when the source has ≤1 entry, so it never shows a
+          lonely or empty row. */}
       {trending.length > 0 && (
         <section
-          aria-label="Trending now"
+          aria-label={stripLabel}
           className="border-t border-edge py-7"
         >
-          <p className={labelClass}>Trending now</p>
+          <p className={labelClass}>
+            {stripLabel}
+            {stripIsMomentum && (
+              <>
+                {" "}
+                <Link
+                  href="/trending"
+                  className="normal-case tracking-normal font-normal text-ink-muted hover:text-ink underline underline-offset-2 decoration-ink-faint"
+                >
+                  see all →
+                </Link>
+              </>
+            )}
+          </p>
           <ul className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
             {trending.map((company) => (
               <li key={company.slug}>
