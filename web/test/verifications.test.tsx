@@ -120,23 +120,51 @@ describe("claim-drift guard primitives", () => {
 
   it("matches status claims by lifecycle phrase", () => {
     expect(
-      claimMatchesExpected("Acme has been acquired.", {
+      claimMatchesExpected("Acme has been acquired.", "status", {
         kind: "status",
         status: "acquired",
       }),
     ).toBe(true);
     expect(
-      claimMatchesExpected("Acme has been acquired.", {
+      claimMatchesExpected("Acme has been acquired.", "status", {
         kind: "status",
         status: "shut_down",
       }),
     ).toBe(false);
     // unmapped statuses use the pipeline's "is {status}" fallback
     expect(
-      claimMatchesExpected("Acme is dormant.", {
+      claimMatchesExpected("Acme is dormant.", "status", {
         kind: "status",
         status: "dormant",
       }),
+    ).toBe(true);
+  });
+
+  it("never matches an amount against the claim's OTHER dollar figure", () => {
+    // A funding-round claim carries a second figure (the valuation). If the
+    // round amount drifts onto the valuation's value, bare containment would
+    // false-match — the grammatical anchor ("raised $X") must prevent that.
+    const claim =
+      "Acme raised $5.0M in its Seed round at a $10.0M post-money valuation.";
+    expect(
+      claimMatchesExpected(claim, "funding_round", {
+        kind: "amount",
+        amountUsd: 10_000_000, // drifted amount == old valuation
+      }),
+    ).toBe(false);
+    expect(
+      claimMatchesExpected(claim, "funding_round", {
+        kind: "amount",
+        amountUsd: 5_000_000, // the actual verified amount still matches
+      }),
+    ).toBe(true);
+    // total_raised anchors on "a total of $X"
+    expect(
+      claimMatchesExpected(
+        "Acme has raised a total of $12.0M.",
+        "total_raised",
+        { kind: "amount", amountUsd: 12_000_000 },
+      ),
     ).toBe(true);
   });
 });

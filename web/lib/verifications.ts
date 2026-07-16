@@ -59,12 +59,16 @@ export function pipelineUsd(value: number): string {
 }
 
 /** Does the verified claim still describe what the page renders? The pipeline
- *  claim always embeds the formatted amount (or the status phrase), so simple
- *  containment detects drift — e.g. a total corrected from $12M to $9M at the
- *  same source no longer matches, and the ✓ hides until the pipeline's
+ *  claim embeds the formatted amount behind a fixed grammatical anchor
+ *  ("…a total of $X…" / "…raised $X in its…"), so the check matches
+ *  anchor+amount — NOT the bare amount, because a funding-round claim carries a
+ *  second dollar figure (the post-money valuation) that bare containment could
+ *  false-match when an amount drifts onto the valuation's value. A drifted
+ *  claim therefore never matches, and the ✓ hides until the pipeline's
  *  stale-claim sweep re-verifies the new figure. */
 export function claimMatchesExpected(
   claim: string,
+  factKind: string,
   expected: ExpectedFact,
 ): boolean {
   if (expected.kind === "status") {
@@ -78,7 +82,13 @@ export function claimMatchesExpected(
   // version ("an undisclosed amount" claims are skipped), so nothing valid can
   // match — fail closed.
   if (!Number.isFinite(amount) || amount < 0) return false;
-  return claim.includes(pipelineUsd(amount));
+  // Anchors mirror total_raised_claim / funding_round_claim in
+  // pipeline verify_sources.py — each formats exactly one amount there.
+  const anchor =
+    factKind === "total_raised"
+      ? `a total of ${pipelineUsd(amount)}`
+      : `raised ${pipelineUsd(amount)}`;
+  return claim.includes(anchor);
 }
 
 /** The verification for a fact IF it is still valid to show — i.e. present, its
@@ -95,6 +105,6 @@ export function verifiedAgainst(
   if (!currentSourceUrl) return null;
   const v = lookup.get(verificationKey(factKind, factRef));
   if (!v || v.source_url !== currentSourceUrl) return null;
-  if (!claimMatchesExpected(v.claim, expected)) return null;
+  if (!claimMatchesExpected(v.claim, factKind, expected)) return null;
   return v;
 }
