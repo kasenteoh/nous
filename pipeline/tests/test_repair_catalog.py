@@ -14,7 +14,7 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from nous.db.models import Company, FundingRound, RawPage
+from nous.db.models import Company, FundingRound, NewsArticle, RawPage
 from nous.pipeline.repair_catalog import run_repair_catalog
 
 pytestmark = pytest.mark.skipif(
@@ -254,3 +254,79 @@ async def test_placeholder_dry_run_counts_but_writes_nothing(db: AsyncSession) -
 
     await db.refresh(co)
     assert co.name == "[stealth]"  # untouched in dry-run
+
+
+# ── Pass 4: news article → funding round links ───────────────────────────────
+
+
+def _article(company_id: object, url: str) -> NewsArticle:
+    return NewsArticle(
+        company_id=company_id,
+        url=url,
+        title="Round announced",
+        source="techcrunch.com",
+        raw_content="body",
+        processed=True,
+    )
+
+
+async def test_primary_news_article_linked_to_round(db: AsyncSession) -> None:
+    """An already-processed article whose url IS a round's primary_news_url gets
+    funding_round_id backfilled; an unrelated article stays unlinked."""
+    co = _co("Linko", "rep4-linko")
+    db.add(co)
+    await db.flush()
+    tc = "https://techcrunch.com/linko-series-a"
+    fr = FundingRound(company_id=co.id, primary_news_url=tc, round_type="Series A")
+    primary = _article(co.id, tc)
+    other = _article(co.id, "https://techcrunch.com/linko-profile")
+    db.add_all([fr, primary, other])
+    await db.commit()
+
+    summary = await run_repair_catalog(db)
+    assert summary.news_round_links_set == 1
+
+    await db.refresh(primary)
+    await db.refresh(other)
+    assert primary.funding_round_id == fr.id
+    assert other.funding_round_id is None
+
+    # Idempotent: a second run selects nothing (IS NULL guard).
+    second = await run_repair_catalog(db)
+    assert second.news_round_links_set == 0
+
+
+async def test_news_round_link_dry_run_counts_only(db: AsyncSession) -> None:
+    co = _co("Linkodry", "rep4-linkodry")
+    db.add(co)
+    await db.flush()
+    tc = "https://techcrunch.com/linkodry-seed"
+    fr = FundingRound(company_id=co.id, primary_news_url=tc)
+    art = _article(co.id, tc)
+    db.add_all([fr, art])
+    await db.commit()
+
+    summary = await run_repair_catalog(db, dry_run=True)
+    assert summary.news_round_links_set == 1
+
+    await db.refresh(art)
+    assert art.funding_round_id is None  # untouched in dry-run
+
+
+async def test_news_round_link_requires_same_company(db: AsyncSession) -> None:
+    """A URL collision across companies must not cross-link: the join requires
+    company match, so another company's article stays unlinked."""
+    a = _co("LinkoA", "rep4-linko-a")
+    b = _co("LinkoB", "rep4-linko-b")
+    db.add_all([a, b])
+    await db.flush()
+    tc = "https://techcrunch.com/linko-ab-round"
+    fr = FundingRound(company_id=a.id, primary_news_url=tc)
+    art_b = _article(b.id, tc)  # same URL, DIFFERENT company
+    db.add_all([fr, art_b])
+    await db.commit()
+
+    summary = await run_repair_catalog(db)
+    assert summary.news_round_links_set == 0
+    await db.refresh(art_b)
+    assert art_b.funding_round_id is None

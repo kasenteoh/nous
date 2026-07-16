@@ -30,6 +30,7 @@ from nous.db.models import (
     FundingRound,
     FundingRoundInvestor,
     Investor,
+    NewsArticle,
 )
 from nous.pipeline.repair_duplicate_rounds import run_repair_duplicate_rounds
 
@@ -793,3 +794,50 @@ async def test_phantom_valuation_prefers_more_complete_sibling(
     assert survivor.round_type == "Series C"
     assert survivor.amount_raised == 250_000_000
     assert survivor.valuation_post_money == val
+
+
+async def test_repoints_article_links_onto_survivor(db: AsyncSession) -> None:
+    """An article exact-linked (0044) to the loser round follows the merge to
+    the survivor instead of being SET-NULLed by the loser's delete."""
+    co = _co("Article Linked Co", "article-linked-co")
+    db.add(co)
+    await db.flush()
+
+    survivor = FundingRound(
+        company_id=co.id,
+        round_type="Series B",
+        amount_raised=60_000_000,
+        announced_date=date(2026, 4, 1),
+        primary_news_url="https://techcrunch.com/alc-series-b",
+        extraction_confidence="high",
+    )
+    dup = FundingRound(
+        company_id=co.id,
+        round_type=None,
+        amount_raised=60_000_000,
+        announced_date=None,
+        primary_news_url=None,
+        extraction_confidence="low",
+    )
+    db.add_all([survivor, dup])
+    await db.flush()
+
+    article = NewsArticle(
+        company_id=co.id,
+        url="https://siliconangle.com/alc-coverage",
+        title="ALC raises $60M",
+        source="siliconangle.com",
+        raw_content="body",
+        processed=True,
+        funding_round_id=dup.id,  # exact-linked to the LOSER
+    )
+    db.add(article)
+    await db.commit()
+
+    summary = await run_repair_duplicate_rounds(db, dry_run=False)
+    assert summary.duplicate_rows_merged >= 1
+
+    await db.refresh(article)
+    rounds = await _rounds_for(db, co.id)
+    assert len(rounds) == 1  # dup collapsed
+    assert article.funding_round_id == rounds[0].id  # link followed the merge

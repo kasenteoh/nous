@@ -1,6 +1,7 @@
-"""repair-catalog pipeline stage — one-time data repair, idempotent.
+"""repair-catalog pipeline stage — idempotent data repair.
 
-Three repairs (spec 2026-06-12 §3; placeholder-name guard added 2026-06-13):
+Four passes (1–3 spec 2026-06-12 §3, placeholder guard 2026-06-13; pass 4
+added with migration 0044):
 
 1. Lightspeed badge-suffix names ("...LSVP and LSIP Investment" /
    "...LSIP Investment", 96 prod rows): strip the suffix; LSIP-only rows are
@@ -24,19 +25,27 @@ Three repairs (spec 2026-06-12 §3; placeholder-name guard added 2026-06-13):
    The adapters now reject these entries at ingest time, so Pass 3 is a
    one-shot back-fill for the single prod row that already exists.
 
+4. News article → funding round links (0044): set-based backfill/healing of
+   ``news_articles.funding_round_id`` for articles whose url is a round's
+   ``primary_news_url`` — the exact-coverage link the web timeline groups by.
+   extract-funding stamps the link for new articles; this pass covers
+   historical rows and re-heals links nulled by the FK's ON DELETE SET NULL.
+
 Idempotent: pass 1 leaves no suffixed names; pass 2 clears the descriptions
-it matches on; pass 3 renames/excludes placeholder rows. A second run selects
-nothing. ``--dry-run`` logs intended actions without writing.
+it matches on; pass 3 renames/excludes placeholder rows; pass 4 guards on
+``funding_round_id IS NULL``. A second run selects nothing. ``--dry-run``
+logs intended actions without writing.
 """
 
 from __future__ import annotations
 
 import logging
 from datetime import UTC, datetime
+from typing import Any, cast
 from uuid import UUID
 
 from pydantic import BaseModel
-from sqlalchemy import delete, or_, select
+from sqlalchemy import CursorResult, and_, delete, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from nous.db.models import Company, FundingRound, NewsArticle, RawPage
@@ -77,6 +86,7 @@ class RepairSummary(BaseModel):
     parked_reset: int = 0
     placeholder_renamed: int = 0
     placeholder_excluded: int = 0
+    news_round_links_set: int = 0
     dry_run: bool = False
 
 
@@ -318,6 +328,47 @@ async def run_repair_catalog(
                 )
                 company.excluded_at = now
                 session.add(company)
+
+    # ── Pass 4: news article → funding round links (0044 backfill + healing) ─
+    # extract-funding stamps news_articles.funding_round_id going forward; this
+    # set-based pass links what it can for HISTORICAL (already-processed)
+    # articles: an article whose url IS a round's primary_news_url announced
+    # that round by definition (reconcile records first-write-wins there). It
+    # also re-heals links nulled by the FK's ON DELETE SET NULL after
+    # repair-duplicate-rounds / dedup deletes. Idempotent (funding_round_id IS
+    # NULL guard) and cheap, so it runs every cron with the other passes.
+    # Articles covering a round WITHOUT being its primary source stay unlinked
+    # here — the web timeline's date-proximity fallback still groups those.
+    if dry_run:
+        summary.news_round_links_set = (
+            await session.execute(
+                select(func.count())
+                .select_from(NewsArticle)
+                .join(
+                    FundingRound,
+                    and_(
+                        FundingRound.company_id == NewsArticle.company_id,
+                        FundingRound.primary_news_url == NewsArticle.url,
+                    ),
+                )
+                .where(NewsArticle.funding_round_id.is_(None))
+            )
+        ).scalar_one()
+    else:
+        linked = cast(
+            "CursorResult[Any]",
+            await session.execute(
+                update(NewsArticle)
+                .where(
+                    NewsArticle.funding_round_id.is_(None),
+                    FundingRound.company_id == NewsArticle.company_id,
+                    FundingRound.primary_news_url == NewsArticle.url,
+                )
+                .values(funding_round_id=FundingRound.id)
+                .execution_options(synchronize_session=False)
+            ),
+        )
+        summary.news_round_links_set = linked.rowcount or 0
 
     if not dry_run:
         await session.commit()

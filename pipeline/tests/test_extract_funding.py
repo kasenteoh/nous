@@ -149,6 +149,17 @@ async def test_extract_creates_round_and_investors(
     assert rounds[0].primary_news_url == "https://news.example.com/round-a"
     assert rounds[0].extraction_confidence == "high"
 
+    # The exact article→round link (0044): the processed article records which
+    # round its extraction reconciled into (the web timeline groups by this).
+    article = (
+        await db.execute(
+            select(NewsArticle).where(
+                NewsArticle.url == "https://news.example.com/round-a"
+            )
+        )
+    ).scalar_one()
+    assert article.funding_round_id == rounds[0].id
+
 
 async def test_not_funding_announcement_marks_processed(
     db: AsyncSession, monkeypatch: pytest.MonkeyPatch
