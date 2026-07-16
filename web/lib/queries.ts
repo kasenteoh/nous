@@ -3109,7 +3109,7 @@ export async function getInvestorBySlug(
     supabase
       .from("company_investors")
       .select(
-        "companies(slug, name, hq_city, hq_state, industry_group, description_short, status, logo_url, exclusion_reason)",
+        "companies(slug, name, hq_city, hq_state, industry_group, description_short, status, logo_url, exclusion_reason, funding_round_count)",
       )
       .eq("investor_id", investorId),
 
@@ -3145,6 +3145,7 @@ export async function getInvestorBySlug(
     status: string | null;
     logo_url?: string | null;
     exclusion_reason?: string | null;
+    funding_round_count?: number | null;
   };
   type PortfolioJoin = {
     companies: PortfolioCompany | PortfolioCompany[] | null;
@@ -3154,6 +3155,13 @@ export async function getInvestorBySlug(
     .flatMap((row) => {
       const c = Array.isArray(row.companies) ? row.companies[0] : row.companies;
       if (!c?.slug || !c.name || c.exclusion_reason) return [];
+      // The catalog bar (shown cohort): only companies the catalog renders
+      // belong in the portfolio, matching the pipeline's portfolio_count
+      // definition — otherwise the /investors index count and this page's
+      // "of N" can disagree for investors backing husks. Companies reached
+      // via the ROUNDS path below have a funding round by construction, so
+      // this is the only place the bar needs enforcing.
+      if (!c.description_short && !(c.funding_round_count ?? 0)) return [];
       return [
         {
           slug: c.slug,

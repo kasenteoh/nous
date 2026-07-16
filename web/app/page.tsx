@@ -40,7 +40,7 @@ const labelClass =
   "text-[11px] font-medium uppercase tracking-[0.14em] text-ink-muted";
 
 export default async function FrontPage() {
-  const [spotlights, fundings, newest, industries, total, newCounts] =
+  const [spotlights, fundings, newest, industries, total, newCounts, heating] =
     await Promise.all([
       buildSpotlightPool(),
       listRecentFundings(5),
@@ -48,8 +48,8 @@ export default async function FrontPage() {
       getIndustrySummary(6),
       countCompanies(),
       countNewThisWeek(),
+      listHeatingUpCompanies(6),
     ]);
-  const heating = await listHeatingUpCompanies(6);
 
   const hasMarginNotes = fundings.length > 0 || newest.length > 0;
 
