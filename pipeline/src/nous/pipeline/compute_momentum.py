@@ -29,6 +29,12 @@ byte-identical in ``momentum_score`` (only ``momentum_computed_at`` re-stamps).
 
 $0, fully local: one batched snapshot read + batched UPDATEs, pure arithmetic,
 no LLM / network / scikit-learn.
+
+A company that EXITS the shown cohort (loses both description and funding, or
+becomes excluded) has its momentum columns cleared back to NULL at the end of
+each run — matching compute_completeness's exit-cohort clear — so only
+currently-shown companies ever carry a score and no read path needs a
+staleness caveat.
 """
 
 from __future__ import annotations
@@ -37,10 +43,11 @@ import logging
 import math
 from collections import defaultdict
 from datetime import UTC, date, datetime, timedelta
+from typing import Any, cast
 from uuid import UUID
 
 from pydantic import BaseModel
-from sqlalchemy import or_, select
+from sqlalchemy import ColumnElement, CursorResult, and_, not_, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from nous.db.models import Company, CompanySnapshot
@@ -109,6 +116,7 @@ class ComputeMomentumSummary(BaseModel):
     companies_seen: int = 0  # shown companies processed
     companies_scored: int = 0  # non-NULL momentum_score written
     companies_null_low_confidence: int = 0  # NULL score (no present component)
+    companies_cleared: int = 0  # exited-cohort companies reset to NULL
 
 
 # ---------------------------------------------------------------------------
@@ -362,23 +370,28 @@ def score_company(
 # ---------------------------------------------------------------------------
 
 
+# The "shown" cohort predicate — not soft-excluded AND has a short description
+# or ≥1 funding round. Defined once so the scoring SELECT and the clear-stale
+# UPDATE (its exact negation) can never drift (mirrors
+# compute_completeness._shown_predicate; kept module-local per the codebase
+# idiom — each stage defines its cohort inline).
+def _shown_predicate() -> ColumnElement[bool]:
+    return and_(
+        Company.exclusion_reason.is_(None),
+        or_(
+            Company.description_short.is_not(None),
+            Company.funding_round_count > 0,
+        ),
+    )
+
+
 async def _shown_companies(session: AsyncSession) -> list[Company]:
     """The catalog "shown" cohort, id-ordered (deterministic run order).
 
     Mirrors the web catalog bar / the other stages' selection: not soft-excluded
     AND has either a short description or at least one funding round.
     """
-    stmt = (
-        select(Company)
-        .where(
-            Company.exclusion_reason.is_(None),
-            or_(
-                Company.description_short.is_not(None),
-                Company.funding_round_count > 0,
-            ),
-        )
-        .order_by(Company.id)
-    )
+    stmt = select(Company).where(_shown_predicate()).order_by(Company.id)
     return list((await session.execute(stmt)).scalars().all())
 
 
@@ -450,11 +463,43 @@ async def run_compute_momentum(
                     summary.companies_scored += 1
         await session.commit()
 
+    # Clear momentum for companies that have EXITED the shown cohort since they
+    # were last scored (lost both description and funding, or became excluded),
+    # so the stored columns stay self-consistent — only currently-shown companies
+    # carry a score. Today every momentum read path re-applies the shown filter,
+    # so this closes latent (not live) staleness: a future read path, an export,
+    # or the data-quality report can trust the column without re-deriving the
+    # cohort. The WHERE is the exact negation of the scoring SELECT's predicate,
+    # so no currently-shown company is ever cleared. synchronize_session=False:
+    # the cleared rows are disjoint from the shown ORM objects just scored.
+    # (Mirrors compute_completeness's exit-cohort clear, which pioneered this —
+    # its docstring's "deliberate divergence from compute_momentum" note is
+    # retired by this change.)
+    cleared = cast(
+        "CursorResult[Any]",
+        await session.execute(
+            update(Company)
+            .where(
+                Company.momentum_computed_at.is_not(None),
+                not_(_shown_predicate()),
+            )
+            .values(
+                momentum_score=None,
+                momentum_why=None,
+                momentum_computed_at=None,
+            )
+            .execution_options(synchronize_session=False)
+        ),
+    )
+    summary.companies_cleared = cleared.rowcount or 0
+    await session.commit()
+
     logger.info(
-        "compute-momentum: as_of_week=%s seen=%d scored=%d null=%d",
+        "compute-momentum: as_of_week=%s seen=%d scored=%d null=%d cleared=%d",
         as_of.isoformat(),
         summary.companies_seen,
         summary.companies_scored,
         summary.companies_null_low_confidence,
+        summary.companies_cleared,
     )
     return summary
