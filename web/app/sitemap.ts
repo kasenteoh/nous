@@ -1,6 +1,10 @@
-// /sitemap.xml — static routes + one entry per company page. When Supabase
-// env is absent (CI builds without secrets), listAllCompanySlugs returns []
-// and the sitemap still builds with just the static entries.
+// Sharded sitemaps at /sitemap/[id].xml (see lib/sitemap-shards.ts): "core"
+// carries the static routes + every non-company entity; "companies-<i>" shards
+// carry company pages in stable slug order, COMPANY_SHARD_SIZE per file, so
+// the catalog can grow past Google's 50k-URLs-per-file cap without a rework.
+// Next.js emits no sitemap index — app/robots.ts lists every shard URL.
+// When Supabase env is absent (CI builds without secrets), the queries return
+// [] and every shard still builds (core = static entries; companies-0 empty).
 
 // Re-generate at most every 6 hours, matching the pages' ISR window.
 export const revalidate = 21600;
@@ -18,10 +22,37 @@ import {
 } from "@/lib/queries";
 import { industryToSlug } from "@/lib/industry";
 import { siteOrigin } from "@/lib/site";
+import {
+  COMPANY_SHARD_SIZE,
+  companyShardIndex,
+  sitemapIds,
+} from "@/lib/sitemap-shards";
 
-export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
+export async function generateSitemaps(): Promise<{ id: string }[]> {
+  return (await sitemapIds()).map((id) => ({ id }));
+}
+
+export default async function sitemap(props: {
+  id: Promise<string>;
+}): Promise<MetadataRoute.Sitemap> {
+  const id = await props.id;
   const origin = siteOrigin();
 
+  const shardIndex = companyShardIndex(id);
+  if (shardIndex !== null) {
+    // Company shard: stable slug order (scanCompanies orders by slug), sliced
+    // by shard index. A shard past the end (count shrank between
+    // generateSitemaps and now) renders empty-but-valid, never a 404.
+    const companies = await listAllCompanySlugs();
+    const start = shardIndex * COMPANY_SHARD_SIZE;
+    return companies.slice(start, start + COMPANY_SHARD_SIZE).map((c) => ({
+      url: `${origin}/c/${c.slug}`,
+      lastModified: c.updated_at ?? undefined,
+    }));
+  }
+
+  // The "core" shard: static routes + every non-company entity (bounded sets —
+  // a few thousand URLs at their largest, far under the 50k cap).
   const staticEntries: MetadataRoute.Sitemap = [
     { url: `${origin}/` },
     { url: `${origin}/companies` },
@@ -38,7 +69,6 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   ];
 
   const [
-    companies,
     investors,
     tags,
     states,
@@ -47,7 +77,6 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
     industries,
     mapIndustries,
   ] = await Promise.all([
-    listAllCompanySlugs(),
     listAllInvestorSlugs(),
     listAllTags(),
     listAllStates(),
@@ -56,11 +85,6 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
     listCanonicalIndustries(),
     listIndustriesWithMapCoords(),
   ]);
-
-  const companyEntries: MetadataRoute.Sitemap = companies.map((c) => ({
-    url: `${origin}/c/${c.slug}`,
-    lastModified: c.updated_at ?? undefined,
-  }));
 
   const investorEntries: MetadataRoute.Sitemap = investors.map((i) => ({
     url: `${origin}/investor/${i.slug}`,
@@ -120,7 +144,6 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   return [
     ...staticEntries,
     ...mapHub,
-    ...companyEntries,
     ...investorEntries,
     ...tagEntries,
     ...locationEntries,
