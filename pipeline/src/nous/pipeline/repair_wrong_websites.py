@@ -227,16 +227,22 @@ async def run_repair_wrong_websites(
         )
         summary.aggregator_url_reset += 1
         if not dry_run:
-            # Purge same-host rounds/articles only when the stored profile
-            # confirms the site was treated as the company's identity (the
-            # helix/machinebrief class) — a mere aggregator-URL website (e.g.
+            # Purge same-host rounds/articles only on the SAME double
+            # confirmation pass (e) requires: the stored profile names a
+            # DIFFERENT company AND the scraped page's title corroborates
+            # (not dominated by this company's name) — the helix/machinebrief
+            # class. Deletion is destructive, so a single fuzzy description
+            # mismatch is not enough; a mere aggregator-URL website (e.g.
             # techcrunch.com) must keep its legitimately news-sourced rounds.
-            purge = bool(
-                company.description_short
-                and description_subject_mismatches(
-                    company.description_short, company.name
+            purge = False
+            if company.description_short and description_subject_mismatches(
+                company.description_short, company.name
+            ):
+                page = await _homepage_page(session, company)
+                title_line = _title_line(page.content) if page else ""
+                purge = bool(title_line) and not name_is_dominant_subject(
+                    title_line, company.name
                 )
-            )
             rounds_gone, articles_gone = await _reset_website_fields(
                 session, company, now, purge_wrong_site=purge
             )
