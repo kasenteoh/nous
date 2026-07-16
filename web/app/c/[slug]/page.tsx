@@ -101,6 +101,14 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
             title: `${company.name} — funding & news (RSS)`,
           },
         ],
+        // The page's markdown sibling for AI answer engines (llms.txt
+        // convention): same facts, per-fact source URLs inline.
+        "text/markdown": [
+          {
+            url: `/c/${slug}.md`,
+            title: `${company.name} — sourced facts (markdown)`,
+          },
+        ],
       },
     },
   };
