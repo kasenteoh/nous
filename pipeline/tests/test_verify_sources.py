@@ -74,6 +74,51 @@ def test_not_grounded_when_empty() -> None:
     assert quote_is_grounded("", _SOURCE) is False
 
 
+_LONG_SOURCE = (
+    "Acme Robotics Inc., a warehouse automation startup based in Austin, "
+    "today announced that it has raised $80 million in Series B funding. "
+    "The round was led by Example Capital with participation from Other Fund. "
+    "Acme plans to use the money to expand its fleet."
+)
+
+
+def test_grounded_ellipsis_fragments_in_order() -> None:
+    # The model elided mid-sentence boilerplate — every fragment is verbatim
+    # and in source order, so the quote is grounded (the 2026-07-16.1 change).
+    quote = "Acme Robotics Inc. ... raised $80 million in Series B funding"
+    assert quote_is_grounded(quote, _LONG_SOURCE) is True
+
+
+def test_grounded_unicode_ellipsis() -> None:
+    quote = "Acme Robotics Inc.… led by Example Capital"
+    assert quote_is_grounded(quote, _LONG_SOURCE) is True
+
+
+def test_not_grounded_ellipsis_out_of_order() -> None:
+    # Fragments must appear in source order — reversed stitching is rejected.
+    quote = "led by Example Capital ... raised $80 million in Series B"
+    assert quote_is_grounded(quote, _LONG_SOURCE) is False
+
+
+def test_not_grounded_ellipsis_with_fabricated_fragment() -> None:
+    quote = "Acme Robotics Inc. ... raised $500 million in Series B funding"
+    assert quote_is_grounded(quote, _LONG_SOURCE) is False
+
+
+def test_not_grounded_ellipsis_short_connective_fragment() -> None:
+    # A short connective ("today") could stitch unrelated text into a fake
+    # span; fragments under the length floor reject the whole quote.
+    quote = "today ... $80 million"
+    assert quote_is_grounded(quote, _LONG_SOURCE) is False
+
+
+def test_not_grounded_ellipsis_overlapping_fragments() -> None:
+    # The same source span cannot ground two fragments (find starts past the
+    # prior fragment's end).
+    quote = "raised $80 million in Series B ... $80 million in Series B funding"
+    assert quote_is_grounded(quote, _LONG_SOURCE) is False
+
+
 # ── classify_source: verifiability buckets ─────────────────────────────────────
 
 
