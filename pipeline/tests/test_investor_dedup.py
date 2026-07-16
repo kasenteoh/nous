@@ -111,6 +111,9 @@ def _make_company(suffix: str) -> Company:
         slug=f"testco-inv-{suffix}",
         normalized_name=f"testco inv {suffix}",
         hq_country="US",
+        # Passes the catalog bar — portfolio_count now counts SHOWN companies
+        # only (refresh_investor_counts), and a bare name-only row is a husk.
+        description_short=f"TestCo {suffix} does things.",
     )
 
 

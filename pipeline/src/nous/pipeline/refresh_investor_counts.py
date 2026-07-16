@@ -1,16 +1,20 @@
 """refresh-investor-counts pipeline stage.
 
 Recomputes and persists the denormalized ``investors.portfolio_count`` for
-every investor — the count of distinct non-excluded companies that investor
-backs via EITHER ``company_investors`` (VC portfolio links) OR
+every investor — the count of distinct SHOWN companies that investor backs
+via EITHER ``company_investors`` (VC portfolio links) OR
 ``funding_round_investors`` → ``funding_rounds`` (news-extracted rounds).
 
 Design notes:
 - The UNION (not UNION ALL) deduplicates (investor_id, company_id) pairs so a
   company that is linked via BOTH tables is counted only once.
-- Excluded companies (exclusion_reason IS NOT NULL) are never counted — they
-  are not rendered in the catalog, so an investor "backing" only excluded
-  companies should show 0.
+- Only SHOWN companies count: not soft-excluded AND passing the catalog bar
+  (has a description or ≥1 funding round) — the same cohort every catalog
+  surface renders and the same union the investor detail page paginates
+  (its ``portfolioTotal``). The count previously included non-excluded
+  companies that fail the catalog bar, so an investor's header said
+  "backs 841" above a 757-row portfolio list (2026-07-16 QA finding H3);
+  now the index ranking, the index count, and the detail page all agree.
 - Investors with no qualifying links are explicitly set to 0 so a re-run after
   exclusions does not leave stale positive counts.
 - Fully idempotent: the UPDATE is a pure recompute keyed on investor.id; a
@@ -29,7 +33,7 @@ from __future__ import annotations
 import logging
 
 from pydantic import BaseModel
-from sqlalchemy import func, literal, select, update
+from sqlalchemy import ColumnElement, and_, func, literal, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from nous.db.models import (
@@ -64,6 +68,19 @@ async def refresh_investor_counts(session: AsyncSession) -> RefreshInvestorCount
     Returns:
         A :class:`RefreshInvestorCountsSummary` with the count of rows updated.
     """
+    # The "shown" cohort predicate — not soft-excluded AND passing the catalog
+    # bar. Mirrors compute_momentum/_completeness's _shown_predicate (kept
+    # module-local per the codebase idiom) so the denormalized count equals
+    # exactly what the catalog and the investor detail page render.
+    def _shown() -> ColumnElement[bool]:
+        return and_(
+            Company.exclusion_reason.is_(None),
+            or_(
+                Company.description_short.is_not(None),
+                Company.funding_round_count > 0,
+            ),
+        )
+
     # --- Build the two legs of the UNION ------------------------------------ #
 
     # Leg 1: company_investors (VC portfolio links)
@@ -73,7 +90,7 @@ async def refresh_investor_counts(session: AsyncSession) -> RefreshInvestorCount
             CompanyInvestor.company_id.label("company_id"),
         )
         .join(Company, Company.id == CompanyInvestor.company_id)
-        .where(Company.exclusion_reason.is_(None))
+        .where(_shown())
     )
 
     # Leg 2: funding_round_investors → funding_rounds (news-extracted rounds)
@@ -84,7 +101,7 @@ async def refresh_investor_counts(session: AsyncSession) -> RefreshInvestorCount
         )
         .join(FundingRound, FundingRound.id == FundingRoundInvestor.funding_round_id)
         .join(Company, Company.id == FundingRound.company_id)
-        .where(Company.exclusion_reason.is_(None))
+        .where(_shown())
     )
 
     # UNION deduplicates (inv_id, company_id) pairs present in both legs.

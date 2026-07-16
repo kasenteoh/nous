@@ -42,12 +42,16 @@ pytestmark = pytest.mark.skipif(
 # ---------------------------------------------------------------------------
 
 
-def _company(slug: str, *, excluded: bool = False) -> Company:
+def _company(slug: str, *, excluded: bool = False, husk: bool = False) -> Company:
+    # A description makes the company pass the catalog bar (shown) — the
+    # cohort portfolio_count now counts. `husk=True` builds a bar-failing row
+    # (no description, no funding_round_count) that must NOT count.
     return Company(
         name=slug,
         slug=f"ric-{slug}",
         normalized_name=f"ric {slug}",
         hq_country="US",
+        description_short=None if husk else f"{slug} does things.",
         exclusion_reason="manual" if excluded else None,
     )
 
@@ -259,3 +263,23 @@ async def test_previously_nonzero_count_is_reset_when_company_excluded(
 
     await db.refresh(investor)
     assert investor.portfolio_count == 0
+
+
+async def test_catalog_bar_failing_company_not_counted(db: AsyncSession) -> None:
+    """A non-excluded company that fails the catalog bar (no description, no
+    funding) is not SHOWN, so it must not inflate portfolio_count — the header
+    "backs N" must equal the portfolio list the investor page renders
+    (2026-07-16 QA finding H3: YC read 841 above a 757-row list)."""
+    shown = _company("bar-shown")
+    hidden = _company("bar-husk", husk=True)
+    investor = _investor("bar")
+    db.add_all([shown, hidden, investor])
+    await db.flush()
+    db.add_all([_ci_link(shown, investor), _ci_link(hidden, investor)])
+    await db.commit()
+
+    await refresh_investor_counts(db)
+    await db.commit()
+
+    await db.refresh(investor)
+    assert investor.portfolio_count == 1  # the shown company only
