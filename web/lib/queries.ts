@@ -1857,7 +1857,7 @@ export async function getCompanyBySlug(
 
       supabase
         .from("news_articles")
-        .select("id, url, title, source, published_date")
+        .select("id, url, title, source, published_date, funding_round_id")
         .eq("company_id", companyId)
         .order("published_date", { ascending: false, nullsFirst: false }),
 

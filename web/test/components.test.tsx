@@ -195,6 +195,7 @@ function newsArticle(
     title: `Article ${fixtureSeq}`,
     source: "techcrunch.com",
     published_date: "2026-02-01",
+    funding_round_id: null,
     ...overrides,
   };
 }

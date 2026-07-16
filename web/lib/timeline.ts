@@ -4,10 +4,14 @@
 //
 // nous only ingests funding-announcement news (ingest-news filters on
 // is_funding_announcement), so the "news" IS the funding coverage: one round is
-// typically covered by many outlets, each a separate news_articles row. There is
-// no news→round link in the data, so we cluster read-time by date proximity to
-// the round's announced_date. Trust-preserving: every article stays one click
-// away (collapsed, never dropped) — the moat is intact, and multi-outlet coverage
+// typically covered by many outlets, each a separate news_articles row.
+// Attachment precedence per article: (a0) the PERSISTED link — the pipeline
+// records which round each article's extraction reconciled into
+// (news_articles.funding_round_id, migration 0044) — is exact and wins
+// outright; (a) a round's primary_news_url pins its own announcement; (b)
+// legacy/unlinked articles cluster by date proximity to the round's
+// announced_date. Trust-preserving: every article stays one click away
+// (collapsed, never dropped) — the moat is intact, and multi-outlet coverage
 // becomes a positive "widely covered" signal.
 //
 // Pure + side-effect-free (no DB, no React) so it is unit-testable and the
@@ -122,11 +126,16 @@ function tier(item: TimelineItem): number {
  * Assemble the ordered timeline: funding rounds (each with its clustered,
  * deduped coverage) plus standalone news (articles that match no round).
  *
- * Clustering: each news article attaches to the funding round whose
- * `announced_date` is NEAREST to the article's `published_date`, within
- * `MATCH_WINDOW_DAYS`. Ties → the larger `amount_raised`. An article with no
- * `published_date`, or no round in-window (incl. when no round has a date),
- * becomes a standalone `news` item — nothing is dropped.
+ * Clustering: an article whose `funding_round_id` names one of this company's
+ * rounds attaches there — the pipeline-recorded exact link, independent of
+ * dates (this is what groups coverage under UNDATED rounds). Otherwise the
+ * article attaches to the funding round whose `announced_date` is NEAREST to
+ * the article's `published_date`, within `MATCH_WINDOW_DAYS`. Ties → the
+ * larger `amount_raised`. An article with no `published_date`, or no round
+ * in-window (incl. when no round has a date), becomes a standalone `news`
+ * item — nothing is dropped. A `funding_round_id` that matches none of the
+ * passed rounds (an orphaned link after a round delete) falls back to the
+ * date path rather than vanishing.
  *
  * Pure and deterministic given (rounds, news).
  */
@@ -163,7 +172,19 @@ export function buildTimeline(
     coverageByRound.set(roundId, arr);
   };
 
+  const roundIds = new Set(rounds.map((r) => r.id));
+
   for (const article of renderable) {
+    // (a0) The pipeline recorded EXACTLY which round this article's extraction
+    //      reconciled into (0044) → attach there, no guessing. Orphaned links
+    //      (round since deleted/merged) fall through to the heuristics.
+    if (
+      article.funding_round_id !== null &&
+      roundIds.has(article.funding_round_id)
+    ) {
+      attach(article.funding_round_id, article);
+      continue;
+    }
     // (a) The article IS a round's primary source → it belongs to that round,
     //     regardless of its own date (pinned above), never a neighbor.
     const canon = canonicalUrl(article.url);
