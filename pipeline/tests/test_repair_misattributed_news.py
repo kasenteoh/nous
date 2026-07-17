@@ -330,3 +330,56 @@ async def test_round_confirmed_by_surviving_article_is_kept(
     )
     assert len(rounds) == 1
     assert rounds[0].primary_news_url == good_url
+
+
+async def test_spacing_variant_and_head_token_spared(db: AsyncSession) -> None:
+    """Prod dry-run precision review (2026-07-17): 'PhysicsWallah raises…'
+    must protect the 'Physics Wallah' row (squashed variant) and 'Genesis
+    raises $200M…' must protect Genesis Therapeutics (distinctive head
+    token). A dictionary-word head ('Away Travel') gets NO head-token spare.
+
+    The Away title is chosen so the bare head token 'away' PASSES
+    article_mentions_company on its own (funding-verb adjacency: 'Away
+    raises') while the full name and squashed variant fail — so the ONLY
+    thing deleting this row is the `head not in _COMMON_NAME_WORDS` guard.
+    Dropping that guard flips this test (verified empirically)."""
+    pw = _co("Physics Wallah", "physics-wallah-purge")
+    genesis = _co("Genesis Therapeutics", "genesis-tx-purge")
+    away = _co("Away Travel", "away-travel-purge")
+    db.add_all([pw, genesis, away])
+    await db.flush()
+    db.add_all(
+        [
+            NewsArticle(
+                company_id=pw.id,
+                url="https://moneycontrol.example.com/physicswallah",
+                title="PhysicsWallah raises $210 million in funding at $2.8 billion valuation",
+                source="moneycontrol.example.com",
+                raw_content="PhysicsWallah raised $210 million.",
+            ),
+            NewsArticle(
+                company_id=genesis.id,
+                url="https://biopharmadive.example.com/genesis",
+                title="Genesis raises $200 million for AI drug discovery research",
+                source="biopharmadive.example.com",
+                raw_content="Genesis said it raised $200 million.",
+            ),
+            NewsArticle(
+                company_id=away.id,
+                url="https://news.google.com/rss/articles/CBMiAWAYGARB?oc=5",
+                title="Away raises $50M for school program expansion",
+                source="news.google.com",
+                raw_content="Away raises $50M for school program expansion",
+            ),
+        ]
+    )
+    await db.commit()
+
+    summary = await run_repair_misattributed_news(db, dry_run=False)
+    # Only the dictionary-word garbage goes; both real-coverage rows stay.
+    assert summary.articles_deleted == 1
+    remaining = (
+        (await db.execute(select(NewsArticle.company_id))).scalars().all()
+    )
+    assert pw.id in remaining and genesis.id in remaining
+    assert away.id not in remaining

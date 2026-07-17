@@ -62,7 +62,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from nous.db.models import Company, FundingRound, NewsArticle, SlugAlias
 from nous.db.upsert import refresh_funding_round_count
-from nous.sources.news import _GOOGLE_NEWS_HOST, article_mentions_company
+from nous.sources.news import (
+    _COMMON_NAME_WORDS,
+    _GOOGLE_NEWS_HOST,
+    _company_name_tokens,
+    article_mentions_company,
+)
 from nous.util.url import hostname
 
 logger = logging.getLogger(__name__)
@@ -142,11 +147,39 @@ def _article_is_attributed(
     headline(+snippet) fallback, not a body — the title carries the signal.
     A publisher row's raw_content is the fetched article text and counts as
     the body. The current name OR any merged-away alias name may match.
+
+    Deletion is costlier than a kept borderline article, so the purge accepts
+    TWO shapes the strict ingest guard rejects (2026-07-17 prod dry-run
+    precision review — these were the only false-flag classes found):
+
+    - the SQUASHED name as one token — coverage writes "PhysicsWallah" where
+      the row says "Physics Wallah" (2 real rounds would have died);
+    - for multi-token names, a DISTINCTIVE head token alone — "Genesis raises
+      $200M" for Genesis Therapeutics, "Cato's Shlomo Kramer …" for Cato
+      Networks. Distinctive = ≥4 chars and not a common dictionary word, so
+      "Away"/"Key"-class heads never qualify and single-token names keep the
+      calibrated strict rules ("musically" must NOT be spared by the
+      "- Music Ally" outlet suffix).
     """
     is_gn = hostname(url) == _GOOGLE_NEWS_HOST
     body = None if is_gn else (raw_content or None)
     for name in (*_name_variants(company_name), *alias_names):
         if article_mentions_company(name, title, body=body):
+            return True
+        tokens = _company_name_tokens(name)
+        if len(tokens) < 2:
+            continue
+        # Squashed-name variant ("physics wallah" → "physicswallah").
+        squashed = "".join(tokens)
+        if article_mentions_company(squashed, title, body=body):
+            return True
+        # Distinctive-head-token spare.
+        head = tokens[0]
+        if (
+            len(head) >= 4
+            and head not in _COMMON_NAME_WORDS
+            and article_mentions_company(head, title, body=body)
+        ):
             return True
     return False
 
