@@ -32,6 +32,27 @@ For each company:
    carry no merge signal here (reconcile's type+date path owns those), and
    touching them risks collapsing genuinely distinct undated rounds.
 
+2b. Near-amount collapse (2026-07-16 QA, terrafirma). One event is often
+   reported under two close-but-unequal figures ("$115M raised … including a
+   $100M Series A"). Rows whose types are compatible, whose dates are
+   compatible (both within NEAR_DATE_WINDOW_DAYS, or at least one unknown),
+   and whose amounts are within NEAR_AMOUNT_TOLERANCE of the larger one
+   collapse to the BEST row (same survivor ranking as Pass 2). The survivor
+   KEEPS ITS OWN amount — an amount and the primary_news_url citing it always
+   travel together; we never mix one row's figure with another row's source.
+   Anchoring is greedy from the best-ranked row, so tolerance never chains
+   ($100M~$115M~$130M collapses only what is near the anchor itself).
+
+2c. Contradicting-type fold, publication-date gated (sambanova: Series D/E/F
+   all $1B for one event — outlets disagreed on the letter). Within one
+   EXACT-amount group whose non-null types contradict, when exactly ONE row
+   is dated (the anchor), an undated differently-typed row folds into the
+   anchor only when its primary_news_url's stored article was PUBLISHED
+   within NEAR_DATE_WINDOW_DAYS of the anchor's announced_date — outside
+   that window (or with no stored article evidence) it is left alone. The
+   anchor's round_type wins; the loser's contradicting label is dropped as
+   the minority/aggregator report of the same event.
+
 3. Collapse valuation-only PHANTOM rows. A phantom is a round with NO
    round_type, NO announced_date and NO amount_raised — only a
    ``valuation_post_money`` (the shape seen on Perplexity's page: blank rows
@@ -65,6 +86,7 @@ from __future__ import annotations
 
 import logging
 from collections import defaultdict
+from datetime import date
 from decimal import Decimal
 from uuid import UUID
 
@@ -88,9 +110,42 @@ class RepairDuplicateRoundsSummary(BaseModel):
     companies_repaired: int = 0
     empty_rows_deleted: int = 0
     duplicate_rows_merged: int = 0
+    # Pass 2b: near-amount (±NEAR_AMOUNT_TOLERANCE) rows folded into the anchor.
+    near_amount_rows_merged: int = 0
+    # Pass 2c: contradicting-type same-amount rows folded on pub-date evidence.
+    type_conflict_rows_merged: int = 0
     # Pass 3: valuation-only phantom shells folded into a matching sibling.
     phantom_valuation_rows_merged: int = 0
     dry_run: bool = False
+
+
+# Two non-equal amounts within this relative tolerance of the LARGER one may be
+# the same event reported divergently ($100M vs $115M = 13% → near; $100M vs
+# $1B not). Shared with the data-quality census so the probe and the repair
+# always measure the same thing.
+NEAR_AMOUNT_TOLERANCE: float = 0.15
+# Two dates farther apart than this window never describe the same event.
+NEAR_DATE_WINDOW_DAYS: int = 14
+
+
+def _amounts_near(a: Decimal, b: Decimal) -> bool:
+    """True when two non-equal amounts are within NEAR_AMOUNT_TOLERANCE
+    (relative to the larger, so the check is symmetric). Equal amounts are the
+    exact-dup class (Pass 2), not this one.
+    """
+    if a == b:
+        return False
+    hi, lo = (a, b) if a > b else (b, a)
+    if hi <= 0:
+        return False
+    return float((hi - lo) / hi) <= NEAR_AMOUNT_TOLERANCE
+
+
+def _dates_compatible(a: date | None, b: date | None) -> bool:
+    """Same-event date rule: both within the window, or at least one unknown."""
+    if a is None or b is None:
+        return True
+    return abs((a - b).days) <= NEAR_DATE_WINDOW_DAYS
 
 
 def _normalized_type(round_type: str | None) -> str | None:
@@ -185,6 +240,210 @@ def _cluster_amount_group(rows: list[FundingRound]) -> list[list[FundingRound]]:
             # 2+ non-null clusters → keep untyped rows as their own cluster.
             clusters.append(untyped)
     return clusters
+
+
+async def _merge_cluster(
+    session: AsyncSession,
+    *,
+    survivor: FundingRound,
+    losers: list[FundingRound],
+    dry_run: bool,
+) -> None:
+    """Fold ``losers`` into ``survivor`` and delete them (the Pass-2 mechanics:
+    gap-fill, investor-link repoint/dedup, article-link repoint, flush-then-
+    delete). Callers pick the survivor and decide the counting."""
+    if dry_run:
+        return
+    for loser in losers:
+        _fold_loser_into_survivor(survivor, loser)
+        await _repoint_round_investors(
+            session, survivor_id=survivor.id, loser_id=loser.id
+        )
+    session.add(survivor)
+    await session.flush()
+    for loser in losers:
+        await session.delete(loser)
+
+
+async def _collapse_near_amounts(
+    session: AsyncSession,
+    *,
+    company_id: UUID,
+    rows: list[FundingRound],
+    dry_run: bool,
+) -> int:
+    """Pass 2b — collapse near-amount duplicates of one event (terrafirma).
+
+    Greedy anchor clustering over the amount-bearing rows, best-ranked row
+    first (the same ``_survivor_sort_key`` Pass 2 uses): each unclaimed row
+    joins the anchor when its type is COMPATIBLE (equal-or-null after
+    placeholder normalization), its date is COMPATIBLE (both within
+    NEAR_DATE_WINDOW_DAYS or at least one unknown), and its amount is within
+    NEAR_AMOUNT_TOLERANCE of the ANCHOR's amount (never chained through an
+    intermediate row).
+
+    The anchor keeps its OWN amount: an amount and the primary_news_url that
+    cites it always travel together. ``_fold_loser_into_survivor`` only
+    gap-fills null fields, so the loser's divergent figure is dropped, not
+    blended. Mutates ``rows`` in place (collapsed losers removed). Returns
+    the number of rows merged away.
+    """
+    amounted = sorted(
+        (r for r in rows if r.amount_raised is not None), key=_survivor_sort_key
+    )
+    claimed: set[UUID] = set()
+    merged = 0
+    for i, anchor in enumerate(amounted):
+        if anchor.id in claimed:
+            continue
+        losers: list[FundingRound] = []
+        for other in amounted[i + 1 :]:
+            if other.id in claimed:
+                continue
+            assert anchor.amount_raised is not None  # filtered above
+            assert other.amount_raised is not None
+            if not _amounts_near(anchor.amount_raised, other.amount_raised):
+                continue
+            anchor_type = _normalized_type(anchor.round_type)
+            other_type = _normalized_type(other.round_type)
+            if not (
+                anchor_type is None or other_type is None or anchor_type == other_type
+            ):
+                continue
+            if not _dates_compatible(anchor.announced_date, other.announced_date):
+                continue
+            losers.append(other)
+            claimed.add(other.id)
+        if not losers:
+            continue
+        logger.info(
+            "repair-duplicate-rounds: company=%s near-amount collapsing %d rows "
+            "(%s) into anchor=%s ($%s, type=%r, date=%s)",
+            company_id,
+            len(losers),
+            [str(loser.amount_raised) for loser in losers],
+            anchor.id,
+            anchor.amount_raised,
+            anchor.round_type,
+            anchor.announced_date,
+        )
+        merged += len(losers)
+        await _merge_cluster(session, survivor=anchor, losers=losers, dry_run=dry_run)
+        if not dry_run:
+            loser_ids = {loser.id for loser in losers}
+            rows[:] = [r for r in rows if r.id not in loser_ids]
+    return merged
+
+
+async def _published_dates_by_url(
+    session: AsyncSession, urls: list[str]
+) -> dict[str, date]:
+    """Map article url → published_date for the given urls (dated rows only)."""
+    if not urls:
+        return {}
+    rows = (
+        await session.execute(
+            select(NewsArticle.url, NewsArticle.published_date).where(
+                NewsArticle.url.in_(urls),
+                NewsArticle.published_date.is_not(None),
+            )
+        )
+    ).all()
+    return {url: published for url, published in rows}
+
+
+async def _collapse_type_conflicts(
+    session: AsyncSession,
+    *,
+    company_id: UUID,
+    rows: list[FundingRound],
+    dry_run: bool,
+) -> int:
+    """Pass 2c — fold contradicting-type same-amount rows on pub-date evidence.
+
+    sambanova class: one $1B event stored as Series F (dated, the anchor) plus
+    Series E and Series D (undated — aggregator headlines that mislabeled the
+    letter). Within one EXACT-amount group:
+
+    - eligible only when the group's non-null normalized types CONTRADICT
+      (2+ distinct) — compatible groups are Pass 2's job;
+    - the anchor must be the group's ONLY dated row (2+ dated contradicting
+      rows = genuinely ambiguous → never guess);
+    - an undated, differently-typed row folds into the anchor ONLY when its
+      ``primary_news_url`` has a stored article whose ``published_date`` is
+      within NEAR_DATE_WINDOW_DAYS of the anchor's ``announced_date``. No
+      stored article, no published date, or outside the window → left alone.
+
+    The anchor's round_type wins by construction (``_fold_loser_into_survivor``
+    never overwrites a non-null type). Mutates ``rows`` in place. Returns the
+    number of rows merged away.
+    """
+    by_amount: dict[Decimal, list[FundingRound]] = defaultdict(list)
+    for row in rows:
+        if row.amount_raised is not None:
+            by_amount[row.amount_raised].append(row)
+
+    merged = 0
+    for amount, group in by_amount.items():
+        if len(group) < 2:
+            continue
+        distinct_types = {
+            t for t in (_normalized_type(r.round_type) for r in group) if t is not None
+        }
+        if len(distinct_types) < 2:
+            continue  # compatible group — Pass 2 territory
+        dated = [r for r in group if r.announced_date is not None]
+        if len(dated) != 1:
+            continue  # zero or 2+ dated rows — no unambiguous anchor
+        anchor = dated[0]
+        if _normalized_type(anchor.round_type) is None:
+            # An untyped anchor can't arbitrate between two contradicting
+            # letters (folding E and D into it would arbitrarily crown one via
+            # gap-fill) — require the anchor to name the round itself.
+            continue
+        anchor_date = anchor.announced_date
+        assert anchor_date is not None
+        candidates = [
+            r
+            for r in group
+            if r.id != anchor.id
+            and r.announced_date is None
+            and _normalized_type(r.round_type) is not None
+            and _normalized_type(r.round_type) != _normalized_type(anchor.round_type)
+        ]
+        if not candidates:
+            continue
+        pub_dates = await _published_dates_by_url(
+            session,
+            [r.primary_news_url for r in candidates if r.primary_news_url],
+        )
+        losers: list[FundingRound] = []
+        for row in candidates:
+            published = pub_dates.get(row.primary_news_url or "")
+            if published is None:
+                continue  # no stored evidence — never guess
+            if abs((published - anchor_date).days) > NEAR_DATE_WINDOW_DAYS:
+                continue
+            losers.append(row)
+        if not losers:
+            continue
+        logger.info(
+            "repair-duplicate-rounds: company=%s type-conflict folding %d rows "
+            "(%s) into anchor=%s ($%s, type=%r, date=%s) on pub-date evidence",
+            company_id,
+            len(losers),
+            [repr(loser.round_type) for loser in losers],
+            anchor.id,
+            amount,
+            anchor.round_type,
+            anchor_date,
+        )
+        merged += len(losers)
+        await _merge_cluster(session, survivor=anchor, losers=losers, dry_run=dry_run)
+        if not dry_run:
+            loser_ids = {loser.id for loser in losers}
+            rows[:] = [r for r in rows if r.id not in loser_ids]
+    return merged
 
 
 def _is_phantom_valuation_row(row: FundingRound) -> bool:
@@ -436,26 +695,35 @@ async def run_repair_duplicate_rounds(
                     survivor.announced_date,
                 )
                 merged_here += len(losers)
+                await _merge_cluster(
+                    session, survivor=survivor, losers=losers, dry_run=dry_run
+                )
                 if dry_run:
                     continue
-                for loser in losers:
-                    _fold_loser_into_survivor(survivor, loser)
-                    await _repoint_round_investors(
-                        session, survivor_id=survivor.id, loser_id=loser.id
-                    )
-                session.add(survivor)
-                # Flush the investor repoints before deleting the loser rows so
-                # no FK still points at them.
-                await session.flush()
-                for loser in losers:
-                    await session.delete(loser)
-                # Keep survivors_pool in sync so Pass 3 never buckets a row this
-                # pass just deleted (loser rows have an amount, so they are not
-                # phantoms, but a deleted loser must not appear as a sibling).
+                # Keep survivors_pool in sync so later passes never see a row
+                # this pass just deleted.
                 loser_ids = {loser.id for loser in losers}
                 survivors_pool = [
                     r for r in survivors_pool if r.id not in loser_ids
                 ]
+
+        # ── Pass 2b: near-amount collapse (terrafirma $115M/$100M) ──────────
+        near_merged = await _collapse_near_amounts(
+            session,
+            company_id=company_id,
+            rows=survivors_pool,
+            dry_run=dry_run,
+        )
+
+        # ── Pass 2c: contradicting-type fold on pub-date evidence ───────────
+        # (sambanova Series D/E vs the dated Series F, all $1B). Runs AFTER 2b
+        # so the exact-amount groups it inspects are already consolidated.
+        conflict_merged = await _collapse_type_conflicts(
+            session,
+            company_id=company_id,
+            rows=survivors_pool,
+            dry_run=dry_run,
+        )
 
         # ── Pass 3: valuation-only phantom shells ────────────────────────────
         # Fold each phantom (no type/date/amount, only a valuation_post_money)
@@ -470,10 +738,14 @@ async def run_repair_duplicate_rounds(
             dry_run=dry_run,
         )
 
-        if empty_deleted or merged_here or phantom_merged:
+        if empty_deleted or merged_here or near_merged or conflict_merged or (
+            phantom_merged
+        ):
             summary.companies_repaired += 1
             summary.empty_rows_deleted += empty_deleted
             summary.duplicate_rows_merged += merged_here
+            summary.near_amount_rows_merged += near_merged
+            summary.type_conflict_rows_merged += conflict_merged
             summary.phantom_valuation_rows_merged += phantom_merged
             if not dry_run:
                 await session.flush()

@@ -377,7 +377,9 @@ def clean_round_type(round_type: str | None) -> str | None:
     string for a real type, None for blanks and placeholders. Keeps "Series ?"
     and friends from ever landing in a row again.
     """
-    return round_type.strip() if normalized_round_type(round_type) else None
+    if round_type is None or normalized_round_type(round_type) is None:
+        return None
+    return round_type.strip()
 
 
 def _round_types_compatible(a: str | None, b: str | None) -> bool:

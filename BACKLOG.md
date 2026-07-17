@@ -92,9 +92,12 @@ $100M); blue-origin = 12 rounds, 10 signal-free shells from pre-rumor-guard
   placeholder round_types ("Series ?", "unknown") normalize to None for
   clustering; repair-duplicate-rounds promoted to EVERY 3h cron in apply mode
   (kills the shell backlog + exact dups; the #215 repair-wrong-websites pattern).
-- ⬜ **Next (P0b):** the near-amount merge gate (same type + date window +
-  amounts within ~15%) sized by the census numbers, plus a
-  publication-date-gated fold for contradicting series letters (D/E/F, $1B).
+- ✅ **Shipped (P0b):** repair Pass 2b — near-amount merge (compatible types
+  + compatible dates + amounts within ±15% of the anchor, greedy no-chain,
+  survivor keeps its OWN sourced amount) — and Pass 2c — contradicting series
+  letters fold into the single dated+typed anchor ONLY on stored
+  publication-date evidence (±14d). Reconcile hardened at the source:
+  placeholder types ("Series ?") never persist and never block a merge.
 - ⬜ **Next (P0c):** canonical-URL normalization / dedup for unresolved
   news.google.com article variants (same headline stored 2–3×).
 

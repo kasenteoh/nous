@@ -603,3 +603,67 @@ async def test_merge_companies_refreshes_survivor_count(db: AsyncSession) -> Non
     await merge_companies(db, survivor_id=survivor.id, loser_id=loser.id)
     await db.refresh(survivor)
     assert survivor.funding_round_count == 2
+
+
+async def test_reconcile_placeholder_type_merges_with_real_round(
+    db: AsyncSession,
+) -> None:
+    """A 'Series ?' extraction at the same amount merges into the stored
+    Series F round instead of spawning a fake-typed sibling (sambanova,
+    2026-07-16 QA). The stored real type is never overwritten."""
+    company = _make_quality_company("PlaceholderCo", "placeholderco")
+    db.add(company)
+    await db.flush()
+
+    real = FundingExtraction(
+        is_funding_announcement=True,
+        round_type="Series F",
+        amount_raised_usd=1_000_000_000,
+        announced_date=date(2026, 7, 8),
+        confidence="high",
+    )
+    _, created = await reconcile_funding_round(
+        db,
+        company_id=company.id,
+        extraction=real,
+        primary_news_url="https://siliconangle.com/real",
+    )
+    assert created is True
+
+    placeholder = FundingExtraction(
+        is_funding_announcement=True,
+        round_type="Series ?",
+        amount_raised_usd=1_000_000_000,
+        announced_date=None,
+        confidence="low",
+    )
+    row, created = await reconcile_funding_round(
+        db,
+        company_id=company.id,
+        extraction=placeholder,
+        primary_news_url="https://aggregator.example.com/mislabel",
+    )
+    assert created is False
+    assert row.round_type == "Series F"
+
+
+async def test_reconcile_placeholder_type_never_persists(db: AsyncSession) -> None:
+    """A brand-new extraction with a placeholder type stores round_type=None."""
+    company = _make_quality_company("FreshPlaceholderCo", "freshplaceholderco")
+    db.add(company)
+    await db.flush()
+    extraction = FundingExtraction(
+        is_funding_announcement=True,
+        round_type="Series ?",
+        amount_raised_usd=50_000_000,
+        announced_date=date(2026, 6, 1),
+        confidence="medium",
+    )
+    row, created = await reconcile_funding_round(
+        db,
+        company_id=company.id,
+        extraction=extraction,
+        primary_news_url="https://example.com/fresh",
+    )
+    assert created is True
+    assert row.round_type is None

@@ -986,3 +986,353 @@ async def test_placeholder_typed_phantom_valuation_collapses(db: AsyncSession) -
     assert len(rounds) == 1
     assert rounds[0].round_type == "Series B"
     assert rounds[0].valuation_post_money == 20_000_000_000
+
+
+# ── Pass 2b: near-amount collapse (2026-07-16 QA, terrafirma) ────────────────
+
+
+async def test_near_amount_merge_terrafirma(db: AsyncSession) -> None:
+    """$115M Series A (dated) + $100M Series A (undated) → ONE round at $115M.
+
+    The anchor keeps its OWN amount (figure and citing source travel
+    together); the loser's investors repoint to the survivor.
+    """
+    co = _co("TerraFirma Test", "terrafirma-test")
+    kp = Investor(
+        name="Kleiner Perkins",
+        name_normalized="kleiner perkins",
+        slug="kleiner-perkins-na",
+    )
+    db.add_all([co, kp])
+    await db.flush()
+
+    dated = FundingRound(
+        company_id=co.id,
+        round_type="Series A",
+        amount_raised=115_000_000,
+        announced_date=date(2026, 7, 14),
+        primary_news_url="https://siliconangle.com/terrafirma-115m",
+        extraction_confidence="high",
+    )
+    undated = FundingRound(
+        company_id=co.id,
+        round_type="Series A",
+        amount_raised=100_000_000,
+        announced_date=None,
+        primary_news_url="https://finsmes.com/terrafirma-100m",
+        extraction_confidence="medium",
+    )
+    db.add_all([dated, undated])
+    await db.flush()
+    db.add(
+        FundingRoundInvestor(
+            funding_round_id=undated.id, investor_id=kp.id, is_lead=True
+        )
+    )
+    await db.commit()
+
+    summary = await run_repair_duplicate_rounds(db, dry_run=False)
+    assert summary.near_amount_rows_merged == 1
+
+    rounds = await _rounds_for(db, co.id)
+    assert len(rounds) == 1
+    survivor = rounds[0]
+    assert survivor.amount_raised == 115_000_000
+    assert survivor.announced_date == date(2026, 7, 14)
+    assert survivor.primary_news_url == "https://siliconangle.com/terrafirma-115m"
+    links = (
+        await db.execute(
+            select(FundingRoundInvestor).where(
+                FundingRoundInvestor.funding_round_id == survivor.id
+            )
+        )
+    ).scalars().all()
+    assert len(links) == 1 and links[0].is_lead
+
+    # Idempotent: nothing left to merge.
+    second = await run_repair_duplicate_rounds(db, dry_run=False)
+    assert second.near_amount_rows_merged == 0
+
+
+async def test_near_amount_no_chaining(db: AsyncSession) -> None:
+    """Tolerance anchors to the best row, never chains through intermediates.
+
+    $100M (dated anchor) claims $110M (10%) but NOT $126M (26% of anchor,
+    though only 12.7% of $110M — chaining would wrongly swallow it).
+    """
+    co = _co("Chain Co", "chain-co")
+    db.add(co)
+    await db.flush()
+    db.add_all(
+        [
+            FundingRound(
+                company_id=co.id,
+                round_type="Series B",
+                amount_raised=100_000_000,
+                announced_date=date(2026, 6, 1),
+            ),
+            FundingRound(
+                company_id=co.id,
+                round_type="Series B",
+                amount_raised=110_000_000,
+            ),
+            FundingRound(
+                company_id=co.id,
+                round_type="Series B",
+                amount_raised=126_000_000,
+            ),
+        ]
+    )
+    await db.commit()
+
+    summary = await run_repair_duplicate_rounds(db, dry_run=False)
+    assert summary.near_amount_rows_merged == 1
+    rounds = await _rounds_for(db, co.id)
+    amounts = sorted(r.amount_raised for r in rounds)
+    assert amounts == [100_000_000, 126_000_000]
+
+
+async def test_near_amount_contradicting_types_not_merged(db: AsyncSession) -> None:
+    co = _co("Two Rounds Co", "two-rounds-co")
+    db.add(co)
+    await db.flush()
+    db.add_all(
+        [
+            FundingRound(
+                company_id=co.id,
+                round_type="Series A",
+                amount_raised=100_000_000,
+                announced_date=date(2026, 1, 10),
+            ),
+            FundingRound(
+                company_id=co.id,
+                round_type="Series B",
+                amount_raised=110_000_000,
+                announced_date=date(2026, 1, 12),
+            ),
+        ]
+    )
+    await db.commit()
+    summary = await run_repair_duplicate_rounds(db, dry_run=False)
+    assert summary.near_amount_rows_merged == 0
+    assert len(await _rounds_for(db, co.id)) == 2
+
+
+async def test_near_amount_far_dates_not_merged(db: AsyncSession) -> None:
+    """Two dated seed rounds months apart stay distinct even at near amounts."""
+    co = _co("Tranche Co", "tranche-co")
+    db.add(co)
+    await db.flush()
+    db.add_all(
+        [
+            FundingRound(
+                company_id=co.id,
+                round_type="seed",
+                amount_raised=10_000_000,
+                announced_date=date(2025, 1, 1),
+            ),
+            FundingRound(
+                company_id=co.id,
+                round_type="seed",
+                amount_raised=11_000_000,
+                announced_date=date(2025, 12, 1),
+            ),
+        ]
+    )
+    await db.commit()
+    summary = await run_repair_duplicate_rounds(db, dry_run=False)
+    assert summary.near_amount_rows_merged == 0
+    assert len(await _rounds_for(db, co.id)) == 2
+
+
+async def test_near_amount_dry_run_writes_nothing(db: AsyncSession) -> None:
+    co = _co("Dry Near Co", "dry-near-co")
+    db.add(co)
+    await db.flush()
+    db.add_all(
+        [
+            FundingRound(
+                company_id=co.id,
+                round_type="Series A",
+                amount_raised=115_000_000,
+                announced_date=date(2026, 7, 14),
+            ),
+            FundingRound(
+                company_id=co.id, round_type="Series A", amount_raised=100_000_000
+            ),
+        ]
+    )
+    await db.commit()
+    summary = await run_repair_duplicate_rounds(db, dry_run=True)
+    assert summary.near_amount_rows_merged == 1
+    assert len(await _rounds_for(db, co.id)) == 2
+
+
+# ── Pass 2c: contradicting-type fold on publication-date evidence ────────────
+
+
+async def test_type_conflict_fold_sambanova(db: AsyncSession) -> None:
+    """Series E ($1B, undated, article published next day) folds into the
+    dated Series F anchor; Series D whose article published far outside the
+    window stays. The anchor's letter wins."""
+    co = _co("SambaNova Fold", "sambanova-fold")
+    db.add(co)
+    await db.flush()
+
+    anchor = FundingRound(
+        company_id=co.id,
+        round_type="Series F",
+        amount_raised=1_000_000_000,
+        announced_date=date(2026, 7, 8),
+        primary_news_url="https://siliconangle.com/sambanova-1b",
+    )
+    misletter_near = FundingRound(
+        company_id=co.id,
+        round_type="Series E",
+        amount_raised=1_000_000_000,
+        primary_news_url="https://zawya.com/sambanova-series-e",
+    )
+    misletter_far = FundingRound(
+        company_id=co.id,
+        round_type="Series D",
+        amount_raised=1_000_000_000,
+        primary_news_url="https://old.example.com/sambanova-series-d",
+    )
+    db.add_all([anchor, misletter_near, misletter_far])
+    db.add_all(
+        [
+            NewsArticle(
+                company_id=co.id,
+                url="https://zawya.com/sambanova-series-e",
+                title="QIA participates in SambaNova's $1bln Series E round",
+                source="zawya.com",
+                published_date=date(2026, 7, 9),
+                raw_content="body",
+            ),
+            NewsArticle(
+                company_id=co.id,
+                url="https://old.example.com/sambanova-series-d",
+                title="SambaNova raises $1B Series D",
+                source="old.example.com",
+                published_date=date(2025, 4, 1),
+                raw_content="body",
+            ),
+        ]
+    )
+    await db.commit()
+
+    summary = await run_repair_duplicate_rounds(db, dry_run=False)
+    assert summary.type_conflict_rows_merged == 1
+
+    rounds = await _rounds_for(db, co.id)
+    assert len(rounds) == 2
+    types = sorted(r.round_type for r in rounds)
+    assert types == ["Series D", "Series F"]
+
+
+async def test_type_conflict_no_article_evidence_stays(db: AsyncSession) -> None:
+    """No stored article for the loser's source → never guess, never fold."""
+    co = _co("No Evidence Co", "no-evidence-co")
+    db.add(co)
+    await db.flush()
+    db.add_all(
+        [
+            FundingRound(
+                company_id=co.id,
+                round_type="Series F",
+                amount_raised=1_000_000_000,
+                announced_date=date(2026, 7, 8),
+            ),
+            FundingRound(
+                company_id=co.id,
+                round_type="Series E",
+                amount_raised=1_000_000_000,
+                primary_news_url="https://nowhere.example.com/not-stored",
+            ),
+        ]
+    )
+    await db.commit()
+    summary = await run_repair_duplicate_rounds(db, dry_run=False)
+    assert summary.type_conflict_rows_merged == 0
+    assert len(await _rounds_for(db, co.id)) == 2
+
+
+async def test_type_conflict_two_dated_anchors_skip(db: AsyncSession) -> None:
+    """Two dated contradicting-type rows = genuinely ambiguous → untouched."""
+    co = _co("Ambiguous Co", "ambiguous-co")
+    db.add(co)
+    await db.flush()
+    db.add_all(
+        [
+            FundingRound(
+                company_id=co.id,
+                round_type="Series F",
+                amount_raised=1_000_000_000,
+                announced_date=date(2026, 7, 8),
+            ),
+            FundingRound(
+                company_id=co.id,
+                round_type="Series E",
+                amount_raised=1_000_000_000,
+                announced_date=date(2026, 7, 9),
+            ),
+        ]
+    )
+    await db.commit()
+    summary = await run_repair_duplicate_rounds(db, dry_run=False)
+    assert summary.type_conflict_rows_merged == 0
+    assert len(await _rounds_for(db, co.id)) == 2
+
+
+async def test_type_conflict_untyped_anchor_skip(db: AsyncSession) -> None:
+    """An untyped dated anchor can't arbitrate contradicting letters."""
+    co = _co("Untyped Anchor Co", "untyped-anchor-co")
+    db.add(co)
+    await db.flush()
+    rounds = [
+        FundingRound(
+            company_id=co.id,
+            amount_raised=1_000_000_000,
+            announced_date=date(2026, 7, 8),
+        ),
+        FundingRound(
+            company_id=co.id,
+            round_type="Series E",
+            amount_raised=1_000_000_000,
+            primary_news_url="https://a.example.com/e",
+        ),
+        FundingRound(
+            company_id=co.id,
+            round_type="Series D",
+            amount_raised=1_000_000_000,
+            primary_news_url="https://b.example.com/d",
+        ),
+    ]
+    db.add_all(rounds)
+    db.add_all(
+        [
+            NewsArticle(
+                company_id=co.id,
+                url="https://a.example.com/e",
+                title="t1",
+                source="a.example.com",
+                published_date=date(2026, 7, 9),
+                raw_content="body",
+            ),
+            NewsArticle(
+                company_id=co.id,
+                url="https://b.example.com/d",
+                title="t2",
+                source="b.example.com",
+                published_date=date(2026, 7, 9),
+                raw_content="body",
+            ),
+        ]
+    )
+    await db.commit()
+    summary = await run_repair_duplicate_rounds(db, dry_run=False)
+    assert summary.type_conflict_rows_merged == 0
+    # The untyped $1B row folds into ONE typed cluster? No — with two
+    # contradicting non-null clusters the untyped row stays separate (Pass 2
+    # ambiguity rule), so all three rows must survive.
+    assert len(await _rounds_for(db, co.id)) == 3
