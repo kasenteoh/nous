@@ -143,19 +143,28 @@ with a COMPLETED $50M and "in talks for more" → claim about the $50M =
 supported). Batch both with the next eval-record run.
 
 ### P2 — smaller QA items
-- **/trends backfill artifact framing [S]:** growth %s read as data-collection
-  ramp (funding history starts ~Q1 2026 for much of the catalog) — add a
-  coverage caveat line to /trends & industry charts, or gate "new" labels on
-  coverage age.
+- ~~**/trends backfill artifact framing [S]**~~ — SHIPPED: a coverage-honesty
+  line on /trends (growth vs pre-coverage windows is coverage-relative).
 - **Blue Origin in a "US software startups" catalog:** judge-eligibility
   scope leak — re-judge; also "Jeff Bezos"/"Bezos" investor dup.
 - **Google News URLs as visible sources:** resolve-at-ingest missed a cohort;
   consider a bounded re-resolve backfill for primary_news_url redirects.
-- **/new missing descriptions** (husk cards) + **future-dated entries** (UTC
-  display reads a day ahead) [S].
-- **/vs + /alternatives:** indexable but absent from sitemaps — add to a
-  sitemap shard (they're not thin) or noindex; decide policy [S].
-- **404 page server-rendered `<title>`** is the generic homepage title [S].
+- **/new missing descriptions** (husk cards — heals as enrichment covers
+  them) [S].
+- **uncertain/unsupported boundary is temperature-sensitive [S]:** back-to-back
+  live re-records flipped 3 silent-source cases uncertain→unsupported (never a
+  ✓ risk — both are badge-less — but it noises the internal unsupported
+  signal). A future source_verification hardening pass should sharpen the
+  silent-vs-contradicts wording; until then, review re-record deltas
+  case-by-case before committing recordings. ~~Future-dated entries~~ — SHIPPED: bucket headings carry an
+  explicit UTC tag.
+- ~~**/vs + /alternatives sitemap policy**~~ — DECIDED, no code: /alternatives
+  is already in the core shard (#209); /vs pairs stay crawl-discovered via
+  company-page links (enumerating indexable pairs needs a competitor-edge
+  query for marginal SEO value — revisit only if /vs impressions matter).
+- ~~**404 server-rendered `<title>`**~~ — DECIDED, no code: Next streams the
+  not-found title after the initial head (framework behavior); the 404 status
+  code is correct so indexing impact is nil.
 - **VerifiedBadge hover quote** reported absent in served HTML — verify
   whether the title attribute survives streaming; may be a QA-tooling
   artifact [S].
