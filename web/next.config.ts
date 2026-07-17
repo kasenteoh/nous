@@ -10,6 +10,13 @@ import type { NextConfig } from "next";
 // - The build MUST run under webpack (`next build --webpack`). Turbopack bundles
 //   the onnx assets into the function and ignores outputFileTracing* entirely,
 //   which reintroduces the 415MB blowup.
+//
+// Platform context (2026-07-17): VERCEL_SUPPORT_LARGE_FUNCTIONS=1 on the
+// project opts into Vercel's Large Functions beta — since 2026-06-29 that
+// limit is 5GB uncompressed (was 250MB) and NEW projects are auto-enrolled,
+// so a re-created project no longer silently freezes deploys. The 250MB
+// number below remains the conservative planning bar (the beta's GA terms
+// are unstated), and CI enforces a 180MB budget via `npm run check:size`.
 // - The glob patterns MUST be depth-independent (`**/…`). Next's file-tracing
 //   root is the project dir locally but the REPO root on Vercel, so a
 //   root-relative `node_modules/…` matches locally yet misses `web/node_modules/…`
