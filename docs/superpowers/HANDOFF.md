@@ -1,43 +1,88 @@
-# Handoff — state of the world as of 2026-07-16
+# Handoff — state of the world as of 2026-07-16 (end of day)
 
 Written for the next agent (any model) picking this project up cold. Read
 this, then root `CLAUDE.md` (conventions), then the worklog
 (`docs/superpowers/fable5-worklog.md` — one entry per merged PR, the
-authoritative history; **read its "Opus 4.8 pickup — 2026-07-12" section**
-for the detail behind the Latest-update block below), then the two plan docs
-under `docs/superpowers/plans/` (2026-07-10 improvement plan; 2026-07-11
-hygiene + Wave 3). `BACKLOG.md` is annotated with what shipped.
+authoritative history), then `BACKLOG.md` (annotated with what shipped; its
+**"2026-07-16 fresh customer-perspective QA"** section is the current work
+queue). The plan docs under `docs/superpowers/plans/` are historical context.
 
-## LATEST UPDATE — known-issues sweep + verification hardening (2026-07-15/16, PRs #202–#209)
+## LATEST UPDATE — three arcs shipped and MERGED (2026-07-15/16, PRs #202–#215)
 
-Eight PRs, all CI-green and adversarially reviewed, **awaiting owner merge**
-(the session's permission mode gated `gh pr merge` + workflow dispatch — see
-the worklog's session block for per-PR detail):
-- **#202** claim-drift gap (a REAL false-✓ path — corrected figure at the same
-  source kept a stale ✓): pipeline stale-claim sweep + web grammar-anchored
-  claim guard. Merge early — the verification stack PRs stack on main.
-- **#203** momentum exit-cohort clear (consistency; shared `_shown_predicate`).
-- **#204** `unsupported` verdicts itemized in the data-quality report.
-- **#205** verify-sources in the 3h cron (`--limit 40`, no new input) — drains
-  the stored-text remainder (~166 facts) and the #208 re-verify automatically.
-- **#206** migration **0044** `news_articles.funding_round_id` (exact
-  article→round link; repair-catalog pass 4 heals; repair-duplicate-rounds
-  repoints). **Head becomes 0044.**
-- **#207** timeline groups coverage by the persisted link — **merge ONLY after
-  #206's migration reaches prod** (3h cron applies it; pre-migration the
-  explicit select 400s and news render empty).
-- **#208** ellipsis-aware grounding, PROMPT_VERSION **2026-07-16.1** (recovers
-  legit ✓s lost to "..."-elided quotes; still fail-closed; golden gate green).
-- **#209** sharded sitemaps (`/sitemap/core.xml` + `companies-<i>` 40k-shards;
-  robots lists every shard).
+All fourteen PRs are merged; main is green; migration head **0044** is on
+prod; docs/worklog/backlog are current. One-line map (worklog has full
+entries):
 
-**Ops still needed (owner):** dispatch `discovery.yml` once — it has NOT run
-since #191, so prod `completeness_score` is unpopulated and the provenance
-badge renders on 0 companies. Everything else self-drains on the crons once
-merged. **Next up (BACKLOG):** the verification re-fetch path [M] (~103 facts;
-build after #202/#205/#208 land — same files), then ROADMAP Later #2
-(llms.txt / `/c/[slug].md`) + platform health (embedding decoupling,
-pipeline.yml input-cap refactor, observability).
+**Arc 1 — known-issues sweep + verification hardening (#202–#210):**
+claim-drift false-✓ fix (pipeline stale-claim sweep + web grammar-anchored
+claim guard), momentum exit-cohort clear, `unsupported` verdicts in the
+data-quality report, verify-sources in the 3h cron (`--limit 40`),
+migration **0044** `news_articles.funding_round_id` + timeline grouping by
+the persisted link, ellipsis-aware grounding, sharded sitemaps
+(`/sitemap/core.xml` + `companies-<i>.xml`; robots lists every shard).
+
+**Arc 2 — fresh QA pass + AI-answer surfaces (#211–#213):** a 3-lane
+customer-perspective QA sweep against prod (findings triaged into BACKLOG);
+**/llms.txt + /c/[slug].md** (ROADMAP Later #2 — markdown siblings with
+per-fact source URLs + verification annotations, via a next.config rewrite);
+QA polish (homepage strip is now momentum-driven "Heating up" with a neutral
+fallback, investor pages self-consistent on portfolio counts, export accepts
+industry slugs, homepage RSS autodiscovery restored — NB: page-level
+`alternates` shallow-replaces the layout's); `portfolio_count` now counts
+the SHOWN cohort (pipeline + web aligned).
+
+**Arc 3 — QA P0 forensics + rumor guard (#214–#215):** the "merged-entity
+corruption" was root-caused via prod `inspect-company` dispatches — NOT
+dedup: the old resolver accepted news-site ARTICLE URLs as homepages
+(helix→machinebrief, away→marketspy, amiato→failory), so enrichment
+described the news site and the website-funding gap-fill mined OTHER
+companies' rounds off its pages. `repair-wrong-websites` (whose pass (e)
+detected the class all along but was never dispatched) now runs EVERY 3h
+cron with a double-confirmed same-host round/article purge; the three hosts
+are blocklisted; improbable excluded via ops (wrong entity + UK). The rumor
+guard hardened BOTH prompts (funding_extraction 2026-07-16.1 +
+source_verification 2026-07-16.2) with live re-records — verdict_accuracy
+0.888→**0.947**, the funding set's first fully-live recording, and the
+version bump auto-strips any existing rumor ✓s via the cron.
+
+**Prod state / self-draining processes (no babysitting):** discovery ran
+2026-07-16 → momentum, completeness, and map coords are POPULATED (badge,
+/trending, homepage strip, portfolio momentum all live after ISR). The 3h
+cron now also runs: `repair-wrong-websites` (poisoned rows heal + purge),
+`verify-sources --limit 40` (re-verifying the whole cohort under
+2026-07-16.2 — a few days at 40/run, ~$0.30), and repair-catalog pass 4
+(news→round links). The funding-extraction version bump does NOT re-extract
+old articles (processed-once) — only new extractions use the rumor rule.
+
+## NEXT QUEUE (in priority order — BACKLOG "2026-07-16 QA" section has detail)
+
+1. **Aggregation-without-dedup [M, P0]** — near-amount duplicate rounds
+   (terrafirma: one Series A stored as $115M AND $100M; reconcile only
+   merges EQUAL amounts) + the same event rendered 8–12× from near-identical
+   Google News URLs (sambanova, blue-origin). Husk-style: measure first (a
+   $0 probe/data-quality signal for suspect near-duplicates), then a
+   conservative merge design (same type + date window + amounts within
+   ~15%?), plus canonical-URL normalization for news.google.com articles.
+2. **Wrong-entity news attribution (aardvark class) [M, P1]** — /c/aardvark's
+   timeline is keyword-scrape garbage; generic dictionary-word names need a
+   stronger entity match at ingest-news attribution. Also owns helix's
+   surviving third-party-syndicated rounds (the same-host purge deliberately
+   spares cross-host URLs).
+3. **Verification re-fetch path [M]** — the ~103 refetch-bucket facts
+   (scraping etiquette; mirror sources/news.py). Verification files are now
+   stable (no in-flight PRs).
+4. **Small [S] items:** valuation-rule parenthetical + mixed
+   completed/in-talks golden case (batch with the next eval-record);
+   /trends coverage-caveat framing; /vs + /alternatives sitemap-or-noindex
+   policy; 404 server-rendered title; /new future-date display.
+5. **Platform health (standing):** embedding/Vercel decoupling,
+   observability (Sentry + pipeline_runs surfacing).
+
+**Verify-after-cron checks worth doing next session:** helix/away/amiato
+re-enriched correctly (descriptions + industry fixed → /trends
+media-entertainment pollution gone); the data-quality report's unsupported
+section post-re-verify; the wrong-site purge counters in the repair step
+summary.
 
 ## LATEST UPDATE — source-verification SHIPPED (2026-07-15, PRs #197–#201)
 
