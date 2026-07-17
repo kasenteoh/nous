@@ -14,6 +14,7 @@ Requires DATABASE_URL (skipped otherwise).
 from __future__ import annotations
 
 import os
+from datetime import UTC, datetime
 
 import pytest
 from sqlalchemy import select
@@ -1035,3 +1036,142 @@ async def test_aggregator_reset_never_deletes_news_sourced_rounds(
         await db.execute(select(FundingRound).where(FundingRound.id == round_id))
     ).scalar_one_or_none()
     assert survivor is not None
+
+
+# ── Pass (f) + extended reset: enrichment residue (2026-07-17, helix/amiato) ─
+
+
+async def test_wrong_company_reset_clears_full_enrichment(
+    db: AsyncSession,
+) -> None:
+    """The pass-(e) reset must clear people/competitors/industry/HQ/embedding
+    along with website + descriptions — helix kept machinebrief's leadership
+    and media-entertainment industry after the pre-fix reset."""
+    from nous.db.models import Competitor, Person
+
+    co = _co(
+        "Helix Reset Co",
+        "helix-reset-co",
+        website="https://machinebrief.example.com/some-article",
+        description_short=(
+            "Machine Brief is an AI news aggregator offering daily digests."
+        ),
+        industry_group="media & entertainment",
+        hq_city="New York",
+        hq_state="NY",
+        last_enriched_at=datetime(2026, 7, 1, tzinfo=UTC),
+    )
+    db.add(co)
+    await db.flush()
+    db.add_all(
+        [
+            Person(
+                company_id=co.id,
+                name="Machine Brief Editorial Team",
+                role="Editorial Team",
+                rank=1,
+            ),
+            Competitor(
+                company_id=co.id,
+                competitor_name="AOL",
+                rank=1,
+            ),
+        ]
+    )
+    db.add(
+        RawPage(
+            company_id=co.id,
+            url="https://machinebrief.example.com/some-article",
+            content="Machine Brief\nMachine Brief is an AI news site.",
+            fetched_at=datetime(2026, 7, 1, tzinfo=UTC),
+        )
+    )
+    await db.commit()
+
+    summary = await run_repair_wrong_websites(db)
+    assert summary.wrong_company_reset >= 1
+
+    await db.refresh(co)
+    assert co.website is None
+    assert co.industry_group is None
+    assert co.hq_city is None and co.hq_state is None
+    people = (
+        (await db.execute(select(Person).where(Person.company_id == co.id)))
+        .scalars()
+        .all()
+    )
+    competitors = (
+        (
+            await db.execute(
+                select(Competitor).where(Competitor.company_id == co.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert people == []
+    assert competitors == []
+
+
+async def test_residue_pass_heals_already_reset_row(db: AsyncSession) -> None:
+    """Pass (f): a row with the post-reset signature (website + description +
+    last_enriched_at all NULL) but leftover people/industry gets its residue
+    cleared; a second run selects nothing."""
+    from nous.db.models import Person
+
+    co = _co(
+        "Amiato Residue Co",
+        "amiato-residue-co",
+        website=None,
+        description_short=None,
+        industry_group="media & entertainment",
+        hq_city="Buenos Aires",
+    )
+    db.add(co)
+    await db.flush()
+    db.add(
+        Person(
+            company_id=co.id, name="Nico Cerdeira", role="Founder", rank=1
+        )
+    )
+    await db.commit()
+
+    summary = await run_repair_wrong_websites(db)
+    assert summary.enrichment_residue_cleared == 1
+
+    await db.refresh(co)
+    assert co.industry_group is None
+    assert co.hq_city is None
+    people = (
+        (await db.execute(select(Person).where(Person.company_id == co.id)))
+        .scalars()
+        .all()
+    )
+    assert people == []
+
+    second = await run_repair_wrong_websites(db)
+    assert second.enrichment_residue_cleared == 0
+
+
+async def test_residue_pass_spares_enriched_companies(db: AsyncSession) -> None:
+    """A normally-enriched company (website + description + stamp present)
+    keeps its people/industry — pass (f) requires the full reset signature."""
+    from nous.db.models import Person
+
+    co = _co(
+        "Healthy Co",
+        "healthy-co",
+        website="https://healthy.example.com/",
+        description_short="Healthy Co builds developer tools.",
+        industry_group="developer tools",
+        last_enriched_at=datetime(2026, 7, 1, tzinfo=UTC),
+    )
+    db.add(co)
+    await db.flush()
+    db.add(Person(company_id=co.id, name="Jane Doe", role="CEO", rank=1))
+    await db.commit()
+
+    summary = await run_repair_wrong_websites(db)
+    assert summary.enrichment_residue_cleared == 0
+    await db.refresh(co)
+    assert co.industry_group == "developer tools"

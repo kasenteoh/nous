@@ -208,6 +208,7 @@ _COMMON_NAME_WORDS: frozenset[str] = frozenset(
         "aardvark",
         "anchor",
         "apple",
+        "away",
         "arc",
         "atom",
         "beam",
@@ -325,6 +326,88 @@ def _company_name_tokens(name: str) -> list[str]:
     return _tokenize(strip_corporate_suffix(name))
 
 
+# Tokens that, adjacent to a single-common-word company name, mark it as the
+# SUBJECT of a funding sentence rather than an incidental use of the word.
+# "Away raises $50M" / "travel startup Away…" attribute; "diversify away from
+# China will need funding" / "take funding away from schools" do not (2026-07
+# QA: the "Away" luggage brand collected a timeline of articles that merely
+# used the word). Following-verbs and preceding-markers are checked on the
+# token stream, so case and punctuation never matter (title-case headlines
+# capitalize every word, which defeats a case-sensitivity rule instead).
+_FUNDING_VERBS_AFTER: frozenset[str] = frozenset(
+    {
+        "raises",
+        "raised",
+        "raise",
+        "raising",
+        "secures",
+        "secured",
+        "lands",
+        "landed",
+        "closes",
+        "closed",
+        "nabs",
+        "nabbed",
+        "banks",
+        "announces",
+        "announced",
+        "gets",
+        "hits",
+        "valued",
+        "reaches",
+        "scores",
+        "adds",
+        "attracts",
+    }
+)
+_COMPANY_MARKERS_BEFORE: frozenset[str] = frozenset(
+    {
+        "startup",
+        "startups",
+        "company",
+        "brand",
+        "maker",
+        "firm",
+        "app",
+        "platform",
+        "unicorn",
+    }
+)
+
+
+def _common_word_name_in_context(token: str, haystack: list[str]) -> bool:
+    """True when ``token`` appears as the SUBJECT of a funding phrase.
+
+    For a company named by one bare dictionary word ("Away", "Clear"), a
+    whole-token match is meaningless — every article using the word matches.
+    Accepted occurrence shapes (tokenized, so punctuation/case-free):
+
+    - a funding verb within the next TWO tokens — "Away raises …" and
+      "Aardvark Therapeutics raises …" (the tracked name may be a prefix of
+      the article's fuller name);
+    - a company marker immediately before — "travel startup Away …";
+    - the appositive shape — "Ramp, the corporate card startup, announced":
+      NAME + "the" + a marker within the next three tokens.
+
+    "diversify away from China will need funding" and title-case "Take
+    Funding Away From Jeffco Schools" match none of these.
+    """
+    for i, tok in enumerate(haystack):
+        if tok != token:
+            continue
+        if any(t in _FUNDING_VERBS_AFTER for t in haystack[i + 1 : i + 3]):
+            return True
+        if i > 0 and haystack[i - 1] in _COMPANY_MARKERS_BEFORE:
+            return True
+        if (
+            i + 1 < len(haystack)
+            and haystack[i + 1] == "the"
+            and any(t in _COMPANY_MARKERS_BEFORE for t in haystack[i + 2 : i + 5])
+        ):
+            return True
+    return False
+
+
 def article_mentions_company(
     company_name: str,
     title: str,
@@ -364,6 +447,21 @@ def article_mentions_company(
         return False
 
     title_tokens = _tokenize(title)
+
+    # A ONE-token dictionary-word name ("Away", "Clear") is the maximally
+    # collision-prone case: a bare whole-token match attributes every article
+    # that merely USES the word ("diversify away from China will need
+    # funding"). Require the word to be the subject of a funding phrase —
+    # in the title, or in the lede when the title is funding-flavored.
+    if len(name_tokens) == 1 and name_tokens[0] in _COMMON_NAME_WORDS:
+        word = name_tokens[0]
+        if _common_word_name_in_context(word, title_tokens):
+            return True
+        if body and _matches_funding_keyword(title):
+            lede_tokens = _tokenize(body[:RELEVANCE_BODY_PORTION_CHARS])
+            return _common_word_name_in_context(word, lede_tokens)
+        return False
+
     title_has = _phrase_in_tokens(name_tokens, title_tokens)
 
     body_has = False
