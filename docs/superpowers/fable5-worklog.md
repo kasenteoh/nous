@@ -1721,3 +1721,56 @@ Owner: "let's do it" (the QA P0s). Both adversarially reviewed (APPROVE).
 - Review: no blocking; fixes applied — different-round spare + test,
   trim-aligned SQL title match, shared _GOOGLE_NEWS_HOST constant. Suite
   1790 green.
+
+## PR #219 — feat(pipeline): aardvark-class entity guard + wrong-site residue heal (P1)
+
+- Driven by this session's verify-after-cron findings: the #215 heal was
+  incomplete. helix kept machinebrief's leadership/industry/competitors (its
+  REAL $10B Selipsky/KKR round — confirmed by fetching the SiliconANGLE
+  article — still crowned media & entertainment on /trends); away was
+  RE-poisoned with a cloudflareaccess.com/cdn-cgi JWT login URL; away/
+  aardvark timelines were dictionary-word keyword garbage.
+- Single-common-word names ("Away") now need funding-subject context: a
+  funding verb within 2 tokens / a funding noun immediately after (the
+  possessive "Away's Series D" shape) / a company marker before / the
+  appositive "Ramp, the corporate card startup, announced" shape. Case rules
+  can't do this (title-case headlines capitalize everything). "away" joined
+  _COMMON_NAME_WORDS.
+- cloudflareaccess.com + /cdn-cgi/ paths joined is_aggregator_url — every
+  resolver + repair pass (a) inherits the block; away's stored URL heals on
+  the next cron.
+- The wrong-company reset now clears people/competitors/industry/HQ/
+  embedding/prompt stamps; new pass (f) drains the pre-fix residue
+  (post-reset triple-NULL signature + residue present) then no-ops.
+- Review (APPROVE): possessive gap + missing verbs + hq_country selection
+  fixed in-session; the two existing Ramp/Aardvark tests caught my first
+  over-tight rule — adjacency window + appositive + funding-noun shapes are
+  the calibrated result. Suite 1800 green.
+
+## PR #220 — feat(pipeline): repair-misattributed-news — retroactive purge
+
+- The destructive half of the P1 arc: re-runs the (now-hardened) ingest
+  relevance guard over EVERY stored article of the shown cohort; articles
+  that never mention the company are deleted with the rounds extracted from
+  them. Targets: helix's Kinoa/Coval/ChatSee rounds (cross-host survivors
+  the #215 same-host purge deliberately spared), away/aardvark keyword
+  garbage. The real Helix $10B article+round survive (name in body; pinned
+  by test).
+- Dry-run by default; ops.yml gained repair-misattributed-news-dry-run/
+  -apply choices (slug input now optional, per-command validated). NOT
+  cron-wired until prod dry-run numbers are reviewed.
+- Review (REQUEST_CHANGES → fixed): disambiguated alias slugs made the
+  alias safety net UNMATCHABLE (6-hex suffix token) — both raw+stripped
+  variants now tried; a round confirmed by a surviving linked article is
+  KEPT with primary_news_url repointed (reconcile's first-write-wins could
+  crown the bad article on a real round); purge-local PBC/GmbH suffix
+  variants (the shared stripper can't learn them without changing every
+  normalize_name key). Suite 1808 green.
+
+## First post-P0 cron (2026-07-17 05:41Z run) — prod confirmation
+
+- repair-duplicate-rounds first apply: **22 shells deleted, 7 exact dups,
+  22 near-amount rows merged, 15 type-conflict rows folded, 74 phantom
+  valuation rows merged** (~140 junk rows). terrafirma $100M→$115M Series A
+  and sambanova Series D/E→dated Series F land exactly as designed;
+  Fireworks AI's $1.5B had FOUR near-amount variants ($1.52–1.6B) collapse.
