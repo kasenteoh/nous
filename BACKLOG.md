@@ -34,10 +34,12 @@ verdict accuracy, grounding_min 1.0 = zero fabrication). Prod holds 18 grounded
 verdicts; widen with `verify-sources.yml -f run_apply=true -f limit=N` (idempotent).
 
 **Remaining follow-ups:**
-- **Re-fetch path [M]** — verify the ~103 `refetch`-bucket facts (an http(s) source
-  with no stored text) by re-fetching politely (contact-email UA, robots.txt, 1
-  req/sec, SSRF guard); mirror `sources/news.py`. Grows addressable coverage ~13%.
-  Build AFTER #202/#205/#208 merge (all touch the verification stack).
+- ~~**Re-fetch path [M]**~~ — **SHIPPED (#223)**: `verify-sources --refetch`
+  widens selection to the ~103 refetch-bucket facts; one polite live fetch per
+  fact via `NewsClient.fetch_article_body` (robots, contact-email UA, 1 req/s,
+  SSRF), text transient — never persisted. Opt-in (CLI flag + verify-sources.yml
+  `refetch` input); cron untouched. Rollout: refetch dry-run dispatched
+  2026-07-17 → review verdicts → apply in bounded batches (~$0.04 total).
 - ~~**`unsupported` in the data-quality report [S]**~~ — **SHIPPED (#204)**:
   verdict counts + itemized unsupported facts in the cron report.
 - ~~**Apply cron cadence [S]**~~ — **SHIPPED (#205)**: `verify-sources --limit 40`
@@ -104,7 +106,7 @@ $100M); blue-origin = 12 rounds, 10 signal-free shells from pre-rumor-guard
   backlog (survivor prefers round-linked > dated > oldest; publisher-URL rows
   and other companies' identical titles untouched).
 
-### P1 — wrong-entity news attribution (aardvark class) [M] — guard + residue SHIPPED, retroactive purge next
+### ~~P1 — wrong-entity news attribution (aardvark class)~~ — SHIPPED end-to-end (#219–#222, purge APPLIED 2026-07-17)
 QA: `/c/aardvark` timeline is keyword-scrape garbage (Arthur cartoon, rugby
 memorial, day-care funding) and its $85M Series C cites only a Google News
 aggregator URL. ingest-news company matching needs a name-ambiguity guard
@@ -119,10 +121,16 @@ existing news mis-attribution guard (#116) needs a second pass.
   clears people/competitors/industry/HQ/embedding, and new pass (f) drains
   the pre-fix residue on helix/amiato/away (fixes the /trends
   media-entertainment $10B misfile — the round is real, the industry wasn't).
-- ⬜ **Next:** the retroactive wrong-entity article/round purge (re-run
-  article_mentions_company over stored articles; delete rounds whose primary
-  article never mentions the company — kills helix's Kinoa/Coval/ChatSee
-  rounds + aardvark's timeline garbage). Needs a $0 dry-run lever first.
+- ✅ **Shipped (purge, #220/#221/#222):** repair-misattributed-news re-runs
+  the hardened guard over every stored article; ops.yml dry-run/apply lever;
+  batch-loaded scan (the per-company loop blew ops' 10-min timeout); two
+  precision spares from the prod dry-run review (squashed name, distinctive
+  head token — dictionary heads denied). **APPLIED on prod 2026-07-17:
+  2,861 articles + 35 wrong-entity rounds deleted across 577 companies**
+  (helix's Kinoa/Coval/ChatSee rounds + aardvark/away timeline garbage gone;
+  dry-run and apply counters matched exactly). Deleted-but-genuine articles
+  self-heal: the hardened ingest guard re-admits them from the next news
+  cycle.
 
 ### ~~P1 — "in talks" rumor language verified as a completed round~~ — SHIPPED (#214)
 Both layers hardened (funding_extraction 2026-07-16.1 + source_verification

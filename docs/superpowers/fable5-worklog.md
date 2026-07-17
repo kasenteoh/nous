@@ -1791,3 +1791,34 @@ Owner: "let's do it" (the QA P0s). Both adversarially reviewed (APPROVE).
   the bare head token pass article_mentions_company on its own — the
   _COMMON_NAME_WORDS guard is now the ONLY thing deleting the row (verified
   empirically; dropping the guard flips the test). Suite 1809 green.
+
+## PR #223 — feat(pipeline): verify-sources --refetch — the refetch bucket
+
+- Queue item 3: verification for facts whose cited http(s) source has no
+  stored text (~103 on prod, ~13% coverage growth). _source_selectable widens
+  each fact collector's SQL predicate (http% AND NOT news.google.com) ONLY
+  under the flag; classify_source stays the Python-side bucket truth and
+  re-gates at load time (SQL-wider-than-Python is the safe fail direction —
+  reviewer-traced). One polite live fetch per fact through
+  NewsClient.fetch_article_body (robots, SEC_USER_AGENT UA, shared 1 req/s
+  throttle, SSRF guard on every redirect hop); fetched text is transient —
+  the verdict row with its verbatim grounded quote is the durable artifact.
+- Etiquette is contractual: refetch without a UA raises at two levels (stage
+  ValueError + CLI ClickException). Opt-in only — --refetch + a refetch
+  dispatch input on verify-sources.yml (SEC_USER_AGENT added to its env);
+  the 3h cron step untouched. MIN_BODY_CHARS(500) > _MIN_SOURCE_CHARS(200),
+  so no thin fetch can ever reach the model (false-✓ path closed by
+  construction; grounding checks the SAME text the model saw).
+- Review (APPROVE, 0 blocking, 2 LOW noted-not-changed). 3 new DB-gated
+  tests: transience + GN exclusion, failed-fetch skip + counters, UA
+  contract. Suite 1811 green.
+
+## Prod ops (2026-07-17) — misattributed-news purge APPLIED
+
+- Post-#222 dry-run: 3,245 companies / 13,839 articles scanned → 2,861
+  flagged (20.7%), 35 rounds, 577 companies; examples uniformly wrong-entity
+  (aardvark rugby/PBS, "21st"/"adaptive" grant stories, acceleron carrying
+  other biotechs' rounds). Apply matched the dry-run EXACTLY (2,861 + 35).
+  helix's Kinoa/Coval/ChatSee rounds are gone; the real $10B Selipsky round
+  survives. Deleted-but-genuine articles self-heal via the hardened ingest
+  guard on the next news cycle.
