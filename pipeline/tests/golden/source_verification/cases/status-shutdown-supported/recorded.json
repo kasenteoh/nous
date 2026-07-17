@@ -1,9 +1,9 @@
 {
   "provenance": "deepseek",
   "model": "deepseek-chat",
-  "recorded_at": "2026-07-17T16:03:02+00:00",
+  "recorded_at": "2026-07-16T15:34:06+00:00",
   "response": {
     "verdict": "supported",
-    "supporting_quote": "Drift has shut down after failing to raise a new round"
+    "supporting_quote": "Drift has shut down"
   }
 }
