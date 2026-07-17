@@ -173,6 +173,9 @@ export default function RootLayout({
               <a href="/feed.xml" className="hover:text-ink transition-colors">
                 RSS
               </a>
+              <Link href="/stats" className="hover:text-ink transition-colors">
+                Status
+              </Link>
               <Link href="/about" className="hover:text-ink transition-colors">
                 About
               </Link>
