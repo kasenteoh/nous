@@ -89,12 +89,42 @@ class RepairDuplicateRoundsSummary(BaseModel):
     dry_run: bool = False
 
 
+# round_type strings that carry NO discriminating signal — placeholder text an
+# outlet (or the extraction) used where the series letter was unknown. Treating
+# them as typed would block a merge with the real round ("Series ?" $1B vs
+# "Series F" $1B are the same event reported by an outlet that didn't know the
+# letter — observed on sambanova, 2026-07-16 QA). Normalized to None so the
+# equal-or-null compatibility rule applies. Deliberately NOT included: real
+# generic types that still discriminate ("seed", "venture round", "grant").
+_PLACEHOLDER_ROUND_TYPES: frozenset[str] = frozenset(
+    {
+        "series ?",
+        "series",
+        "round",
+        "funding round",
+        "unknown",
+        "undisclosed",
+        "unspecified",
+        "n/a",
+        "none",
+        "?",
+        "tbd",
+    }
+)
+
+
 def _normalized_type(round_type: str | None) -> str | None:
-    """Lowercased/stripped round_type for clustering, or None when blank."""
+    """Lowercased/stripped round_type for clustering, or None when blank.
+
+    Placeholder strings that carry no round identity ("Series ?", "unknown")
+    also normalize to None — see ``_PLACEHOLDER_ROUND_TYPES``.
+    """
     if round_type is None:
         return None
     stripped = round_type.strip().lower()
-    return stripped or None
+    if not stripped or stripped in _PLACEHOLDER_ROUND_TYPES:
+        return None
+    return stripped
 
 
 def _survivor_sort_key(row: FundingRound) -> tuple[int, int, int, int, float]:
@@ -111,7 +141,7 @@ def _survivor_sort_key(row: FundingRound) -> tuple[int, int, int, int, float]:
     plain comparable tuple. created_at is server-defaulted NOT NULL, but guard
     for a not-yet-flushed None defensively.
     """
-    has_type = 0 if row.round_type is not None else 1
+    has_type = 0 if _normalized_type(row.round_type) is not None else 1
     has_date = 0 if row.announced_date is not None else 1
     conf_rank = _CONFIDENCE_RANK.get(row.extraction_confidence or "", -1)
     has_good_source = (
@@ -130,7 +160,9 @@ def _fold_loser_into_survivor(survivor: FundingRound, loser: FundingRound) -> No
     higher confidence wins, and primary_news_url is first-write-wins (the
     survivor's earliest/most-stable attribution is kept).
     """
-    if survivor.round_type is None and loser.round_type is not None:
+    # Placeholder types ("Series ?") normalize to None for clustering; never
+    # gap-fill a placeholder string onto a survivor either.
+    if survivor.round_type is None and _normalized_type(loser.round_type) is not None:
         survivor.round_type = loser.round_type
     if survivor.amount_raised is None and loser.amount_raised is not None:
         survivor.amount_raised = loser.amount_raised
@@ -193,7 +225,7 @@ def _is_phantom_valuation_row(row: FundingRound) -> bool:
     left untouched.
     """
     return (
-        row.round_type is None
+        _normalized_type(row.round_type) is None
         and row.announced_date is None
         and row.amount_raised is None
         and row.valuation_post_money is not None
@@ -209,7 +241,7 @@ def _is_more_complete_round(row: FundingRound) -> bool:
     """
     return (
         row.amount_raised is not None
-        or row.round_type is not None
+        or _normalized_type(row.round_type) is not None
         or row.announced_date is not None
     )
 
@@ -390,7 +422,8 @@ async def run_repair_duplicate_rounds(
         survivors_pool: list[FundingRound] = []
         for row in rows:
             if (
-                row.round_type is None
+                # Placeholder-only types ("Series ?") carry no signal either.
+                _normalized_type(row.round_type) is None
                 and row.announced_date is None
                 and row.amount_raised is None
                 and row.valuation_post_money is None

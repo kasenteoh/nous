@@ -108,7 +108,7 @@ on:
         type: boolean
         default: false
       repair_dupes_apply:
-        description: "When run_repair_dupes is set: actually delete. Default false = --dry-run (log intended collapses only)."
+        description: "When run_repair_dupes is set: actually delete. Default false = --dry-run (log intended collapses only). Scheduled cron runs always apply."
         required: false
         type: boolean
         default: false
@@ -282,17 +282,19 @@ jobs:
 
       - name: Repair duplicate funding rounds
         id: repair_dupes
-        if: ${{ inputs.run_repair_dupes == true }}
-        # One-off cleanup: collapse duplicate funding rounds the historical news
-        # backfill created by re-reporting one round from many articles (e.g.
-        # Helion's $465M Series G across 5 rows). The reconcile fix now prevents
-        # new dupes; this removes the existing ones. Default is a dry-run that
-        # only logs intended collapses — dispatch with repair_dupes_apply=true to
-        # actually delete.
+        if: ${{ github.event_name == 'schedule' || inputs.run_repair_dupes == true }}
+        # Collapse duplicate funding rounds left by multi-article re-reporting
+        # (e.g. Helion's $465M Series G across 5 rows) and delete signal-free
+        # empty shells (blue-origin accumulated 10 from pre-rumor-guard "seeks
+        # $10B" articles — 2026-07-16 QA). Idempotent + conservative (equal
+        # amounts, compatible types only), so it now runs on EVERY scheduled
+        # cron in apply mode — same promotion repair-wrong-websites got in #215.
+        # Manual dispatches keep the explicit gates: run_repair_dupes to run at
+        # all, repair_dupes_apply=false (default) for a log-only dry-run.
         timeout-minutes: 15
         continue-on-error: true
         run: |
-          if [ "${{ inputs.repair_dupes_apply }}" = "true" ]; then
+          if [ "${{ github.event_name }}" = "schedule" ] || [ "${{ inputs.repair_dupes_apply }}" = "true" ]; then
             uv run nous repair-duplicate-rounds
           else
             uv run nous repair-duplicate-rounds --dry-run
