@@ -41,12 +41,17 @@ never a ✓; the guard doing its job). Fetch failures (~6 robots/4xx) carry
 no verdict row and re-select next run by design — never verify against
 unread text.
 
-**Open follow-ups from this session:** decide whether the 3h cron's
-verify step gets a hardcoded `--refetch` (no new input needed — pipeline.yml
-is at the 25-input cap); the [S] items + golden-case nits below are
-untouched; helix/away/amiato re-enrich honestly as the crons re-resolve
-real websites (away.ai is Cloudflare-403 — expect the non-origin fallback
-to pick it up).
+**Follow-ups CLOSED 2026-07-17 (PRs #224–#225):** the cron verify step is
+now `--limit 40 --refetch`; the valuation rule is scoped to closed rounds
+(funding_extraction 2026-07-17.1, live-re-recorded, all floors green); the
+mixed completed/in-talks golden case is live-recorded `supported`; /trends
+carries the coverage caveat and /new day buckets a UTC tag; /vs-sitemap and
+404-title were policy-closed no-code in BACKLOG. Remaining watch items:
+helix/away/amiato re-enrich as the crons re-resolve real sites, and the
+uncertain/unsupported recording variance (BACKLOG [S]). **The 2026-07-16 QA
+queue is now fully drained — the frontier is platform health** (embedding/
+Vercel decoupling, observability: Sentry + pipeline_runs surfacing) and
+whatever the owner picks next from ROADMAP Later.
 
 ## LATEST UPDATE — three arcs shipped and MERGED (2026-07-15/16, PRs #202–#215)
 

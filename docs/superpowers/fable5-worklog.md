@@ -1840,3 +1840,35 @@ Owner: "let's do it" (the QA P0s). Both adversarially reviewed (APPROVE).
 - Post-purge inspect-company (helix-digital-infrastructure): funding_round_
   count=1 — ONLY the real $10B (2026-06-11) Selipsky/KKR/Nvidia round
   remains; website/description cleared → honest husk pending re-resolution.
+
+## PR #224 — feat(pipeline): cron --refetch + valuation-rule scoping + mixed rumor case (merged 2026-07-17)
+
+- The 3h cron's verify step is now `--limit 40 --refetch` (the stored-text
+  pool drained; refetch facts get their one polite transient fetch on the
+  same budget — review confirmed robots/UA/SSRF/throttle/failure handling
+  end-to-end). funding_extraction **2026-07-17.1** scopes the always-
+  capture-valuation rule to CLOSED rounds (provenance-only bump; selection
+  is processed-once). New source_verification golden case
+  `completed-raise-with-talks-supported` — live-recorded `supported`, so
+  the completed-vs-intended rule provably doesn't over-trigger on in-talks
+  language about a DIFFERENT future round.
+- **Recording-review call worth remembering:** the same re-record run
+  flipped 3 old silent-source cases uncertain→unsupported (temperature
+  variance; badge-less either way). Kept the stable prior recordings, took
+  only the new case — gate at 0.950 instead of committing a 0.850 snapshot.
+  Variance noted in BACKLOG (a future prompt pass should sharpen the
+  silent-vs-contradicts wording). Funding set re-recorded live against the
+  new template: every floor green (announcement 0.952, fields_f1 0.943).
+  Review: APPROVE (LOW newline fixed).
+
+## PR #225 — fix(web): /trends coverage caveat + UTC tags on /new (merged 2026-07-17)
+
+- /trends carries a one-line coverage-honesty caveat (growth vs
+  pre-coverage windows is coverage-relative — the reviewer's judgment:
+  trust-building, not gap-advertising; it targets exactly the reader who
+  would otherwise silently discount the surface). /new day buckets carry an
+  explicit UTC tag ("dates from the future" QA finding). BACKLOG records
+  the two policy-decided no-code items (/vs sitemap enumeration deferred;
+  404 streamed-title is framework behavior, status code correct).
+  Review: APPROVE (0 issues). **The 2026-07-16 QA section's [S] tail is
+  now closed** except the self-healing /new husk descriptions.
