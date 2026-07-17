@@ -336,7 +336,13 @@ async def test_spacing_variant_and_head_token_spared(db: AsyncSession) -> None:
     """Prod dry-run precision review (2026-07-17): 'PhysicsWallah raises…'
     must protect the 'Physics Wallah' row (squashed variant) and 'Genesis
     raises $200M…' must protect Genesis Therapeutics (distinctive head
-    token). A dictionary-word head ('Away Travel') gets NO head-token spare."""
+    token). A dictionary-word head ('Away Travel') gets NO head-token spare.
+
+    The Away title is chosen so the bare head token 'away' PASSES
+    article_mentions_company on its own (funding-verb adjacency: 'Away
+    raises') while the full name and squashed variant fail — so the ONLY
+    thing deleting this row is the `head not in _COMMON_NAME_WORDS` guard.
+    Dropping that guard flips this test (verified empirically)."""
     pw = _co("Physics Wallah", "physics-wallah-purge")
     genesis = _co("Genesis Therapeutics", "genesis-tx-purge")
     away = _co("Away Travel", "away-travel-purge")
@@ -361,9 +367,9 @@ async def test_spacing_variant_and_head_token_spared(db: AsyncSession) -> None:
             NewsArticle(
                 company_id=away.id,
                 url="https://news.google.com/rss/articles/CBMiAWAYGARB?oc=5",
-                title="Take funding away from the program, lawmakers say",
+                title="Away raises $50M for school program expansion",
                 source="news.google.com",
-                raw_content="Take funding away from the program, lawmakers say",
+                raw_content="Away raises $50M for school program expansion",
             ),
         ]
     )
