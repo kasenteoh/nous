@@ -10,7 +10,8 @@
     "lint": "eslint",
     "test": "vitest run",
     "test:e2e": "playwright test",
-    "check:bundle": "node scripts/check-client-bundle.mjs"
+    "check:bundle": "node scripts/check-client-bundle.mjs",
+    "check:size": "node scripts/check-function-size.mjs"
   },
   "dependencies": {
     "@huggingface/transformers": "^4.2.0",
