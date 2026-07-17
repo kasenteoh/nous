@@ -66,6 +66,7 @@ export default async function sitemap(props: {
     // momentum_score lands on prod.
     { url: `${origin}/trending` },
     { url: `${origin}/about` },
+    { url: `${origin}/stats` },
   ];
 
   const [

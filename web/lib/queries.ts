@@ -39,6 +39,7 @@ import type {
   NamedAlternative,
   NewsArticleRow,
   PersonRow,
+  PipelineRunRow,
   RelatedCompany,
   SimilarCompany,
   ThemeDetail,
@@ -1458,6 +1459,31 @@ export async function industryFundingMomentum(): Promise<IndustryMomentumRow[]> 
         ]
       : [],
   );
+}
+
+/**
+ * Recent pipeline-stage runs, newest first — the /stats freshness page's
+ * source. A bounded window (default 400 rows ≈ several days of 3h crons)
+ * keeps the read cheap; the page reduces it to latest-per-stage. Returns []
+ * on missing env or error (the page renders its empty state).
+ */
+export async function listRecentPipelineRuns(
+  limit = 400,
+): Promise<PipelineRunRow[]> {
+  const supabase = supabaseOrNull("listRecentPipelineRuns");
+  if (!supabase) return [];
+
+  const { data, error } = await supabase
+    .from("pipeline_runs")
+    .select("stage, started_at, finished_at, status, inputs_seen, rows_written")
+    .order("finished_at", { ascending: false })
+    .limit(limit);
+
+  if (error) {
+    console.error("[listRecentPipelineRuns] query failed:", error.message);
+    return [];
+  }
+  return (data ?? []) as PipelineRunRow[];
 }
 
 /** Exact number of companies in the index (head-only count). */

@@ -250,3 +250,26 @@ export function growthToneClass(label: string): string {
   if (label.startsWith("−")) return "text-warn";
   return "text-ink-faint";
 }
+
+/**
+ * Coarse relative time for freshness displays ("just now", "3 hours ago",
+ * "2 days ago"). `now` is injectable for tests. Falls back to "—" on a
+ * missing/unparseable timestamp — a freshness surface must never fabricate
+ * recency.
+ */
+export function formatRelativeTime(
+  iso: string | null | undefined,
+  now: Date = new Date(),
+): string {
+  if (!iso) return "—";
+  const then = new Date(iso);
+  if (isNaN(then.getTime())) return "—";
+  const seconds = Math.max(0, (now.getTime() - then.getTime()) / 1000);
+  if (seconds < 90) return "just now";
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 90) return `${minutes} minutes ago`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 36) return `${hours} ${hours === 1 ? "hour" : "hours"} ago`;
+  const days = Math.round(hours / 24);
+  return `${days} ${days === 1 ? "day" : "days"} ago`;
+}

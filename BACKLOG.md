@@ -151,6 +151,9 @@ supported). Batch both with the next eval-record run.
   consider a bounded re-resolve backfill for primary_news_url redirects.
 - **/new missing descriptions** (husk cards — heals as enrichment covers
   them) [S].
+- **pipeline_runs.finished_at index [XS]:** /stats orders by finished_at DESC
+  with only a stage index present — fine at ~40 rows/day for years; add
+  ix_pipeline_runs_finished_at with the next migration touching that area.
 - **uncertain/unsupported boundary is temperature-sensitive [S]:** back-to-back
   live re-records flipped 3 silent-source cases uncertain→unsupported (never a
   ✓ risk — both are badge-less — but it noises the internal unsupported

@@ -452,6 +452,18 @@ export interface HuskFallbackRow {
  * `fact_ref = ''`; a funding round uses the round's id); `source_url` is matched
  * against the figure's CURRENT source so a stale verdict never shows a badge.
  */
+/** One pipeline-stage execution from `pipeline_runs` — the pipeline's own
+ *  observability audit trail (see pipeline models.PipelineRun). Read by the
+ *  public /stats freshness page. */
+export interface PipelineRunRow {
+  stage: string;
+  started_at: string;
+  finished_at: string;
+  status: string; // 'success' | 'empty' | 'error'
+  inputs_seen: number;
+  rows_written: number;
+}
+
 export interface FactVerification {
   fact_kind: string;
   fact_ref: string;
