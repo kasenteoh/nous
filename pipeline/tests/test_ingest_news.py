@@ -1091,3 +1091,115 @@ async def test_broad_sweep_one_failing_source_does_not_block_others(
     assert set(calls) == {slug for _, slug in _BROAD_FETCHERS}, (
         f"Expected all six adapters called despite the TC failure, got: {calls}"
     )
+
+
+@pytestmark_db
+async def test_gn_duplicate_title_skipped(
+    db: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Google re-serves one story under a fresh opaque CBMi… URL each sweep
+    (the blue-origin "MSN ×3" class): when resolution fails, the second
+    identical headline for the same company is skipped, not stored."""
+    company = _make_company("Blue Origin Test")
+    db.add(company)
+    await db.flush()
+    await db.commit()
+
+    title = "Bezos seeks $10B for Blue Origin Test in first outside funding - MSN"
+    first_url = "https://news.google.com/rss/articles/CBMiFIRST?oc=5"
+    second_url = "https://news.google.com/rss/articles/CBMiSECOND?oc=5"
+    results = [
+        NewsArticleResult(
+            url=first_url,
+            title=title,
+            source="news.google.com",
+            published_date=date(2026, 7, 1),
+            raw_content="Blue Origin Test raises funding.",
+        ),
+        NewsArticleResult(
+            url=second_url,
+            title=title,
+            source="news.google.com",
+            published_date=date(2026, 7, 2),
+            raw_content="Blue Origin Test raises funding.",
+        ),
+    ]
+    client = _MockNewsClient(
+        rss_results={'"Blue Origin Test" funding': results},
+        resolved={first_url: None, second_url: None},
+    )
+
+    async def _no_tc(*args: Any, **kwargs: Any) -> list[NewsArticleResult]:
+        return []
+
+    monkeypatch.setattr(
+        "nous.pipeline.ingest_news.fetch_techcrunch_funding_articles", _no_tc
+    )
+
+    summary = await run_ingest_news(db, client, include_techcrunch_broad=False)
+
+    assert summary.articles_inserted == 1
+    assert summary.articles_skipped_duplicate_title == 1
+    rows = (
+        (
+            await db.execute(
+                select(NewsArticle).where(NewsArticle.company_id == company.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert len(rows) == 1
+    assert rows[0].url == first_url
+
+
+@pytestmark_db
+async def test_gn_same_title_different_company_not_skipped(
+    db: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The title dedup is scoped per company — an identical headline stored for
+    another company never suppresses this one's article."""
+    a = _make_company("Same Title Co A")
+    b = _make_company("Same Title Co B")
+    db.add_all([a, b])
+    await db.flush()
+    title = "Same Title Co A and Same Title Co B raise funding - Wire"
+    db.add(
+        NewsArticle(
+            company_id=a.id,
+            url="https://news.google.com/rss/articles/CBMiOTHER?oc=5",
+            title=title,
+            source="news.google.com",
+            raw_content="body",
+        )
+    )
+    await db.commit()
+
+    fresh_url = "https://news.google.com/rss/articles/CBMiFRESH?oc=5"
+    client = _MockNewsClient(
+        rss_results={
+            '"Same Title Co B" funding': [
+                NewsArticleResult(
+                    url=fresh_url,
+                    title=title,
+                    source="news.google.com",
+                    published_date=date(2026, 7, 2),
+                    raw_content="funding",
+                )
+            ]
+        },
+        resolved={fresh_url: None},
+    )
+
+    async def _no_tc(*args: Any, **kwargs: Any) -> list[NewsArticleResult]:
+        return []
+
+    monkeypatch.setattr(
+        "nous.pipeline.ingest_news.fetch_techcrunch_funding_articles", _no_tc
+    )
+
+    summary = await run_ingest_news(db, client, include_techcrunch_broad=False)
+    assert summary.articles_skipped_duplicate_title == 0
+    assert summary.articles_inserted == 1

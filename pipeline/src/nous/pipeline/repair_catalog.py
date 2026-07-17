@@ -40,6 +40,7 @@ logs intended actions without writing.
 from __future__ import annotations
 
 import logging
+from collections import defaultdict
 from datetime import UTC, datetime
 from typing import Any, cast
 from uuid import UUID
@@ -87,6 +88,9 @@ class RepairSummary(BaseModel):
     placeholder_renamed: int = 0
     placeholder_excluded: int = 0
     news_round_links_set: int = 0
+    # Pass 5: duplicate headline-only Google-News rows deleted (same company,
+    # same title, different opaque CBMi… URLs — the "MSN ×3" class).
+    gn_duplicate_articles_deleted: int = 0
     dry_run: bool = False
 
 
@@ -369,6 +373,52 @@ async def run_repair_catalog(
             ),
         )
         summary.news_round_links_set = linked.rowcount or 0
+
+    # ── Pass 5: duplicate Google-News headline rows ──────────────────────────
+    # ingest-news now skips a headline-only GN fallback whose title the company
+    # already has (see _gn_title_already_stored); this pass drains the rows the
+    # old behavior accumulated (blue-origin stored one MSN headline 3×, each
+    # under a fresh opaque /rss/articles/CBMi… URL — 2026-07-16 QA). Grouped by
+    # (company_id, lower(title)) over GN-host rows only; the survivor prefers a
+    # round-linked row, then one with a published date, then the oldest — so an
+    # existing funding_round_id link (0044) is never the row that dies. Losers
+    # have no dependents (nothing FKs to news_articles), so a plain delete.
+    gn_rows = (
+        await session.execute(
+            select(
+                NewsArticle.id,
+                NewsArticle.company_id,
+                NewsArticle.title,
+                NewsArticle.funding_round_id,
+                NewsArticle.published_date,
+                NewsArticle.created_at,
+            )
+            .where(NewsArticle.url.like("https://news.google.com/%"))
+            .order_by(NewsArticle.company_id, NewsArticle.id)
+        )
+    ).all()
+    by_title: dict[tuple[UUID, str], list[Any]] = defaultdict(list)
+    for row in gn_rows:
+        by_title[(row.company_id, row.title.strip().lower())].append(row)
+    gn_loser_ids: list[UUID] = []
+    for group in by_title.values():
+        if len(group) < 2:
+            continue
+        ordered = sorted(
+            group,
+            key=lambda r: (
+                r.funding_round_id is None,  # linked rows first
+                r.published_date is None,  # dated rows next
+                r.created_at,  # then oldest
+                str(r.id),  # deterministic final tie-break
+            ),
+        )
+        gn_loser_ids.extend(r.id for r in ordered[1:])
+    summary.gn_duplicate_articles_deleted = len(gn_loser_ids)
+    if gn_loser_ids and not dry_run:
+        await session.execute(
+            delete(NewsArticle).where(NewsArticle.id.in_(gn_loser_ids))
+        )
 
     if not dry_run:
         await session.commit()

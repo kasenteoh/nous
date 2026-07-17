@@ -23,7 +23,7 @@ from datetime import UTC, datetime
 from uuid import UUID
 
 from pydantic import BaseModel
-from sqlalchemy import exists, or_, select
+from sqlalchemy import exists, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from nous.db.models import Company, NewsArticle
@@ -88,6 +88,11 @@ class IngestNewsSummary(BaseModel):
     articles_skipped_irrelevant: int = 0
     # Google-News redirects that resolved to a real publisher body (Task A1).
     articles_resolved: int = 0
+    # Headline-only GN fallbacks skipped because the SAME title is already
+    # stored for this company under another opaque GN URL (Google re-serves
+    # one story with a fresh CBMi… token every sweep — the "MSN ×3" class,
+    # 2026-07-16 QA).
+    articles_skipped_duplicate_title: int = 0
     auto_created_companies: int = 0
     tc_skipped_no_company: int = 0
 
@@ -95,6 +100,30 @@ class IngestNewsSummary(BaseModel):
 async def _article_already_stored(session: AsyncSession, url: str) -> bool:
     """Cheap existence check on the unique URL — avoids the body fetch."""
     stmt = select(exists().where(NewsArticle.url == url))
+    return bool(await session.scalar(stmt))
+
+
+async def _gn_title_already_stored(
+    session: AsyncSession, company_id: UUID, title: str
+) -> bool:
+    """True when this company already has a Google-News-host article with the
+    SAME title (case-insensitive, whitespace-trimmed).
+
+    The news_articles.url uniqueness can't catch these: Google mints a fresh
+    opaque /rss/articles/CBMi… URL for the same story on every sweep, so the
+    identical headline (same outlet suffix and all) lands as a new row each
+    time resolution to the publisher fails. Titles are compared only WITHIN
+    one company and only for GN-host rows — two outlets covering the same
+    event have different "- Outlet" suffixes and are genuinely distinct
+    coverage, which the web timeline groups visually instead.
+    """
+    stmt = select(
+        exists().where(
+            NewsArticle.company_id == company_id,
+            NewsArticle.url.like(f"https://{_GOOGLE_NEWS_HOST}/%"),
+            func.lower(NewsArticle.title) == title.strip().lower(),
+        )
+    )
     return bool(await session.scalar(stmt))
 
 
@@ -168,6 +197,11 @@ async def _ingest_one_article(
             summary.articles_resolved += 1
         else:
             # Resolution failed — keep the headline (+ snippet); still useful.
+            # But not twice: Google re-serves the same story under a fresh
+            # opaque URL each sweep, so dedup headline-only rows by title.
+            if await _gn_title_already_stored(session, company_id, result.title):
+                summary.articles_skipped_duplicate_title += 1
+                return
             content = _headline_content(result)
     else:
         body = await client.fetch_article_body(result.url)
