@@ -108,7 +108,7 @@ on:
         type: boolean
         default: false
       repair_dupes_apply:
-        description: "When run_repair_dupes is set: actually delete. Default false = --dry-run (log intended collapses only)."
+        description: "When run_repair_dupes is set: actually delete. Default false = --dry-run (log intended collapses only). Scheduled cron runs always apply."
         required: false
         type: boolean
         default: false

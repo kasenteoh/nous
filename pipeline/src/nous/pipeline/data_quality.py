@@ -420,7 +420,7 @@ async def _suspect_duplicate_rounds(
                     SuspectDuplicateExample(
                         slug=slug,
                         kind="exact_dup",
-                        detail=f"{losers + 1} rows at ${amount:,.0f}",
+                        detail=f"{losers} dup row(s) at ${amount:,.0f}",
                     )
                 )
             # Contradicting non-null types on ONE amount with ≤1 dated row —

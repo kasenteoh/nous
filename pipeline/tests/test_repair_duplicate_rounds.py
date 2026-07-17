@@ -949,3 +949,40 @@ async def test_contradicting_real_types_same_amount_preserved(
 
     await run_repair_duplicate_rounds(db, dry_run=False)
     assert len(await _rounds_for(db, co.id)) == 2
+
+
+async def test_placeholder_typed_phantom_valuation_collapses(db: AsyncSession) -> None:
+    """A 'Series ?'-typed, valuation-only row is a phantom post-normalization.
+
+    Pins the behavior change from placeholder normalization: the placeholder
+    string no longer shields a valuation-only shell from Pass 3. It folds into
+    the more-complete sibling carrying the SAME valuation (never lost, #107).
+    """
+    co = _co("Phantom Placeholder Co", "phantom-placeholder-co")
+    db.add(co)
+    await db.flush()
+
+    real = FundingRound(
+        company_id=co.id,
+        round_type="Series B",
+        amount_raised=200_000_000,
+        announced_date=date(2026, 5, 1),
+        valuation_post_money=20_000_000_000,
+    )
+    phantom = FundingRound(
+        company_id=co.id,
+        round_type="Series ?",
+        amount_raised=None,
+        announced_date=None,
+        valuation_post_money=20_000_000_000,
+    )
+    db.add_all([real, phantom])
+    await db.commit()
+
+    summary = await run_repair_duplicate_rounds(db, dry_run=False)
+    assert summary.phantom_valuation_rows_merged == 1
+
+    rounds = await _rounds_for(db, co.id)
+    assert len(rounds) == 1
+    assert rounds[0].round_type == "Series B"
+    assert rounds[0].valuation_post_money == 20_000_000_000
