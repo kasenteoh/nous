@@ -1461,7 +1461,6 @@ export async function industryFundingMomentum(): Promise<IndustryMomentumRow[]> 
   );
 }
 
-/** Exact number of companies in the index (head-only count). */
 /**
  * Recent pipeline-stage runs, newest first — the /stats freshness page's
  * source. A bounded window (default 400 rows ≈ several days of 3h crons)
@@ -1487,6 +1486,7 @@ export async function listRecentPipelineRuns(
   return (data ?? []) as PipelineRunRow[];
 }
 
+/** Exact number of companies in the index (head-only count). */
 export async function countCompanies(): Promise<number> {
   const supabase = supabaseOrNull("countCompanies");
   if (!supabase) return 0;
