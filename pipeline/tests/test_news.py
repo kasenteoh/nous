@@ -1003,3 +1003,12 @@ def test_multiword_names_unaffected_by_common_word_rule() -> None:
     assert not article_mentions_company(
         "Blue Origin", "Origin stories: how startups name themselves"
     )
+
+
+def test_common_word_name_possessive_and_verb_variants() -> None:
+    """Review findings: possessive "Away's" must not push the verb out of the
+    adjacency window, and the verb list covers receives/bags/completes."""
+    assert article_mentions_company("Away", "Away's Series D raises $100M")
+    assert article_mentions_company("Away", "Away receives $50M investment")
+    assert article_mentions_company("Away", "Away bags $100M to expand")
+    assert article_mentions_company("Away", "Away completes $80M raise")

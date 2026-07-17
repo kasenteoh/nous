@@ -358,6 +358,16 @@ _FUNDING_VERBS_AFTER: frozenset[str] = frozenset(
         "scores",
         "adds",
         "attracts",
+        "receives",
+        "received",
+        "completes",
+        "completed",
+        "bags",
+        "bagged",
+        "grabs",
+        "grabbed",
+        "wins",
+        "won",
     }
 )
 _COMPANY_MARKERS_BEFORE: frozenset[str] = frozenset(
@@ -371,6 +381,22 @@ _COMPANY_MARKERS_BEFORE: frozenset[str] = frozenset(
         "app",
         "platform",
         "unicorn",
+    }
+)
+# Funding nouns immediately after the name mark it as the round's owner:
+# "Away's Series D…" (possessive 's is dropped from the token stream first),
+# "Clear funding round", "Away IPO". An incidental word rarely directly
+# precedes one of these.
+_FUNDING_NOUNS_AFTER: frozenset[str] = frozenset(
+    {
+        "series",
+        "seed",
+        "funding",
+        "round",
+        "valuation",
+        "investment",
+        "raise",
+        "ipo",
     }
 )
 
@@ -391,11 +417,19 @@ def _common_word_name_in_context(token: str, haystack: list[str]) -> bool:
 
     "diversify away from China will need funding" and title-case "Take
     Funding Away From Jeffco Schools" match none of these.
+
+    Possessives: the tokenizer splits "Away's" into ["away", "s"], which would
+    push the verb out of the adjacency window ("Away's Series D raises…") —
+    bare "s" tokens are dropped from the haystack first (zero false-positive
+    cost; no headline word is a bare "s").
     """
+    haystack = [t for t in haystack if t != "s"]
     for i, tok in enumerate(haystack):
         if tok != token:
             continue
         if any(t in _FUNDING_VERBS_AFTER for t in haystack[i + 1 : i + 3]):
+            return True
+        if i + 1 < len(haystack) and haystack[i + 1] in _FUNDING_NOUNS_AFTER:
             return True
         if i > 0 and haystack[i - 1] in _COMPANY_MARKERS_BEFORE:
             return True

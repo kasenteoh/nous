@@ -477,6 +477,7 @@ async def run_repair_wrong_websites(
                         Company.industry_group.is_not(None),
                         Company.hq_city.is_not(None),
                         Company.hq_state.is_not(None),
+                        Company.hq_country.is_not(None),
                         exists().where(Person.company_id == Company.id),
                         exists().where(Competitor.company_id == Company.id),
                     ),
