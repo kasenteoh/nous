@@ -129,9 +129,15 @@ export default async function NewThisWeekPage() {
         <div className="space-y-10">
           {buckets.map((bucket) => (
             <section key={bucket.date} aria-label={formatDate(bucket.date)}>
-              {/* Day heading */}
+              {/* Day heading. Buckets are UTC calendar days, so the newest one
+                  can read a day AHEAD of a US visitor's local date (a 2026-07
+                  QA finding: "dates from the future") — the explicit UTC tag
+                  makes the boundary honest instead of sloppy-looking. */}
               <h2 className="text-sm font-semibold text-ink border-b border-edge pb-2 mb-4">
-                {formatDate(bucket.date)}
+                {formatDate(bucket.date)}{" "}
+                <span className="font-mono text-xs font-normal text-ink-muted">
+                  UTC
+                </span>
               </h2>
 
               {/* Companies sub-section */}

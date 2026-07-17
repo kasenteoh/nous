@@ -84,6 +84,16 @@ export default async function TrendsPage() {
           recent rounds. Every figure is derived from funding rounds recorded
           from public announcements, never hand-entered.
         </p>
+        {/* Coverage honesty (2026-07 QA): nous's funding history ramped through
+            early 2026, so growth rates whose prior window predates coverage
+            partly measure catalog growth, not market growth. Saying so beats a
+            discerning reader concluding it silently. */}
+        <p className="mt-2 text-xs text-ink-muted max-w-2xl leading-relaxed">
+          Figures reflect funding indexed by nous. Coverage ramped through early
+          2026, so growth comparisons against earlier windows partly reflect
+          catalog growth — treat &ldquo;new&rdquo; and very large percentage
+          labels as coverage-relative.
+        </p>
       </header>
 
       {/* ── Funding by quarter (whole catalog) ──────────────────────────────── */}
