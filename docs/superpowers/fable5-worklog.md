@@ -1682,3 +1682,42 @@ Owner: "let's do it" (the QA P0s). Both adversarially reviewed (APPROVE).
 - Next slices queued: P0b near-amount merge gate + publication-date-gated
   letter fold (sized by this census's prod numbers); P0c Google News
   URL-variant article dedup.
+
+## PR #217 — feat(pipeline): near-amount + evidence-gated type-conflict merge passes (P0b)
+
+- The destructive half the #216 census sized. **Pass 2b** — near-amount
+  collapse: compatible types + compatible dates + amounts within ±15% of the
+  ANCHOR (greedy from the best-ranked row, never chained; the anchor keeps
+  its OWN amount so a figure and the source citing it always travel
+  together). **Pass 2c** — contradicting series letters (sambanova D/E vs
+  the dated F, all $1B) fold into the group's ONLY dated+typed anchor ONLY
+  when the loser's primary_news_url has a stored article published within
+  ±14d of the anchor date; no evidence / 2+ dated / untyped anchor → never
+  guess.
+- Reconcile hardened at the source: PLACEHOLDER_ROUND_TYPES +
+  normalized_round_type moved to db/upsert.py (single source of truth);
+  reconcile treats "Series ?" as None for matching AND persisting
+  (clean_round_type), so mislabeled aggregator headlines merge instead of
+  spawning fake-typed siblings and placeholders never land in rows again.
+- **Review (adversarial, APPROVE w/ comments) drove real hardening:** the
+  reviewer constructed a wrong-merge ($5M seed + later $4.5M seed, both
+  undated, 10% apart) → Pass 2b now requires ≥1 dated row per pair (census
+  mirrors it); dry-run now prunes the in-memory pool so cross-pass counts
+  can't double-count; deterministic row ordering (created_at ties left
+  survivor choice to Postgres heap order); both-undated pin + ±14d boundary
+  tests added. Suite 1785 green.
+
+## PR #218 — feat(pipeline): dedup Google-News headline-variant articles (P0c)
+
+- Closes the third P0 slice: Google mints a fresh opaque /rss/articles/CBMi…
+  URL per sweep, so unresolved stories re-stored under new URLs (blue-origin
+  "Bezos seeks $10B - MSN" ×3; terrafirma GuruFocus/Pulse ×2).
+- ingest-news skips a headline-only GN fallback whose (company, title)
+  already exists on a GN-host row (articles_skipped_duplicate_title);
+  repair-catalog pass 5 drains the stored backlog — survivor prefers
+  round-linked > dated > oldest; publisher-URL rows, other companies'
+  identical titles, and (review fix) a duplicate linked to a DIFFERENT
+  round than the survivor's are all spared.
+- Review: no blocking; fixes applied — different-round spare + test,
+  trim-aligned SQL title match, shared _GOOGLE_NEWS_HOST constant. Suite
+  1790 green.
