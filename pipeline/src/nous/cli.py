@@ -1981,7 +1981,18 @@ def verify_sources_probe_cmd() -> None:
         "gated so already-verified facts never re-bill."
     ),
 )
-def verify_sources_cmd(limit: int, dry_run: bool) -> None:
+@click.option(
+    "--refetch",
+    is_flag=True,
+    default=False,
+    help=(
+        "Also verify refetch-bucket facts (http(s) source, no stored text) by "
+        "politely fetching the source live: robots.txt, contact-email UA "
+        "(SEC_USER_AGENT), 1 req/s per-domain throttle. Fetched text is used "
+        "transiently — never persisted."
+    ),
+)
+def verify_sources_cmd(limit: int, dry_run: bool, refetch: bool) -> None:
     """Verify rendered facts against their cited sources — DeepSeek, paid.
 
     Discriminative (supported / unsupported / uncertain + a grounded quote),
@@ -1990,12 +2001,13 @@ def verify_sources_cmd(limit: int, dry_run: bool) -> None:
     over a bounded, prominence-ordered slice of stored-text facts, and writes
     nothing. Apply (default) additionally upserts every verdict into
     ``fact_verifications`` (version+source-gated → idempotent, no re-bill); the
-    web shows the ✓ for ``supported`` only. Verifies stored-text facts only —
-    the re-fetch bucket is a follow-up.
+    web shows the ✓ for ``supported`` only. ``--refetch`` widens the slice to
+    the refetch bucket (live-fetched transiently, scraping etiquette applies).
     """
     import asyncio
     from datetime import UTC, datetime
 
+    from nous.config import Settings
     from nous.db.session import AsyncSessionLocal
     from nous.observability import (
         emit_run_telemetry,
@@ -2007,6 +2019,12 @@ def verify_sources_cmd(limit: int, dry_run: bool) -> None:
         run_verify_sources,
     )
 
+    user_agent = Settings().SEC_USER_AGENT if refetch else ""
+    if refetch and not user_agent:
+        raise click.ClickException(
+            "--refetch requires SEC_USER_AGENT (contact-email UA) to be set."
+        )
+
     async def _run() -> None:
         started = datetime.now(UTC)
         # emit_run_telemetry in finally so the LLM $ table is written even if the
@@ -2014,7 +2032,11 @@ def verify_sources_cmd(limit: int, dry_run: bool) -> None:
         try:
             async with AsyncSessionLocal() as session:
                 summary = await run_verify_sources(
-                    session, limit=limit, dry_run=dry_run
+                    session,
+                    limit=limit,
+                    dry_run=dry_run,
+                    refetch=refetch,
+                    user_agent=user_agent,
                 )
             click.echo(summary.model_dump_json(indent=2))
             write_step_summary(render_verify_sources_table(summary))
