@@ -2417,6 +2417,95 @@ def repair_duplicate_rounds(dry_run: bool) -> None:
     asyncio.run(_run())
 
 
+@cli.command("delete-round")
+@click.argument("slug")
+@click.option(
+    "--amount",
+    type=str,
+    default=None,
+    help="amount_raised of the round to delete, whole USD (e.g. 1000000000).",
+)
+@click.option(
+    "--round-id",
+    type=str,
+    default=None,
+    help="Round UUID (disambiguator when --amount matches 2+ rounds).",
+)
+@click.option(
+    "--keep-articles",
+    is_flag=True,
+    default=False,
+    help=(
+        "Keep the round's linked/primary news articles. Default is to purge "
+        "them — this lever exists for wrong-entity rounds, whose coverage is "
+        "about the other company by definition."
+    ),
+)
+@click.option(
+    "--apply",
+    is_flag=True,
+    default=False,
+    help="Actually delete. Default is a dry-run that prints the plan.",
+)
+def delete_round_cmd(
+    slug: str, amount: str | None, round_id: str | None, keep_articles: bool, apply: bool
+) -> None:
+    """Surgically delete ONE wrong-entity funding round by slug + amount.
+
+    Ambiguous selections FAIL listing candidate round ids (nothing is ever
+    deleted on a guess); also clears the company's stated total / non-active
+    status / ✓ verifications when they came from the same purged source.
+    """
+    import asyncio
+    from datetime import UTC, datetime
+    from decimal import Decimal
+    from uuid import UUID
+
+    from nous.db.session import AsyncSessionLocal
+    from nous.observability import record_pipeline_run
+    from nous.pipeline.delete_round import DeleteRoundError, run_delete_round
+
+    try:
+        parsed_amount = Decimal(amount) if amount else None
+    except Exception:
+        raise click.ClickException(
+            f"--amount must be a whole-USD number, got {amount!r}"
+        ) from None
+    try:
+        parsed_round_id = UUID(round_id) if round_id else None
+    except ValueError:
+        raise click.ClickException(
+            f"--round-id must be a valid UUID, got {round_id!r}"
+        ) from None
+
+    async def _run() -> None:
+        started = datetime.now(UTC)
+        async with AsyncSessionLocal() as session:
+            try:
+                summary = await run_delete_round(
+                    session,
+                    slug=slug,
+                    amount=parsed_amount,
+                    round_id=parsed_round_id,
+                    purge_articles=not keep_articles,
+                    dry_run=not apply,
+                )
+            except DeleteRoundError as exc:
+                raise click.ClickException(str(exc)) from exc
+            click.echo(summary.model_dump_json(indent=2))
+        if apply:
+            await record_pipeline_run(
+                "delete-round",
+                started_at=started,
+                inputs_seen=1,
+                rows_written=1 + summary.articles_deleted,
+                summary=summary,
+                flag_empty=False,
+            )
+
+    asyncio.run(_run())
+
+
 @cli.command("exclude-company")
 @click.argument("slug")
 @click.option(
