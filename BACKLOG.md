@@ -24,6 +24,20 @@ bottom of the appropriate section; close items by deleting them.
 
 ---
 
+## 2026-07-17 embedder/Vercel decoupling — CLOSED (status quo, owner-decided)
+
+Decision record (don't re-litigate): the /companies embedder STAYS in the
+Vercel function. Rationale: #228's size gate + the CUDA-postinstall fix
+(~406MB→~105MB deployed) + Vercel's Large Functions beta (5GB, auto-enroll)
+retire the E-2 outage class; every offload either breaks embedding-space
+parity (Supabase Edge Fns: gte-small/mean-pool → full re-embed) or adds a
+new vendor (Cloudflare Workers AI). **Escape hatch if ever needed:** CF
+Workers AI `@cf/baai/bge-small-en-v1.5` with `pooling:"cls"` (free tier
+~1000x our query volume) — REQUIRES a ~50-text cosine-parity spike vs stored
+fastembed vectors (bar: ≥0.99, rankings preserved) before any cutover.
+Triggers to revisit: Large Functions GA terms regress, or webpack lock-in
+blocks a needed Next.js upgrade.
+
 ## 2026-07-15 source-verification ("✓ Verified against source") — SHIPPED (#197–#201)
 
 The owner-approved DeepSeek enhancement to the provenance moat (ROADMAP Later #1):

@@ -46,9 +46,25 @@ freshness page (latest run per stage from pipeline_runs; 1h ISR; footer
 "Status" link) + cron failure alerting (`pipeline-health --strict-errors`
 → a deduped `pipeline-failure` GitHub issue per workflow; closing re-arms).
 Load-bearing gotcha pinned in both workflows: id'd always-success steps must
-sit AFTER the Vercel deploy gate. Remaining platform-health: **embedding/
-Vercel decoupling** (the standing latent outage) and optional Sentry (needs
-the owner's DSN + a traced-size check before adding the SDK).
+sit AFTER the Vercel deploy gate. Remaining platform-health: optional Sentry
+(needs the owner's DSN).
+
+**Embedding/Vercel decoupling CLOSED 2026-07-17 (owner decision: status quo,
+#228):** the size gate's first CI run caught the deployed function at ~406MB
+(onnxruntime's linux-only CUDA postinstall into the force-included dir —
+darwin always measured ~92MB); fixed via `web/.npmrc`
+onnxruntime-node-install=skip + cuda/tensorrt excludeGlobs → ~105MB, and CI
+now gates at 180MB with a can't-false-pass sanity floor. With Vercel's
+Large Functions beta (5GB since 2026-06-29, auto-enroll for new projects)
+the outage class is retired. **Escape hatch, documented not built:**
+Cloudflare Workers AI serves `@cf/baai/bge-small-en-v1.5` with
+`pooling: "cls"` free at ~1000x our volume — the only offload preserving
+the embedding space; needs a new vendor account + a ~50-text cosine-parity
+spike vs stored fastembed vectors before any trust (Supabase Edge Functions
+disqualified: gte-small/mean-pool only → full corpus re-embed). Revisit
+ONLY if the beta's GA terms turn hostile or webpack lock-in starts to bite.
+**VERIFY next session:** the first post-#228 Vercel deploy's function size
+(~400→~105MB expected).
 
 **Follow-ups CLOSED 2026-07-17 (PRs #224–#225):** the cron verify step is
 now `--limit 40 --refetch`; the valuation rule is scoped to closed rounds
