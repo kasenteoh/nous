@@ -150,7 +150,13 @@ supported). Batch both with the next eval-record run.
 - **Google News URLs as visible sources:** resolve-at-ingest missed a cohort;
   consider a bounded re-resolve backfill for primary_news_url redirects.
 - **/new missing descriptions** (husk cards — heals as enrichment covers
-  them) [S]. ~~Future-dated entries~~ — SHIPPED: bucket headings carry an
+  them) [S].
+- **uncertain/unsupported boundary is temperature-sensitive [S]:** back-to-back
+  live re-records flipped 3 silent-source cases uncertain→unsupported (never a
+  ✓ risk — both are badge-less — but it noises the internal unsupported
+  signal). A future source_verification hardening pass should sharpen the
+  silent-vs-contradicts wording; until then, review re-record deltas
+  case-by-case before committing recordings. ~~Future-dated entries~~ — SHIPPED: bucket headings carry an
   explicit UTC tag.
 - ~~**/vs + /alternatives sitemap policy**~~ — DECIDED, no code: /alternatives
   is already in the core shard (#209); /vs pairs stay crawl-discovered via
