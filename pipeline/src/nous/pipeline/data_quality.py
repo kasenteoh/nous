@@ -37,7 +37,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from nous.db.models import Company, FactVerification, FundingRound, Person
 from nous.observability import write_step_summary
-from nous.pipeline.repair_duplicate_rounds import _normalized_type
+from nous.pipeline.repair_duplicate_rounds import (
+    NEAR_AMOUNT_TOLERANCE,
+    _amounts_near,
+    _dates_compatible,
+    _normalized_type,
+)
 from nous.util.completeness import (
     FIELD_WEIGHTS,
     completeness_fields,
@@ -95,11 +100,9 @@ UNSUPPORTED_DETAIL_LIMIT: int = 25
 # merge ships (2026-07-16 QA: terrafirma $115M+$100M Series A double-count;
 # sambanova Series F reported as D/E/?/F; blue-origin 10 empty shells).
 
-# Two non-equal amounts within this relative tolerance of the LARGER one are a
-# near-amount suspect pair ($100M vs $115M = 13% → suspect; $100M vs $1B not).
-NEAR_AMOUNT_TOLERANCE: float = 0.15
-# Two dated rounds farther apart than this window are never the same event.
-NEAR_DATE_WINDOW_DAYS: int = 14
+# NEAR_AMOUNT_TOLERANCE / NEAR_DATE_WINDOW_DAYS now live in
+# repair_duplicate_rounds (imported above) — the census and the merge passes
+# always measure with the same rules.
 # Itemized example rows in the report table.
 SUSPECT_DETAIL_LIMIT: int = 15
 
@@ -122,10 +125,12 @@ class SuspectDuplicateRounds(BaseModel):
       (Pass 2) would merge away.
     - ``near_amount_pairs``: same-company pairs with compatible types,
       compatible dates, and non-equal amounts within NEAR_AMOUNT_TOLERANCE —
-      the candidates for the near-amount merge gate (not yet shipped).
+      what the repair's Pass 2b merges. Nonzero here = backlog between runs.
     - ``type_conflict_groups``: same-company same-amount groups whose rows
       carry 2+ CONTRADICTING non-null types with at most one dated row — the
       "outlets disagree on the series letter" class (sambanova D/E/F, $1B).
+      Pass 2c folds the evidence-backed subset; a PERSISTENTLY nonzero count
+      is the no-stored-evidence residue worth a manual look.
     """
 
     empty_shell_rows: int = 0
@@ -314,28 +319,6 @@ async def run_data_quality(session: AsyncSession) -> DataQualitySummary:
     return summary
 
 
-def _amounts_near(a: Decimal, b: Decimal) -> bool:
-    """True when two non-equal amounts are within NEAR_AMOUNT_TOLERANCE.
-
-    Relative to the LARGER amount, so the check is symmetric and a $100M/$115M
-    pair (13%) is near while $100M/$1B (90%) is not. Equal amounts are the
-    exact-dup class, not this one.
-    """
-    if a == b:
-        return False
-    hi, lo = (a, b) if a > b else (b, a)
-    if hi <= 0:
-        return False
-    return float((hi - lo) / hi) <= NEAR_AMOUNT_TOLERANCE
-
-
-def _dates_compatible(a: date | None, b: date | None) -> bool:
-    """Same-event date rule: both within the window, or at least one unknown."""
-    if a is None or b is None:
-        return True
-    return abs((a - b).days) <= NEAR_DATE_WINDOW_DAYS
-
-
 async def _suspect_duplicate_rounds(
     session: AsyncSession,
 ) -> SuspectDuplicateRounds:
@@ -456,6 +439,10 @@ async def _suspect_duplicate_rounds(
                     continue
                 if not _dates_compatible(d1, d2):
                     continue
+                if d1 is None and d2 is None:
+                    # Mirrors Pass 2b's both-undated bail — the census counts
+                    # exactly what the merge gate would touch.
+                    continue
                 if _amounts_near(a1, a2):
                     result.near_amount_pairs += 1
                     touched = True
@@ -569,9 +556,9 @@ def emit_data_quality_summary(summary: DataQualitySummary) -> None:
     if sus.examples:
         lines.append("")
         lines.append(
-            "_Shells + exact dups are repaired by `repair-duplicate-rounds` "
-            "(now in the 3h cron); near-amount + type-conflict counts size the "
-            "proposed merge gate before it ships._"
+            "_All four classes are repaired by `repair-duplicate-rounds` in the "
+            "3h cron (type-conflict only with stored pub-date evidence) — "
+            "persistent nonzero counts here are the evidence-less residue._"
         )
         lines.append("")
         lines.append("| Company | Kind | Detail |")

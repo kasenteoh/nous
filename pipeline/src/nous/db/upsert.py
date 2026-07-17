@@ -335,17 +335,67 @@ def _is_more_confident(new: str | None, existing: str | None) -> bool:
     return _CONFIDENCE_RANK.get(new, -1) > _CONFIDENCE_RANK.get(existing, -1)
 
 
+# round_type strings that carry NO discriminating signal — placeholder text an
+# outlet (or the extraction) used where the series letter was unknown
+# ("SambaNova Closes $1B Financing Round" → "Series ?"). Treating them as typed
+# blocked reconcile's compatibility rule and repair's clustering, so one event
+# landed as several rows (sambanova, 2026-07-16 QA). Deliberately NOT included:
+# real generic types that still discriminate ("seed", "venture round", "grant").
+# Single source of truth — repair-duplicate-rounds and the data-quality census
+# import from here.
+PLACEHOLDER_ROUND_TYPES: frozenset[str] = frozenset(
+    {
+        "series ?",
+        "series",
+        "round",
+        "funding round",
+        "unknown",
+        "undisclosed",
+        "unspecified",
+        "n/a",
+        "none",
+        "?",
+        "tbd",
+    }
+)
+
+
+def normalized_round_type(round_type: str | None) -> str | None:
+    """Lowercased/stripped round_type for identity checks, or None when blank
+    or a placeholder that names no actual round (see PLACEHOLDER_ROUND_TYPES).
+    """
+    if round_type is None:
+        return None
+    stripped = round_type.strip().lower()
+    if not stripped or stripped in PLACEHOLDER_ROUND_TYPES:
+        return None
+    return stripped
+
+
+def clean_round_type(round_type: str | None) -> str | None:
+    """The value to PERSIST for a round_type: the original (display-cased)
+    string for a real type, None for blanks and placeholders. Keeps "Series ?"
+    and friends from ever landing in a row again.
+    """
+    if round_type is None or normalized_round_type(round_type) is None:
+        return None
+    return round_type.strip()
+
+
 def _round_types_compatible(a: str | None, b: str | None) -> bool:
     """True when two round-type labels could name the SAME round.
 
     Compatible when they are equal case-insensitively, OR when at least one
-    side is None (an unknown type doesn't contradict a known one). Two distinct
-    NON-None labels ("Seed" vs "Series C") are NOT compatible — even if the
-    amounts coincide, they are different rounds and must never merge.
+    side is None / a placeholder ("Series ?") — an unknown type doesn't
+    contradict a known one. Two distinct NON-None labels ("Seed" vs
+    "Series C") are NOT compatible — even if the amounts coincide, they are
+    different rounds and must never merge.
     """
-    if a is None or b is None:
+    norm_a = normalized_round_type(a)
+    norm_b = normalized_round_type(b)
+    if norm_a is None or norm_b is None:
         return True
-    return a.strip().lower() == b.strip().lower()
+    return norm_a == norm_b
 
 
 def _merge_extraction_into_round(
@@ -370,8 +420,9 @@ def _merge_extraction_into_round(
     (or vice versa), so round_type is upgraded here rather than only gap-filled
     on the existing valuation columns.
     """
-    if existing.round_type is None and extraction.round_type is not None:
-        existing.round_type = extraction.round_type
+    new_type = clean_round_type(extraction.round_type)
+    if existing.round_type is None and new_type is not None:
+        existing.round_type = new_type
     if existing.amount_raised is None and extraction.amount_raised_usd is not None:
         existing.amount_raised = extraction.amount_raised_usd
     if (
@@ -494,18 +545,24 @@ async def reconcile_funding_round(
 
     Returns ``(row, created)`` where ``created`` is True on insert.
     """
+    # A placeholder round_type ("Series ?") names no actual round: treat it as
+    # None for BOTH matching and persisting, so an outlet that didn't know the
+    # series letter merges with (or gap-fills from) the real round instead of
+    # spawning a fake-typed sibling (sambanova, 2026-07-16 QA).
+    effective_type = clean_round_type(extraction.round_type)
+
     # None+None guard: without a type OR date discriminator the type+date key is
     # useless, so we don't run it. But an equal-amount match is still a valid
     # same-round signal, so try that before inserting — this is what collapses
     # the Helion-style dup set (null type, null date, same $465M) instead of
     # appending yet another row.
-    if extraction.round_type is None and extraction.announced_date is None:
+    if effective_type is None and extraction.announced_date is None:
         if extraction.amount_raised_usd is not None:
             amount_match = await _find_amount_match(
                 session,
                 company_id=company_id,
                 amount=extraction.amount_raised_usd,
-                round_type=extraction.round_type,
+                round_type=effective_type,
             )
             if amount_match is not None:
                 _merge_extraction_into_round(amount_match, extraction)
@@ -529,9 +586,9 @@ async def reconcile_funding_round(
 
     candidates_stmt = select(FundingRound).where(FundingRound.company_id == company_id)
 
-    if extraction.round_type is not None:
+    if effective_type is not None:
         candidates_stmt = candidates_stmt.where(
-            func.lower(FundingRound.round_type) == extraction.round_type.lower()
+            func.lower(FundingRound.round_type) == effective_type.lower()
         )
     else:
         candidates_stmt = candidates_stmt.where(FundingRound.round_type.is_(None))
@@ -566,7 +623,7 @@ async def reconcile_funding_round(
             session,
             company_id=company_id,
             amount=extraction.amount_raised_usd,
-            round_type=extraction.round_type,
+            round_type=effective_type,
         )
         if amount_match is not None:
             _merge_extraction_into_round(amount_match, extraction)
@@ -575,7 +632,7 @@ async def reconcile_funding_round(
 
     new_round = FundingRound(
         company_id=company_id,
-        round_type=extraction.round_type,
+        round_type=effective_type,
         amount_raised=extraction.amount_raised_usd,
         valuation_post_money=extraction.valuation_post_money_usd,
         valuation_source=extraction.valuation_source,
