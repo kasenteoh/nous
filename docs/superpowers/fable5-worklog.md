@@ -1774,3 +1774,20 @@ Owner: "let's do it" (the QA P0s). Both adversarially reviewed (APPROVE).
   valuation rows merged** (~140 junk rows). terrafirma $100M→$115M Series A
   and sambanova Series D/E→dated Series F land exactly as designed;
   Fireworks AI's $1.5B had FOUR near-amount variants ($1.52–1.6B) collapse.
+
+## PR #222 — fix(pipeline): precision spares for the misattributed-news purge
+
+- The 2026-07-17 prod dry-run precision review found exactly two false-flag
+  classes; both now count as attribution AT THE PURGE ONLY (deletion is
+  costlier than a kept borderline article — the purge may be looser than the
+  ingest guard, never the reverse): the SQUASHED name ("PhysicsWallah" for
+  Physics Wallah — 2 real rounds would have died) and a DISTINCTIVE head
+  token alone ("Genesis raises $200M" for Genesis Therapeutics). Head-token
+  spare requires ≥4 chars AND not in _COMMON_NAME_WORDS, so "Away"/"Key"
+  dictionary heads never qualify; single-token names keep the strict rules.
+- Review (APPROVE, 1 MEDIUM addressed pre-merge): the deny-path test title
+  failed the mention check for an independent reason (no funding verb next
+  to "away"), so it couldn't catch the guard being dropped. New title makes
+  the bare head token pass article_mentions_company on its own — the
+  _COMMON_NAME_WORDS guard is now the ONLY thing deleting the row (verified
+  empirically; dropping the guard flips the test). Suite 1809 green.
