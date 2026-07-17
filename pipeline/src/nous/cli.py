@@ -2465,6 +2465,19 @@ def delete_round_cmd(
     from nous.observability import record_pipeline_run
     from nous.pipeline.delete_round import DeleteRoundError, run_delete_round
 
+    try:
+        parsed_amount = Decimal(amount) if amount else None
+    except Exception:
+        raise click.ClickException(
+            f"--amount must be a whole-USD number, got {amount!r}"
+        ) from None
+    try:
+        parsed_round_id = UUID(round_id) if round_id else None
+    except ValueError:
+        raise click.ClickException(
+            f"--round-id must be a valid UUID, got {round_id!r}"
+        ) from None
+
     async def _run() -> None:
         started = datetime.now(UTC)
         async with AsyncSessionLocal() as session:
@@ -2472,8 +2485,8 @@ def delete_round_cmd(
                 summary = await run_delete_round(
                     session,
                     slug=slug,
-                    amount=Decimal(amount) if amount else None,
-                    round_id=UUID(round_id) if round_id else None,
+                    amount=parsed_amount,
+                    round_id=parsed_round_id,
                     purge_articles=not keep_articles,
                     dry_run=not apply,
                 )

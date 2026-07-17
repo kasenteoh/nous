@@ -167,7 +167,14 @@ async def test_apply_deletes_round_articles_total_and_verifications(
     await db.refresh(co)
     assert co.total_raised_usd is None
     assert co.total_raised_source_url is None
+    assert co.total_raised_as_of is None
     assert co.funding_round_count == 1
+
+    # Idempotent: the post-condition already holds; a re-run selects nothing.
+    with pytest.raises(DeleteRoundError, match="no round"):
+        await run_delete_round(
+            db, slug=co.slug, amount=Decimal("1000000000"), dry_run=False
+        )
 
 
 async def test_dry_run_reports_but_writes_nothing(db: AsyncSession) -> None:
@@ -271,3 +278,59 @@ async def test_keep_articles_and_error_paths(db: AsyncSession) -> None:
         await run_delete_round(db, slug=co.slug, amount=Decimal("77"))
     with pytest.raises(DeleteRoundError, match="provide --amount or --round-id"):
         await run_delete_round(db, slug=co.slug)
+
+
+async def test_shared_primary_url_over_match_is_visible_and_bounded(
+    db: AsyncSession,
+) -> None:
+    """Two rounds sharing a primary_news_url (reconcile's first-write-wins can
+    produce this): deleting one round DOES purge the shared article — the
+    over-match is deliberate and PREVIEWED in the dry-run's article_titles so
+    the operator sees it before applying — but the sibling ROUND survives,
+    its coverage link merely SET-NULLed."""
+    shared = "https://shared.example.com/two-rounds-one-article"
+    co = _co("shared-url-co")
+    db.add(co)
+    await db.flush()
+    target = FundingRound(
+        company_id=co.id,
+        round_type="Series B",
+        amount_raised=Decimal("50000000"),
+        primary_news_url=shared,
+    )
+    sibling = FundingRound(
+        company_id=co.id,
+        round_type="Series A",
+        amount_raised=Decimal("10000000"),
+        primary_news_url=shared,
+    )
+    db.add_all([target, sibling])
+    await db.flush()
+    db.add(
+        NewsArticle(
+            company_id=co.id,
+            url=shared,
+            title="Shared Co raises again",
+            source="shared.example.com",
+            raw_content="Shared Co raised more money.",
+            funding_round_id=sibling.id,
+        )
+    )
+    await db.commit()
+
+    preview = await run_delete_round(db, slug=co.slug, amount=Decimal("50000000"))
+    assert preview.articles_deleted == 1  # the over-match is visible pre-apply
+
+    await run_delete_round(db, slug=co.slug, amount=Decimal("50000000"), dry_run=False)
+    rounds = (
+        (await db.execute(select(FundingRound).where(FundingRound.company_id == co.id)))
+        .scalars()
+        .all()
+    )
+    assert [r.round_type for r in rounds] == ["Series A"]  # sibling survives
+    articles = (
+        (await db.execute(select(NewsArticle).where(NewsArticle.company_id == co.id)))
+        .scalars()
+        .all()
+    )
+    assert articles == []

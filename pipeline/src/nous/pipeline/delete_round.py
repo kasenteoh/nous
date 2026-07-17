@@ -236,6 +236,10 @@ async def run_delete_round(
     await session.delete(row)
     await session.flush()
     await refresh_funding_round_count(session, company.id)
+    # Full-table recompute, deliberately: a company-scoped variant would
+    # duplicate the DISTINCT ON logic for a ~3.2k-row table whose two set
+    # UPDATEs take milliseconds, and this lever runs serialized in the
+    # nous-pipeline-db concurrency group (no concurrent writer to lock out).
     await refresh_latest_round(session)
     await session.commit()
     return summary
