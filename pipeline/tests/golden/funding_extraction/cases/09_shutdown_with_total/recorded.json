@@ -1,7 +1,7 @@
 {
   "provenance": "deepseek",
   "model": "deepseek-chat",
-  "recorded_at": "2026-07-16T15:34:03+00:00",
+  "recorded_at": "2026-07-17T16:06:08+00:00",
   "response": {
     "is_funding_announcement": false,
     "round_type": null,
@@ -11,7 +11,7 @@
     "announced_date": null,
     "lead_investors": [],
     "other_investors": [],
-    "confidence": "high",
+    "confidence": "low",
     "status_event": "shut_down",
     "status_confidence": "high",
     "total_raised_usd": "25000000"
