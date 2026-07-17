@@ -34,11 +34,14 @@ older coverage may reference the pre-merge name) is misattributed:
   ``funding_round_count`` refreshed.
 
 NEVER deleted: articles that mention the name (however garbled the rest of
-the row is — quality is another stage's job), and rounds whose primary
-source is not among the deleted articles (e.g. rounds from the company's own
-website). A round's deletion SET-NULLs sibling articles' funding_round_id;
-those siblings mention the company (or they'd be deleted here too), so
-nothing dangles.
+the row is — quality is another stage's job); rounds whose primary source is
+not among the deleted articles (e.g. rounds from the company's own website);
+and rounds a SURVIVING article still links to via funding_round_id —
+reconcile's first-write-wins primary_news_url means a bad-article-created
+round may have been independently confirmed by a good article later; such a
+round is kept with its primary source repointed to the survivor. A round's
+deletion SET-NULLs sibling articles' funding_round_id; those siblings
+mention the company (or they'd be deleted here too), so nothing dangles.
 
 Defaults to ``--dry-run`` (counts + a per-company example log, no writes) —
 this stage is destructive and is meant to be measured on prod via the ops
@@ -49,6 +52,7 @@ mentions its company, so a re-run deletes nothing.
 from __future__ import annotations
 
 import logging
+import re
 from uuid import UUID
 
 from pydantic import BaseModel, Field
@@ -82,14 +86,45 @@ class RepairMisattributedNewsSummary(BaseModel):
     dry_run: bool = True
 
 
-def _alias_names(alias_slugs: list[str]) -> list[str]:
-    """De-slugify merged-away slugs into name-shaped strings for the guard.
+# slug_with_disambiguator appends "-" + 6 hex chars on collisions. That token
+# never appears in article text, so a de-slugified disambiguated alias
+# ("acme labs a3f9c2") would be a phrase that can NEVER match — the alias
+# safety net silently dead (review catch). Both variants are tried: with the
+# suffix stripped AND raw, because a real word can be all-hex ("decade") and
+# keeping both only ever widens acceptance — the safe direction for a purge.
+_DISAMBIGUATOR_RE = re.compile(r"-[0-9a-f]{6}$")
 
-    "acme-labs-2f3a" → "acme labs 2f3a" — the disambiguator suffix tokens are
-    harmless (they just never match), and the real name tokens are what the
-    phrase check needs.
-    """
-    return [slug.replace("-", " ") for slug in alias_slugs if slug]
+# Corporate suffixes the shared strip_corporate_suffix does NOT cover (adding
+# them there would change normalize_name — every stored match key — so the
+# purge handles them locally). A name like "Anthropic PBC" tokenizes to
+# ["anthropic", "pbc"], a 2-token phrase no headline ever contains; trying the
+# suffix-less variant too keeps those articles safe. False-keep direction only.
+_EXTRA_SUFFIX_TOKENS: frozenset[str] = frozenset(
+    {"pbc", "gmbh", "bv", "sa", "ag", "plc", "pty", "oy", "ab", "sarl"}
+)
+
+
+def _alias_names(alias_slugs: list[str]) -> list[str]:
+    """De-slugify merged-away slugs into name-shaped strings for the guard."""
+    names: list[str] = []
+    for slug in alias_slugs:
+        if not slug:
+            continue
+        names.append(slug.replace("-", " "))
+        stripped = _DISAMBIGUATOR_RE.sub("", slug)
+        if stripped != slug and stripped:
+            names.append(stripped.replace("-", " "))
+    return names
+
+
+def _name_variants(company_name: str) -> list[str]:
+    """The name plus a purge-local variant without a trailing foreign/PBC
+    suffix token the shared stripper doesn't know."""
+    variants = [company_name]
+    tokens = company_name.strip().split()
+    if len(tokens) >= 2 and tokens[-1].strip(".").lower() in _EXTRA_SUFFIX_TOKENS:
+        variants.append(" ".join(tokens[:-1]))
+    return variants
 
 
 def _article_is_attributed(
@@ -109,7 +144,7 @@ def _article_is_attributed(
     """
     is_gn = hostname(url) == _GOOGLE_NEWS_HOST
     body = None if is_gn else (raw_content or None)
-    for name in (company_name, *alias_names):
+    for name in (*_name_variants(company_name), *alias_names):
         if article_mentions_company(name, title, body=body):
             return True
     return False
@@ -181,8 +216,15 @@ async def run_repair_misattributed_news(
             continue
         summary.companies_affected += 1
 
-        # Rounds extracted FROM the misattributed articles.
-        bad_round_ids = (
+        # Rounds extracted FROM the misattributed articles. Exception (review
+        # catch): reconcile's first-write-wins primary_news_url means a round
+        # first created from the bad article may have been independently
+        # CONFIRMED by a good article that reconciled into it later — a
+        # surviving article's funding_round_id link is that evidence. Such a
+        # round is kept, with its primary_news_url repointed to the surviving
+        # linked article so the citation doesn't dangle after the bad article
+        # is deleted.
+        candidate_round_ids = (
             (
                 await session.execute(
                     select(FundingRound.id).where(
@@ -194,6 +236,33 @@ async def run_repair_misattributed_news(
             .scalars()
             .all()
         )
+        bad_round_ids: list[UUID] = []
+        for round_id in candidate_round_ids:
+            surviving_link_url = (
+                await session.execute(
+                    select(NewsArticle.url)
+                    .where(
+                        NewsArticle.funding_round_id == round_id,
+                        NewsArticle.id.not_in(bad_ids),
+                    )
+                    .order_by(NewsArticle.id)
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
+            if surviving_link_url is None:
+                bad_round_ids.append(round_id)
+                continue
+            logger.info(
+                "repair-misattributed-news: %s — keeping round %s (confirmed "
+                "by a surviving article); repointing its primary source",
+                slug,
+                round_id,
+            )
+            if not dry_run:
+                round_row = await session.get(FundingRound, round_id)
+                if round_row is not None:
+                    round_row.primary_news_url = surviving_link_url
+                    session.add(round_row)
         deleted_round_urls: set[str] = set()
         if bad_round_ids:
             deleted_round_urls = {

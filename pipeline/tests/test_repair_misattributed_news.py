@@ -225,3 +225,108 @@ async def test_excluded_companies_untouched(db: AsyncSession) -> None:
     await db.commit()
     summary = await run_repair_misattributed_news(db, dry_run=False)
     assert summary.articles_deleted == 0
+
+
+async def test_disambiguated_alias_still_counts_as_mention(
+    db: AsyncSession,
+) -> None:
+    """Review BLOCKING catch: a merged-away slug with the 6-hex disambiguator
+    ("acme-labs-a3f9c2") must still protect the loser's legitimate articles —
+    the hash token would otherwise make the alias phrase unmatchable."""
+    co = _co("Acme Digital", "acme-digital-purge")
+    db.add(co)
+    await db.flush()
+    db.add(SlugAlias(old_slug="acme-labs-a3f9c2", company_id=co.id))
+    db.add(
+        NewsArticle(
+            company_id=co.id,
+            url="https://techcrunch.example.com/acme-labs-seed-2",
+            title="Acme Labs raises $5M seed",
+            source="techcrunch.example.com",
+            raw_content="Acme Labs, a devtools startup, raised $5M.",
+        )
+    )
+    await db.commit()
+
+    summary = await run_repair_misattributed_news(db, dry_run=False)
+    assert summary.articles_deleted == 0
+
+
+async def test_pbc_suffix_name_articles_kept(db: AsyncSession) -> None:
+    """Review catch: 'Anthropic PBC' articles say just 'Anthropic' — the
+    purge-local suffix variant keeps them (the shared stripper can't learn
+    'pbc' without changing every stored match key)."""
+    co = _co("Anthropic PBC", "anthropic-pbc-purge")
+    db.add(co)
+    await db.flush()
+    db.add(
+        NewsArticle(
+            company_id=co.id,
+            url="https://reuters.example.com/anthropic-round",
+            title="Anthropic raises $1B in new round",
+            source="reuters.example.com",
+            raw_content="Anthropic, an AI safety company, raised $1B.",
+        )
+    )
+    await db.commit()
+
+    summary = await run_repair_misattributed_news(db, dry_run=False)
+    assert summary.articles_deleted == 0
+
+
+async def test_round_confirmed_by_surviving_article_is_kept(
+    db: AsyncSession,
+) -> None:
+    """Review catch: a round whose primary_news_url is a bad article but which
+    a SURVIVING article links to (reconcile confirmed it later) is kept, its
+    primary source repointed to the survivor."""
+    co = _co("Confirmed Co", "confirmed-co-purge")
+    db.add(co)
+    await db.flush()
+
+    bad_url = "https://siliconangle.example.com/other-company-story"
+    good_url = "https://techcrunch.example.com/confirmed-co-round"
+    rnd = FundingRound(
+        company_id=co.id,
+        round_type="Series A",
+        amount_raised=10_000_000,
+        primary_news_url=bad_url,  # first-write-wins kept the bad source
+    )
+    db.add(rnd)
+    await db.flush()
+    db.add_all(
+        [
+            NewsArticle(
+                company_id=co.id,
+                url=bad_url,
+                title="Other Company launches new product line",
+                source="siliconangle.example.com",
+                raw_content="Other Company announced a product. No mention.",
+            ),
+            NewsArticle(
+                company_id=co.id,
+                url=good_url,
+                title="Confirmed Co raises $10M Series A",
+                source="techcrunch.example.com",
+                raw_content="Confirmed Co, a devtools startup, raised $10M.",
+                funding_round_id=rnd.id,
+            ),
+        ]
+    )
+    await db.commit()
+
+    summary = await run_repair_misattributed_news(db, dry_run=False)
+    assert summary.articles_deleted == 1
+    assert summary.rounds_deleted == 0
+
+    rounds = (
+        (
+            await db.execute(
+                select(FundingRound).where(FundingRound.company_id == co.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert len(rounds) == 1
+    assert rounds[0].primary_news_url == good_url
