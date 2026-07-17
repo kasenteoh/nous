@@ -119,6 +119,14 @@ jobs:
           DATABASE_URL: postgresql+psycopg://canary:nous-ci-canary-db-password@canary.invalid:5432/canary
         run: npm run check:bundle
 
+      - name: Function-size gate (/companies embedder must stay far under Vercel's 250MB)
+        # Reproduces the traced content of the embedding route (.nft.json −
+        # tracing excludes + includes) and fails over a 180MB budget, so an
+        # onnx/model dependency bump dies HERE instead of freezing prod
+        # deploys (the E-2 incident class). Approximation is fine — the gate
+        # detects drift against the ~92MB baseline, not Vercel's exact ledger.
+        run: npm run check:size
+
       # Release-blocking route smoke (Task B3 / Phase 7.2). CI has no Supabase
       # secrets, so SMOKE_HAS_DATA is intentionally unset: the harness runs its
       # structural block only (routes return 200/404, masthead + landmarks
