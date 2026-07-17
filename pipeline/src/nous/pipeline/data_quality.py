@@ -27,15 +27,17 @@ No writes, no ``pipeline_runs`` row (mirrors db-stats / pipeline-health).
 from __future__ import annotations
 
 import logging
-from collections import Counter
-from datetime import UTC, datetime, timedelta
+from collections import Counter, defaultdict
+from datetime import UTC, date, datetime, timedelta
+from decimal import Decimal
 
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from nous.db.models import Company, FactVerification, Person
+from nous.db.models import Company, FactVerification, FundingRound, Person
 from nous.observability import write_step_summary
+from nous.pipeline.repair_duplicate_rounds import _normalized_type
 from nous.util.completeness import (
     FIELD_WEIGHTS,
     completeness_fields,
@@ -86,6 +88,53 @@ class UnsupportedFact(BaseModel):
 # never capped — a truncated list says "+N more" so nothing hides silently).
 UNSUPPORTED_DETAIL_LIMIT: int = 25
 
+# ── Suspect duplicate rounds (the P0 aggregation-without-dedup probe) ─────────
+# The census below measures — read-only, $0 — what a near-duplicate merge gate
+# WOULD touch, using the same compatibility rules repair-duplicate-rounds
+# clusters with, so the gate's blast radius is known before any destructive
+# merge ships (2026-07-16 QA: terrafirma $115M+$100M Series A double-count;
+# sambanova Series F reported as D/E/?/F; blue-origin 10 empty shells).
+
+# Two non-equal amounts within this relative tolerance of the LARGER one are a
+# near-amount suspect pair ($100M vs $115M = 13% → suspect; $100M vs $1B not).
+NEAR_AMOUNT_TOLERANCE: float = 0.15
+# Two dated rounds farther apart than this window are never the same event.
+NEAR_DATE_WINDOW_DAYS: int = 14
+# Itemized example rows in the report table.
+SUSPECT_DETAIL_LIMIT: int = 15
+
+
+class SuspectDuplicateExample(BaseModel):
+    """One company with suspect duplicate funding rounds, for the report table."""
+
+    slug: str
+    kind: str  # "near_amount" | "type_conflict" | "empty_shell"
+    detail: str
+
+
+class SuspectDuplicateRounds(BaseModel):
+    """Counts of round rows a near-duplicate merge gate would consider.
+
+    - ``empty_shell_rows``: rows with no type/date/amount/valuation signal
+      (repair-duplicate-rounds Pass 1 deletes these; counted here so the
+      report shows the backlog between repair runs).
+    - ``exact_dup_loser_rows``: rows the existing exact-amount collapse
+      (Pass 2) would merge away.
+    - ``near_amount_pairs``: same-company pairs with compatible types,
+      compatible dates, and non-equal amounts within NEAR_AMOUNT_TOLERANCE —
+      the candidates for the near-amount merge gate (not yet shipped).
+    - ``type_conflict_groups``: same-company same-amount groups whose rows
+      carry 2+ CONTRADICTING non-null types with at most one dated row — the
+      "outlets disagree on the series letter" class (sambanova D/E/F, $1B).
+    """
+
+    empty_shell_rows: int = 0
+    exact_dup_loser_rows: int = 0
+    near_amount_pairs: int = 0
+    type_conflict_groups: int = 0
+    companies_affected: int = 0
+    examples: list[SuspectDuplicateExample] = Field(default_factory=list)
+
 
 class DataQualitySummary(BaseModel):
     """One data-quality report."""
@@ -103,6 +152,9 @@ class DataQualitySummary(BaseModel):
     # fact_verifications verdict → count (all rows; empty dict = none recorded).
     verification_counts: dict[str, int] = Field(default_factory=dict)
     unsupported_facts: list[UnsupportedFact] = Field(default_factory=list)
+    suspect_duplicate_rounds: SuspectDuplicateRounds = Field(
+        default_factory=SuspectDuplicateRounds
+    )
 
 
 def _pct(present: int, total: int) -> float:
@@ -243,16 +295,186 @@ async def run_data_quality(session: AsyncSession) -> DataQualitySummary:
         for slug, fact_kind, claim, source_url in unsupported_rows
     ]
 
+    summary.suspect_duplicate_rounds = await _suspect_duplicate_rounds(session)
+
     logger.info(
         "data-quality: shown=%d mean_completeness=%.3f husks=%d dupes=%d "
-        "unsupported_verifications=%d",
+        "unsupported_verifications=%d suspect_round_dups="
+        "shells:%d/exact:%d/near:%d/type_conflict:%d",
         summary.shown_total,
         summary.mean_completeness,
         summary.husks,
         summary.duplicate_groups,
         summary.verification_counts.get("unsupported", 0),
+        summary.suspect_duplicate_rounds.empty_shell_rows,
+        summary.suspect_duplicate_rounds.exact_dup_loser_rows,
+        summary.suspect_duplicate_rounds.near_amount_pairs,
+        summary.suspect_duplicate_rounds.type_conflict_groups,
     )
     return summary
+
+
+def _amounts_near(a: Decimal, b: Decimal) -> bool:
+    """True when two non-equal amounts are within NEAR_AMOUNT_TOLERANCE.
+
+    Relative to the LARGER amount, so the check is symmetric and a $100M/$115M
+    pair (13%) is near while $100M/$1B (90%) is not. Equal amounts are the
+    exact-dup class, not this one.
+    """
+    if a == b:
+        return False
+    hi, lo = (a, b) if a > b else (b, a)
+    if hi <= 0:
+        return False
+    return float((hi - lo) / hi) <= NEAR_AMOUNT_TOLERANCE
+
+
+def _dates_compatible(a: date | None, b: date | None) -> bool:
+    """Same-event date rule: both within the window, or at least one unknown."""
+    if a is None or b is None:
+        return True
+    return abs((a - b).days) <= NEAR_DATE_WINDOW_DAYS
+
+
+async def _suspect_duplicate_rounds(
+    session: AsyncSession,
+) -> SuspectDuplicateRounds:
+    """The $0 near-duplicate-rounds census (see SuspectDuplicateRounds).
+
+    Read-only. Uses the SAME type-compatibility view repair-duplicate-rounds
+    clusters with (placeholder types → None), so these counts are exactly what
+    the repair's existing passes plus the proposed near-amount gate would act
+    on. Scans all rounds joined to their company slug in one query — the
+    funding_rounds table is a few thousand rows, well within a report scan.
+    """
+    result = SuspectDuplicateRounds()
+    rows = (
+        await session.execute(
+            select(
+                Company.slug,
+                FundingRound.round_type,
+                FundingRound.amount_raised,
+                FundingRound.announced_date,
+                FundingRound.valuation_post_money,
+                FundingRound.valuation_source,
+            )
+            .join(Company, Company.id == FundingRound.company_id)
+            .where(Company.exclusion_reason.is_(None))
+            .order_by(Company.slug)
+        )
+    ).all()
+
+    by_slug: dict[str, list[tuple[str | None, Decimal | None, date | None]]] = (
+        defaultdict(list)
+    )
+    shell_slugs: set[str] = set()
+    for slug, rtype, amount, adate, valuation, val_source in rows:
+        norm_type = _normalized_type(rtype)
+        if (
+            norm_type is None
+            and adate is None
+            and amount is None
+            and valuation is None
+            and val_source is None
+        ):
+            result.empty_shell_rows += 1
+            result.examples.append(
+                SuspectDuplicateExample(
+                    slug=slug, kind="empty_shell", detail="no type/date/amount"
+                )
+            )
+            shell_slugs.add(slug)
+            continue
+        by_slug[slug].append((norm_type, amount, adate))
+
+    affected: set[str] = set()
+    for slug, rounds in by_slug.items():
+        touched = False
+
+        # Exact-amount clusters (what the existing Pass 2 merges): same amount,
+        # compatible types. Mirrors _cluster_amount_group's counting without
+        # re-deriving survivors — losers = cluster size - 1.
+        by_amount: dict[Decimal, list[tuple[str | None, date | None]]] = defaultdict(
+            list
+        )
+        for norm_type, amount, adate in rounds:
+            if amount is not None:
+                by_amount[amount].append((norm_type, adate))
+        for amount, group in by_amount.items():
+            if len(group) < 2:
+                continue
+            typed: Counter[str] = Counter(t for t, _ in group if t is not None)
+            untyped = sum(1 for t, _ in group if t is None)
+            # Cluster sizes under the equal-or-null rule (see repair Pass 2).
+            cluster_sizes: list[int] = list(typed.values())
+            if untyped:
+                if len(cluster_sizes) == 1:
+                    cluster_sizes[0] += untyped
+                else:
+                    cluster_sizes.append(untyped)
+            losers = sum(size - 1 for size in cluster_sizes if size >= 2)
+            if losers:
+                result.exact_dup_loser_rows += losers
+                touched = True
+                result.examples.append(
+                    SuspectDuplicateExample(
+                        slug=slug,
+                        kind="exact_dup",
+                        detail=f"{losers + 1} rows at ${amount:,.0f}",
+                    )
+                )
+            # Contradicting non-null types on ONE amount with ≤1 dated row —
+            # the "outlets disagree on the series letter" class.
+            if len(typed) >= 2:
+                dated = sum(1 for _, d in group if d is not None)
+                if dated <= 1:
+                    result.type_conflict_groups += 1
+                    touched = True
+                    result.examples.append(
+                        SuspectDuplicateExample(
+                            slug=slug,
+                            kind="type_conflict",
+                            detail=(
+                                f"${amount:,.0f} typed "
+                                + "/".join(sorted(typed))
+                            ),
+                        )
+                    )
+
+        # Near-amount pairs (the proposed gate): compatible types, compatible
+        # dates, non-equal amounts within tolerance. O(n²) per company over a
+        # handful of rounds.
+        amounted = [
+            (t, a, d) for t, a, d in rounds if a is not None
+        ]
+        for i in range(len(amounted)):
+            for j in range(i + 1, len(amounted)):
+                t1, a1, d1 = amounted[i]
+                t2, a2, d2 = amounted[j]
+                types_ok = t1 is None or t2 is None or t1 == t2
+                if not types_ok:
+                    continue
+                if not _dates_compatible(d1, d2):
+                    continue
+                if _amounts_near(a1, a2):
+                    result.near_amount_pairs += 1
+                    touched = True
+                    result.examples.append(
+                        SuspectDuplicateExample(
+                            slug=slug,
+                            kind="near_amount",
+                            detail=f"${a1:,.0f} vs ${a2:,.0f}",
+                        )
+                    )
+        if touched:
+            affected.add(slug)
+
+    result.companies_affected = len(affected | shell_slugs)
+    # Deterministic, capped example table (counts above are never capped).
+    result.examples = sorted(
+        result.examples, key=lambda e: (e.slug, e.kind, e.detail)
+    )[:SUSPECT_DETAIL_LIMIT]
+    return result
 
 
 def _staleness_bucket(last_enriched_at: datetime | None, now: datetime) -> str:
@@ -333,6 +555,29 @@ def emit_data_quality_summary(summary: DataQualitySummary) -> None:
             if overflow > 0:
                 lines.append("")
                 lines.append(f"_…and {overflow} more (table capped)._")
+    lines.append("")
+    lines.append("### Suspect duplicate funding rounds")
+    sus = summary.suspect_duplicate_rounds
+    lines.append(
+        f"**empty shells:** {sus.empty_shell_rows}  ·  "
+        f"**exact-amount dup rows:** {sus.exact_dup_loser_rows}  ·  "
+        f"**near-amount pairs (±{NEAR_AMOUNT_TOLERANCE:.0%}):** "
+        f"{sus.near_amount_pairs}  ·  "
+        f"**type-conflict groups:** {sus.type_conflict_groups}  ·  "
+        f"**companies affected:** {sus.companies_affected}"
+    )
+    if sus.examples:
+        lines.append("")
+        lines.append(
+            "_Shells + exact dups are repaired by `repair-duplicate-rounds` "
+            "(now in the 3h cron); near-amount + type-conflict counts size the "
+            "proposed merge gate before it ships._"
+        )
+        lines.append("")
+        lines.append("| Company | Kind | Detail |")
+        lines.append("|---|---|---|")
+        for ex in sus.examples:
+            lines.append(f"| {ex.slug} | {ex.kind} | {ex.detail} |")
     lines.append("")
     lines.append(
         f"**Duplicates:** {summary.duplicate_groups} shared-name groups "

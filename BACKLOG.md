@@ -76,15 +76,27 @@ wrong row. Investigate via `nous inspect-company` (ops.yml), identify the
 merge/enrich bug, repair rows (repair-catalog pass or targeted ops), add a
 regression guard. THE top trust item.
 
-### P0 — aggregation-without-dedup on marquee pages [M]
+### P0 — aggregation-without-dedup on marquee pages [M] — probe + cron SHIPPED, merge gate next
 QA: terrafirma total double-counts one Series A reported at $115M and $100M
 (compatible types, amounts differ → reconcile misses; repair-duplicate-rounds
 only merges EQUAL amounts). sambanova renders the same Series F ~8×
 (near-identical Google News URLs beat the canonical-URL dedup) and its named
 rounds don't reach the $4.1B total. blue-origin repeats one $10B event ~12×.
-Fixes: near-amount merge gate (same type+date window, amounts within ~15% →
-merge keep-larger? needs design), canonical-URL normalization for
-news.google.com articles, and a data-quality "suspect duplicate rounds" signal.
+Prod inspection (2026-07-17, ops.yml): sambanova = 9 rounds for one event
+(Series F dated + E/D/"Series ?" all $1B + 3 empty shells + KuCoin's garbled
+$100M); blue-origin = 12 rounds, 10 signal-free shells from pre-rumor-guard
+"seeks $10B" articles.
+- ✅ **Shipped (P0a):** "suspect duplicate rounds" census in the data-quality
+  report (empty shells / exact-dup losers / near-amount pairs ±15% /
+  type-conflict groups — same compatibility rules the repair clusters with);
+  placeholder round_types ("Series ?", "unknown") normalize to None for
+  clustering; repair-duplicate-rounds promoted to EVERY 3h cron in apply mode
+  (kills the shell backlog + exact dups; the #215 repair-wrong-websites pattern).
+- ⬜ **Next (P0b):** the near-amount merge gate (same type + date window +
+  amounts within ~15%) sized by the census numbers, plus a
+  publication-date-gated fold for contradicting series letters (D/E/F, $1B).
+- ⬜ **Next (P0c):** canonical-URL normalization / dedup for unresolved
+  news.google.com article variants (same headline stored 2–3×).
 
 ### P1 — wrong-entity news attribution (aardvark class) [M]
 QA: `/c/aardvark` timeline is keyword-scrape garbage (Arthur cartoon, rugby

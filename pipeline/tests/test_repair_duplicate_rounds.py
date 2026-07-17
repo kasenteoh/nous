@@ -841,3 +841,111 @@ async def test_repoints_article_links_onto_survivor(db: AsyncSession) -> None:
     rounds = await _rounds_for(db, co.id)
     assert len(rounds) == 1  # dup collapsed
     assert article.funding_round_id == rounds[0].id  # link followed the merge
+
+
+# ── Placeholder round_type normalization (2026-07-16 QA, sambanova) ──────────
+
+
+def test_normalized_type_maps_placeholders_to_none() -> None:
+    from nous.pipeline.repair_duplicate_rounds import _normalized_type
+
+    assert _normalized_type("Series ?") is None
+    assert _normalized_type("SERIES") is None
+    assert _normalized_type("  unknown  ") is None
+    assert _normalized_type("n/a") is None
+    assert _normalized_type("") is None
+    assert _normalized_type(None) is None
+    # Real types keep their identity, case-normalized.
+    assert _normalized_type("Series F") == "series f"
+    assert _normalized_type("seed") == "seed"
+    assert _normalized_type("Venture Round") == "venture round"
+
+
+async def test_placeholder_typed_row_folds_into_real_round(db: AsyncSession) -> None:
+    """sambanova case: 'Series ?' $1B (undated) folds into Series F $1B (dated).
+
+    A placeholder type carries no round identity, so it clusters as untyped and
+    the equal-amount merge collapses it into the one real cluster. The survivor
+    must keep the REAL type — never inherit the placeholder string.
+    """
+    co = _co("SambaNova Test", "sambanova-test")
+    db.add(co)
+    await db.flush()
+
+    real = FundingRound(
+        company_id=co.id,
+        round_type="Series F",
+        amount_raised=1_000_000_000,
+        announced_date=date(2026, 7, 8),
+        extraction_confidence="high",
+    )
+    placeholder = FundingRound(
+        company_id=co.id,
+        round_type="Series ?",
+        amount_raised=1_000_000_000,
+        announced_date=None,
+        extraction_confidence="low",
+    )
+    db.add_all([real, placeholder])
+    await db.commit()
+
+    summary = await run_repair_duplicate_rounds(db, dry_run=False)
+    assert summary.duplicate_rows_merged == 1
+
+    rounds = await _rounds_for(db, co.id)
+    assert len(rounds) == 1
+    assert rounds[0].round_type == "Series F"
+    assert rounds[0].announced_date == date(2026, 7, 8)
+
+
+async def test_placeholder_only_shell_is_deleted(db: AsyncSession) -> None:
+    """A row whose ONLY content is a placeholder type is a signal-free shell."""
+    co = _co("Shell Co", "shell-co")
+    db.add(co)
+    await db.flush()
+    db.add(
+        FundingRound(
+            company_id=co.id,
+            round_type="Series ?",
+            amount_raised=None,
+            announced_date=None,
+        )
+    )
+    await db.commit()
+
+    summary = await run_repair_duplicate_rounds(db, dry_run=False)
+    assert summary.empty_rows_deleted == 1
+    assert await _rounds_for(db, co.id) == []
+
+
+async def test_contradicting_real_types_same_amount_preserved(
+    db: AsyncSession,
+) -> None:
+    """Series E vs Series F at the same $1B do NOT merge (real types contradict).
+
+    Pins the conservative behavior the (future) publication-date-gated fold
+    must relax deliberately, never by accident.
+    """
+    co = _co("Conflicted Co", "conflicted-co")
+    db.add(co)
+    await db.flush()
+    db.add_all(
+        [
+            FundingRound(
+                company_id=co.id,
+                round_type="Series F",
+                amount_raised=1_000_000_000,
+                announced_date=date(2026, 7, 8),
+            ),
+            FundingRound(
+                company_id=co.id,
+                round_type="Series E",
+                amount_raised=1_000_000_000,
+                announced_date=None,
+            ),
+        ]
+    )
+    await db.commit()
+
+    await run_repair_duplicate_rounds(db, dry_run=False)
+    assert len(await _rounds_for(db, co.id)) == 2
