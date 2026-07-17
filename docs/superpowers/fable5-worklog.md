@@ -1822,3 +1822,21 @@ Owner: "let's do it" (the QA P0s). Both adversarially reviewed (APPROVE).
   helix's Kinoa/Coval/ChatSee rounds are gone; the real $10B Selipsky round
   survives. Deleted-but-genuine articles self-heal via the hardened ingest
   guard on the next news cycle.
+
+## Prod ops (2026-07-17, cont.) — refetch bucket drained
+
+- Three verify-sources dispatches (dry-run limit 25, applies limit 30 + 60):
+  ~106 facts verified this session, 38 via transient live fetch (6 polite-
+  fetch failures skipped — no verdict is ever written for an unread source,
+  so they re-select by design). Final apply saw 54 < limit 60 → the
+  addressable unverified pool is near-empty. The post-purge stale-claim
+  sweep worked as designed: totals recomputed after the 35-round deletion
+  drifted their claims and were re-verified in the same runs.
+- ONE fabrication flag across the session (omen-ai funding_round): the model
+  quoted "raised $31 million in Series A funding today" — "today" is not in
+  the source, quote_is_grounded rejected it, verdict downgraded to uncertain,
+  no ✓ rendered. 1-in-106 near-quote noise is exactly what the guard exists
+  to catch; no code change.
+- Post-purge inspect-company (helix-digital-infrastructure): funding_round_
+  count=1 — ONLY the real $10B (2026-06-11) Selipsky/KKR/Nvidia round
+  remains; website/description cleared → honest husk pending re-resolution.

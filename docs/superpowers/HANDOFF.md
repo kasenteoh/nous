@@ -1,4 +1,4 @@
-# Handoff — state of the world as of 2026-07-16 (end of day)
+# Handoff — state of the world as of 2026-07-17 (end of day)
 
 Written for the next agent (any model) picking this project up cold. Read
 this, then root `CLAUDE.md` (conventions), then the worklog
@@ -6,6 +6,47 @@ this, then root `CLAUDE.md` (conventions), then the worklog
 authoritative history), then `BACKLOG.md` (annotated with what shipped; its
 **"2026-07-16 fresh customer-perspective QA"** section is the current work
 queue). The plan docs under `docs/superpowers/plans/` are historical context.
+
+## LATEST UPDATE — the whole QA queue shipped (2026-07-17, PRs #216–#223)
+
+The 2026-07-16 QA queue's P0 + P1 + re-fetch arcs are DONE, merged, and
+APPLIED on prod; main is green; no schema changes (migration head stays
+**0044**). One-line map (worklog has full entries):
+
+**P0 — aggregation-without-dedup (#216–#218):** suspect-duplicate-rounds
+census in data-quality; repair-duplicate-rounds cron-promoted + near-amount
+(±15%) + evidence-gated type-conflict merges; GN headline-variant article
+dedup. **First cron apply cleaned ~140 junk rounds** (terrafirma
+$100M→$115M, sambanova's 9-rounds-for-one-event → the dated Series F).
+
+**P1 — aardvark class (#219–#222):** funding-subject context guard for
+single-common-word names; cloudflareaccess/cdn-cgi reject (heals away's JWT
+URL); wrong-company reset now clears people/competitors/industry/HQ/
+embedding + pass (f) residue drain; retroactive repair-misattributed-news
+purge (ops.yml dry-run/apply lever) with two precision spares from the prod
+dry-run review. **APPLIED 2026-07-17: 2,861 wrong-entity articles + 35
+rounds deleted across 577 companies** (dry-run and apply matched exactly).
+helix now carries ONLY the real $10B Selipsky round as a clean husk; the
+/trends media-entertainment misfile is resolved in-DB (site follows ISR).
+
+**Re-fetch path (#223):** `verify-sources --refetch` — refetch-bucket facts
+get one polite transient live fetch (robots/UA/throttle/SSRF; text never
+persisted). Opt-in (CLI flag + verify-sources.yml `refetch` input); cron
+untouched. **Drained on prod 2026-07-17:** dry-run + two applies verified
+~106 facts (38 via live fetch; 63 supported / 15 unsupported / 17
+uncertain persisted this session), the final apply saw 54 < limit 60 → the
+addressable pool is near-empty. **One fabrication flag total** (omen-ai — a
+model near-quote with an appended "today"; correctly rejected → uncertain,
+never a ✓; the guard doing its job). Fetch failures (~6 robots/4xx) carry
+no verdict row and re-select next run by design — never verify against
+unread text.
+
+**Open follow-ups from this session:** decide whether the 3h cron's
+verify step gets a hardcoded `--refetch` (no new input needed — pipeline.yml
+is at the 25-input cap); the [S] items + golden-case nits below are
+untouched; helix/away/amiato re-enrich honestly as the crons re-resolve
+real websites (away.ai is Cloudflare-403 — expect the non-origin fallback
+to pick it up).
 
 ## LATEST UPDATE — three arcs shipped and MERGED (2026-07-15/16, PRs #202–#215)
 
