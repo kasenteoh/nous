@@ -71,6 +71,13 @@ class HealthReport:
     def all_green(self) -> bool:
         return len(self.bad) == 0
 
+    @property
+    def has_errors(self) -> bool:
+        """True when any stage's latest run logged status='error' — the
+        high-signal subset --strict-errors gates on (``empty`` is often a
+        quiet cycle and stays a warning, not an alert)."""
+        return any(s.status == "error" for s in self.stages)
+
 
 async def run_pipeline_health(session: AsyncSession) -> HealthReport:
     """Query pipeline_runs for the latest row per stage; return a HealthReport.

@@ -66,6 +66,8 @@ on:
 # waits its turn instead of being dropped.
 permissions:
   contents: read
+  # The failure-alert step opens/comments the deduped pipeline-failure issue.
+  issues: write
 
 concurrency:
   group: nous-pipeline-db
@@ -318,15 +320,6 @@ jobs:
         continue-on-error: true
         run: uv run nous adapter-health
 
-      - name: Pipeline health
-        # Always runs (even if earlier stages failed) so every discovery run gets
-        # a health annotation in the Actions UI.  Exits 0 — never blocks the
-        # pipeline.  Emits ::warning:: / ::error:: annotations and a step-summary
-        # markdown table for any stage that logged status='empty' or 'error'.
-        if: ${{ !cancelled() }}
-        continue-on-error: true
-        run: uv run nous pipeline-health
-
       - name: Trigger Vercel deploy
         # contains(steps.*.outcome, ...) covers every id'd step; only pipeline
         # stages carry ids in this file — keep it that way or scope this back
@@ -342,3 +335,43 @@ jobs:
           curl -fsS -m 30 --retry 3 -o /dev/null -X POST "$VERCEL_DEPLOY_HOOK_URL" \
             && echo "Vercel deploy hook triggered." \
             || echo "::warning::Vercel deploy hook POST failed (non-fatal)"
+
+      # NOTE: Pipeline health + the failure alert run AFTER the deploy gate
+      # on purpose — health carries an id (the alert keys on its outcome),
+      # and an id'd always-success step BEFORE the gate would satisfy
+      # contains(steps.*.outcome, 'success') on every run.
+      - name: Pipeline health
+        id: health
+        # Always runs (even if earlier stages failed) so every discovery run gets
+        # a health annotation in the Actions UI.  Exits 0 — never blocks the
+        # pipeline.  Emits ::warning:: / ::error:: annotations and a step-summary
+        # markdown table for any stage that logged status='empty' or 'error'.
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        run: uv run nous pipeline-health --strict-errors
+
+      - name: Alert on failure (GitHub issue)
+        # Fires when the job itself failed OR pipeline-health saw a stage with
+        # status='error' (the health step is continue-on-error + strict-errors,
+        # so its OUTCOME carries the signal while the job stays green).
+        # Deduped: one open pipeline-failure issue per workflow collects
+        # comments until it is closed — closing it re-arms a fresh alert.
+        # `empty` statuses stay step-summary warnings, never issues.
+        if: ${{ !cancelled() && (failure() || steps.health.outcome == 'failure') }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh label create pipeline-failure --color D93F0B \
+            --description "Automated: a pipeline workflow failed or a stage logged status=error" \
+            --force
+          TITLE="Pipeline failure: ${{ github.workflow }}"
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          BODY="Automated alert: [run ${{ github.run_id }}]($RUN_URL) (\`${{ github.event_name }}\`) failed or a stage logged status=error — see that run's pipeline-health step summary for the stage table. Later failures comment on this issue until it is closed."
+          existing=$(gh issue list --state open --label pipeline-failure \
+            --json number,title --jq "[.[] | select(.title == \"$TITLE\")][0].number // empty")
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body "$BODY"
+          else
+            gh issue create --title "$TITLE" --label pipeline-failure --body "$BODY"
+          fi

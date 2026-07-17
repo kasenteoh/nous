@@ -2158,7 +2158,16 @@ def infer_hq_country(limit: int | None, dry_run: bool) -> None:
         "Default: always exit 0 (annotate only), matching continue-on-error semantics."
     ),
 )
-def pipeline_health(strict: bool) -> None:
+@click.option(
+    "--strict-errors",
+    is_flag=True,
+    default=False,
+    help=(
+        "Exit non-zero only when any stage logged status='error' (empty stays a "
+        "warning). The cron's failure-alert step keys on this exit code."
+    ),
+)
+def pipeline_health(strict: bool, strict_errors: bool) -> None:
     """Inspect pipeline_runs for empty/error stages and emit CI annotations.
 
     Queries the most-recent pipeline_runs row for every stage and prints a
@@ -2193,6 +2202,8 @@ def pipeline_health(strict: bool) -> None:
         click.echo("pipeline-health: no pipeline_runs rows found (table is empty)")
 
     if strict and not report.all_green:
+        sys.exit(1)
+    if strict_errors and report.has_errors:
         sys.exit(1)
 
 
