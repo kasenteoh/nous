@@ -41,6 +41,15 @@ never a ✓; the guard doing its job). Fetch failures (~6 robots/4xx) carry
 no verdict row and re-select next run by design — never verify against
 unread text.
 
+**Observability SHIPPED 2026-07-17 (PRs #226–#227):** the public **/stats**
+freshness page (latest run per stage from pipeline_runs; 1h ISR; footer
+"Status" link) + cron failure alerting (`pipeline-health --strict-errors`
+→ a deduped `pipeline-failure` GitHub issue per workflow; closing re-arms).
+Load-bearing gotcha pinned in both workflows: id'd always-success steps must
+sit AFTER the Vercel deploy gate. Remaining platform-health: **embedding/
+Vercel decoupling** (the standing latent outage) and optional Sentry (needs
+the owner's DSN + a traced-size check before adding the SDK).
+
 **Follow-ups CLOSED 2026-07-17 (PRs #224–#225):** the cron verify step is
 now `--limit 40 --refetch`; the valuation rule is scoped to closed rounds
 (funding_extraction 2026-07-17.1, live-re-recorded, all floors green); the

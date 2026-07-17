@@ -1872,3 +1872,33 @@ Owner: "let's do it" (the QA P0s). Both adversarially reviewed (APPROVE).
   404 streamed-title is framework behavior, status code correct).
   Review: APPROVE (0 issues). **The 2026-07-16 QA section's [S] tail is
   now closed** except the self-healing /new husk descriptions.
+
+## PR #226 — feat(web): public /stats pipeline-freshness page (merged 2026-07-17)
+
+- Observability slice 1 (ROADMAP cross-cutting): /stats renders the latest
+  run per pipeline stage straight from pipeline_runs (bounded 400-row
+  window, latest-per-stage reduction in pure lib/stats.ts), with relative
+  times, status tones, seen→written counts, and companies-indexed/last-
+  activity headlines. 1h ISR; [] degradation; stages outside the window
+  omitted, never guessed; `error`/`summary` columns deliberately NOT
+  selected (stack traces / internal state stay private — review-verified).
+  Footer "Status" link + sitemap entry. Review: APPROVE (JSDoc LOW fixed;
+  finished_at index noted in BACKLOG [XS]).
+
+## PR #227 — feat(ci): error-status stages open a deduped GitHub issue (merged 2026-07-17)
+
+- Observability slice 2: pipeline-health gains --strict-errors (exit 1
+  only on status='error' — `empty` stays a warning, never an alert) and
+  both cron workflows run it id'd + continue-on-error, with a final alert
+  step that opens-or-comments ONE deduped `pipeline-failure` issue per
+  workflow (closing it re-arms). permissions +issues:write.
+- **Load-bearing ordering:** health now carries an id, and an id'd
+  always-success step BEFORE the Vercel deploy gate would satisfy
+  contains(steps.*.outcome,'success') every run — health + alert
+  therefore run AFTER the deploy step in both workflows (comment pins the
+  invariant; review verified it in both files, plus the if-condition
+  semantics: outcome-vs-conclusion under continue-on-error, and that
+  !cancelled() keeps the alert running after a failed setup step).
+- **Observability is now DONE $0-style** (visible /stats + issue alerts).
+  Sentry client wiring stays deferred: needs the owner's DSN and a
+  traced-function-size check against the 250MB /companies hazard.
