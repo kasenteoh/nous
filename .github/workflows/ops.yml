@@ -27,6 +27,8 @@ on:
           - reresolve-company
           - repair-misattributed-news-dry-run
           - repair-misattributed-news-apply
+          - delete-round-dry-run
+          - delete-round-apply
       slug:
         description: "Company slug to operate on (required for company-scoped commands; ignored by repair-misattributed-news-*)."
         required: false
@@ -47,6 +49,14 @@ on:
         default: manual
       detail:
         description: "exclude-company only: free-form audit note (e.g. the source URL for the decision)."
+        required: false
+        type: string
+      amount:
+        description: "delete-round-* only: amount_raised of the round, whole USD (e.g. 1000000000)."
+        required: false
+        type: string
+      round_id:
+        description: "delete-round-* only: round UUID disambiguator when amount matches 2+ rounds."
         required: false
         type: string
 
@@ -92,6 +102,8 @@ jobs:
           OP_REASON: ${{ inputs.reason }}
           OP_DETAIL: ${{ inputs.detail }}
           OP_SET_URL: ${{ inputs.set_url }}
+          OP_AMOUNT: ${{ inputs.amount }}
+          OP_ROUND_ID: ${{ inputs.round_id }}
         # Inputs pass through env vars (never string-interpolated into the
         # script) and the command itself is a choice allowlist. pipefail so a
         # failing `uv run` surfaces as a failed step instead of being masked by
@@ -99,12 +111,23 @@ jobs:
         run: |
           set -o pipefail
           case "$OP_COMMAND" in
-            exclude-company|unexclude-company|inspect-company|reresolve-company)
+            exclude-company|unexclude-company|inspect-company|reresolve-company|delete-round-*)
               if [ -z "$OP_SLUG" ]; then
                 echo "::error::'$OP_COMMAND' requires the slug input"; exit 1
               fi ;;
           esac
-          if [ "$OP_COMMAND" = "repair-misattributed-news-dry-run" ]; then
+          if [ "${OP_COMMAND#delete-round}" != "$OP_COMMAND" ] \
+             && [ -z "$OP_AMOUNT" ] && [ -z "$OP_ROUND_ID" ]; then
+            echo "::error::delete-round requires amount or round_id"; exit 1
+          fi
+          if [ "$OP_COMMAND" = "delete-round-dry-run" ] || [ "$OP_COMMAND" = "delete-round-apply" ]; then
+            ARGS=("$OP_SLUG")
+            if [ -n "$OP_AMOUNT" ]; then ARGS+=(--amount "$OP_AMOUNT"); fi
+            if [ -n "$OP_ROUND_ID" ]; then ARGS+=(--round-id "$OP_ROUND_ID"); fi
+            if [ "$OP_COMMAND" = "delete-round-apply" ]; then ARGS+=(--apply); fi
+            uv run nous delete-round "${ARGS[@]}" \
+              | { echo '```json'; cat; echo '```'; } | tee "$GITHUB_STEP_SUMMARY"
+          elif [ "$OP_COMMAND" = "repair-misattributed-news-dry-run" ]; then
             # Catalog-wide $0 probe: counts + examples, writes nothing.
             uv run nous repair-misattributed-news \
               | { echo '```json'; cat; echo '```'; } | tee "$GITHUB_STEP_SUMMARY"
