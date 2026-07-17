@@ -46,6 +46,22 @@ def test_all_green_when_all_success() -> None:
     assert report.bad == []
 
 
+def test_has_errors_gates_on_error_only() -> None:
+    """--strict-errors keys on has_errors: an `empty` stage (often a quiet
+    cycle) must NOT trip the failure alert; an `error` stage must."""
+    quiet = HealthReport(
+        stages=[
+            _make_stage("ingest-news", "success"),
+            _make_stage("repair-catalog", "empty"),
+        ]
+    )
+    assert quiet.has_errors is False  # empty warns, never alerts
+    assert quiet.all_green is False  # --strict still catches it
+
+    broken = HealthReport(stages=[_make_stage("enrich-companies", "error")])
+    assert broken.has_errors is True
+
+
 def test_all_green_false_when_empty_present() -> None:
     report = HealthReport(
         stages=[
