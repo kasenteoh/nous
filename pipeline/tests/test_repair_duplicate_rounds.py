@@ -1336,3 +1336,84 @@ async def test_type_conflict_untyped_anchor_skip(db: AsyncSession) -> None:
     # contradicting non-null clusters the untyped row stays separate (Pass 2
     # ambiguity rule), so all three rows must survive.
     assert len(await _rounds_for(db, co.id)) == 3
+
+
+async def test_near_amount_both_undated_never_merged(db: AsyncSession) -> None:
+    """The worst failure class, pinned: two same-type UNDATED rounds at near
+    amounts can be genuinely different events (a $5M seed and a later $4.5M
+    seed, neither dated) — Pass 2b requires at least one dated row and must
+    leave both alone. The census surfaces the pair as residue instead."""
+    co = _co("Undated Pair Co", "undated-pair-co")
+    db.add(co)
+    await db.flush()
+    db.add_all(
+        [
+            FundingRound(
+                company_id=co.id, round_type="seed", amount_raised=5_000_000
+            ),
+            FundingRound(
+                company_id=co.id, round_type="seed", amount_raised=4_500_000
+            ),
+        ]
+    )
+    await db.commit()
+    summary = await run_repair_duplicate_rounds(db, dry_run=False)
+    assert summary.near_amount_rows_merged == 0
+    assert len(await _rounds_for(db, co.id)) == 2
+
+
+async def test_type_conflict_pub_date_window_boundary(db: AsyncSession) -> None:
+    """Day 14 folds; day 15 stays (the ±NEAR_DATE_WINDOW_DAYS edge)."""
+    co = _co("Boundary Co", "boundary-co")
+    db.add(co)
+    await db.flush()
+    anchor_date = date(2026, 7, 8)
+    db.add_all(
+        [
+            FundingRound(
+                company_id=co.id,
+                round_type="Series F",
+                amount_raised=1_000_000_000,
+                announced_date=anchor_date,
+            ),
+            FundingRound(
+                company_id=co.id,
+                round_type="Series E",
+                amount_raised=1_000_000_000,
+                primary_news_url="https://day14.example.com/e",
+            ),
+            FundingRound(
+                company_id=co.id,
+                round_type="Series D",
+                amount_raised=1_000_000_000,
+                primary_news_url="https://day15.example.com/d",
+            ),
+        ]
+    )
+    db.add_all(
+        [
+            NewsArticle(
+                company_id=co.id,
+                url="https://day14.example.com/e",
+                title="day 14",
+                source="day14.example.com",
+                published_date=date(2026, 7, 22),  # exactly +14
+                raw_content="body",
+            ),
+            NewsArticle(
+                company_id=co.id,
+                url="https://day15.example.com/d",
+                title="day 15",
+                source="day15.example.com",
+                published_date=date(2026, 7, 23),  # +15 — outside
+                raw_content="body",
+            ),
+        ]
+    )
+    await db.commit()
+    summary = await run_repair_duplicate_rounds(db, dry_run=False)
+    assert summary.type_conflict_rows_merged == 1
+    types = sorted(
+        r.round_type for r in await _rounds_for(db, co.id)
+    )
+    assert types == ["Series D", "Series F"]

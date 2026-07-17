@@ -439,6 +439,10 @@ async def _suspect_duplicate_rounds(
                     continue
                 if not _dates_compatible(d1, d2):
                     continue
+                if d1 is None and d2 is None:
+                    # Mirrors Pass 2b's both-undated bail — the census counts
+                    # exactly what the merge gate would touch.
+                    continue
                 if _amounts_near(a1, a2):
                     result.near_amount_pairs += 1
                     touched = True

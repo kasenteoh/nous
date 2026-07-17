@@ -278,9 +278,11 @@ async def _collapse_near_amounts(
     first (the same ``_survivor_sort_key`` Pass 2 uses): each unclaimed row
     joins the anchor when its type is COMPATIBLE (equal-or-null after
     placeholder normalization), its date is COMPATIBLE (both within
-    NEAR_DATE_WINDOW_DAYS or at least one unknown), and its amount is within
-    NEAR_AMOUNT_TOLERANCE of the ANCHOR's amount (never chained through an
-    intermediate row).
+    NEAR_DATE_WINDOW_DAYS or at least one unknown — but NEVER both unknown:
+    a same-type near-amount pair with no date on either side can be two
+    genuinely different rounds, and a wrong merge is worse than a duplicate),
+    and its amount is within NEAR_AMOUNT_TOLERANCE of the ANCHOR's amount
+    (never chained through an intermediate row).
 
     The anchor keeps its OWN amount: an amount and the primary_news_url that
     cites it always travel together. ``_fold_loser_into_survivor`` only
@@ -312,6 +314,13 @@ async def _collapse_near_amounts(
                 continue
             if not _dates_compatible(anchor.announced_date, other.announced_date):
                 continue
+            if anchor.announced_date is None and other.announced_date is None:
+                # BOTH undated: a same-type near-amount pair with no date on
+                # either side can be two genuinely different rounds (a $5M
+                # seed and a later $4.5M seed, neither dated). A wrong merge
+                # is worse than a duplicate — require at least one dated row.
+                # The census's near_amount_pairs counter surfaces the residue.
+                continue
             losers.append(other)
             claimed.add(other.id)
         if not losers:
@@ -329,9 +338,10 @@ async def _collapse_near_amounts(
         )
         merged += len(losers)
         await _merge_cluster(session, survivor=anchor, losers=losers, dry_run=dry_run)
-        if not dry_run:
-            loser_ids = {loser.id for loser in losers}
-            rows[:] = [r for r in rows if r.id not in loser_ids]
+        # Prune the Python list in BOTH modes: dry-run must count each row at
+        # most once across passes (2c would otherwise recount a 2b loser).
+        loser_ids = {loser.id for loser in losers}
+        rows[:] = [r for r in rows if r.id not in loser_ids]
     return merged
 
 
@@ -440,9 +450,10 @@ async def _collapse_type_conflicts(
         )
         merged += len(losers)
         await _merge_cluster(session, survivor=anchor, losers=losers, dry_run=dry_run)
-        if not dry_run:
-            loser_ids = {loser.id for loser in losers}
-            rows[:] = [r for r in rows if r.id not in loser_ids]
+        # Prune in both modes (see _collapse_near_amounts): dry-run counting
+        # must match what a live run would do pass-to-pass.
+        loser_ids = {loser.id for loser in losers}
+        rows[:] = [r for r in rows if r.id not in loser_ids]
     return merged
 
 
@@ -637,7 +648,12 @@ async def run_repair_duplicate_rounds(
         rows = (
             (
                 await session.execute(
-                    select(FundingRound).where(FundingRound.company_id == company_id)
+                    # Deterministic input order: created_at ties (same
+                    # transaction) would otherwise leave survivor selection to
+                    # Postgres heap order.
+                    select(FundingRound)
+                    .where(FundingRound.company_id == company_id)
+                    .order_by(FundingRound.id)
                 )
             )
             .scalars()
@@ -698,10 +714,9 @@ async def run_repair_duplicate_rounds(
                 await _merge_cluster(
                     session, survivor=survivor, losers=losers, dry_run=dry_run
                 )
-                if dry_run:
-                    continue
                 # Keep survivors_pool in sync so later passes never see a row
-                # this pass just deleted.
+                # this pass just merged — in BOTH modes, so dry-run counts
+                # each row at most once across passes.
                 loser_ids = {loser.id for loser in losers}
                 survivors_pool = [
                     r for r in survivors_pool if r.id not in loser_ids
