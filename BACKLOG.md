@@ -104,12 +104,25 @@ $100M); blue-origin = 12 rounds, 10 signal-free shells from pre-rumor-guard
   backlog (survivor prefers round-linked > dated > oldest; publisher-URL rows
   and other companies' identical titles untouched).
 
-### P1 — wrong-entity news attribution (aardvark class) [M]
+### P1 — wrong-entity news attribution (aardvark class) [M] — guard + residue SHIPPED, retroactive purge next
 QA: `/c/aardvark` timeline is keyword-scrape garbage (Arthur cartoon, rugby
 memorial, day-care funding) and its $85M Series C cites only a Google News
 aggregator URL. ingest-news company matching needs a name-ambiguity guard
 (generic dictionary-word names demand a stronger entity match), and the
 existing news mis-attribution guard (#116) needs a second pass.
+- ✅ **Shipped (guard + heal):** single-common-word names ("Away", "Clear")
+  now require funding-subject context (funding verb within 2 tokens after /
+  company marker before / appositive shape) — a bare tokenized word match
+  ("diversify away from China") never attributes; cloudflareaccess.com hosts
+  + /cdn-cgi/ paths join the reject set (resolver + repair pass (a) — heals
+  away's stored JWT login URL on the next cron); the wrong-company reset now
+  clears people/competitors/industry/HQ/embedding, and new pass (f) drains
+  the pre-fix residue on helix/amiato/away (fixes the /trends
+  media-entertainment $10B misfile — the round is real, the industry wasn't).
+- ⬜ **Next:** the retroactive wrong-entity article/round purge (re-run
+  article_mentions_company over stored articles; delete rounds whose primary
+  article never mentions the company — kills helix's Kinoa/Coval/ChatSee
+  rounds + aardvark's timeline garbage). Needs a $0 dry-run lever first.
 
 ### ~~P1 — "in talks" rumor language verified as a completed round~~ — SHIPPED (#214)
 Both layers hardened (funding_extraction 2026-07-16.1 + source_verification

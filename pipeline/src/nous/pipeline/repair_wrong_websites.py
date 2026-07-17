@@ -1,6 +1,8 @@
 """repair-wrong-websites pipeline stage — idempotent poisoned-row repair.
 
-Five detection passes (spec 2026-06-13 Task 2.2; pass (e) added 2026-06-16):
+Six passes (spec 2026-06-13 Task 2.2; pass (e) added 2026-06-16; pass (f)
+added 2026-07-17 — clears the people/competitors/industry/HQ/embedding residue
+that pre-fix resets left behind on already-reset rows):
 
 (a) Aggregator/directory URL: company.website host is in the shared
     AGGREGATOR_HOSTS reject set (or matches DIRECTORY_PATH_RE).  These were
@@ -92,7 +94,14 @@ from pydantic import BaseModel
 from sqlalchemy import delete, exists, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from nous.db.models import Company, FundingRound, NewsArticle, RawPage
+from nous.db.models import (
+    Company,
+    Competitor,
+    FundingRound,
+    NewsArticle,
+    Person,
+    RawPage,
+)
 from nous.db.upsert import refresh_funding_round_count
 from nous.sources.parked import page_is_for_sale_lander
 from nous.sources.reject_hosts import is_aggregator_url
@@ -191,6 +200,9 @@ class RepairWrongWebsitesSummary(BaseModel):
     # cleared website), deleted alongside the reset — see _reset_website_fields.
     wrong_site_rounds_deleted: int = 0
     wrong_site_articles_deleted: int = 0
+    # Pass (f): already-reset rows still carrying poisoned enrichment residue
+    # (people / competitors / industry / HQ from before the reset cleared them).
+    enrichment_residue_cleared: int = 0
     dry_run: bool = False
 
 
@@ -444,6 +456,50 @@ async def run_repair_wrong_websites(
             summary.wrong_site_rounds_deleted += rounds_gone
             summary.wrong_site_articles_deleted += articles_gone
 
+    # ── Pass (f): enrichment residue on already-reset rows ───────────────────
+    # Before 2026-07-17, _reset_website_fields cleared the website +
+    # descriptions but left people / competitors / industry / HQ / embedding —
+    # so helix kept machinebrief's leadership + media-entertainment industry
+    # (and its real $10B round polluted /trends under the wrong industry).
+    # Selection = the post-reset signature (website, description, AND
+    # last_enriched_at all NULL — only the reset produces that combination)
+    # plus at least one residue field/row still set. After the clear, nothing
+    # matches → idempotent. New resets clear residue inline, so this pass
+    # drains the pre-fix backlog then no-ops forever.
+    residue_candidates = (
+        (
+            await session.execute(
+                select(Company).where(
+                    Company.website.is_(None),
+                    Company.description_short.is_(None),
+                    Company.last_enriched_at.is_(None),
+                    or_(
+                        Company.industry_group.is_not(None),
+                        Company.hq_city.is_not(None),
+                        Company.hq_state.is_not(None),
+                        Company.hq_country.is_not(None),
+                        exists().where(Person.company_id == Company.id),
+                        exists().where(Competitor.company_id == Company.id),
+                    ),
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    for company in residue_candidates:
+        logger.info(
+            "repair-wrong-websites (f): clearing enrichment residue on %r "
+            "(industry=%r hq=%r/%r)",
+            company.name,
+            company.industry_group,
+            company.hq_city,
+            company.hq_state,
+        )
+        summary.enrichment_residue_cleared += 1
+        if not dry_run:
+            await _clear_enrichment_residue(session, company)
+
     if not dry_run:
         await session.commit()
 
@@ -585,6 +641,13 @@ async def _reset_website_fields(
     company.eligibility_checked_at = None
     company.last_scrape_attempt_at = None
 
+    # The rest of the poisoned enrichment must go too — helix kept
+    # machinebrief's "Editorial Team" leadership, media-entertainment industry,
+    # and AOL/BuzzFeed competitors long after its website + descriptions were
+    # cleared, and the wrong industry_group filed a real $10B round under
+    # media & entertainment on /trends (2026-07-17 verification).
+    await _clear_enrichment_residue(session, company)
+
     # Drop stale raw_pages so scrape-homepages starts fresh.
     await session.execute(
         delete(RawPage).where(RawPage.company_id == company.id)
@@ -593,3 +656,34 @@ async def _reset_website_fields(
     session.add(company)
     _ = now  # reserved for future audit-timestamp use
     return rounds_deleted, articles_deleted
+
+
+async def _clear_enrichment_residue(
+    session: AsyncSession, company: Company
+) -> None:
+    """Clear every enrichment-derived field/row a wrong-site profile poisons.
+
+    Everything here is derived from the (wrong) scraped pages by the judge /
+    describe / competitor prompts: leadership (people), competitors, the
+    industry/HQ classification, and the embedding over the poisoned
+    descriptions (which drives similar-companies until re-embedded).
+    Employee-count fields stay — they are keyed on the company NAME against
+    external sources, not the website. Deliberately does NOT touch funding
+    rounds/articles (the same-host purge and the news-attribution arc own
+    those) and does not commit — callers do.
+    """
+    company.industry_group = None
+    company.hq_city = None
+    company.hq_state = None
+    company.hq_country = None
+    company.hq_country_checked_at = None
+    company.enrichment_prompt_version = None
+    company.eligibility_prompt_version = None
+    company.embedding = None
+    company.embedded_at = None
+    company.embedding_text_hash = None
+    await session.execute(delete(Person).where(Person.company_id == company.id))
+    await session.execute(
+        delete(Competitor).where(Competitor.company_id == company.id)
+    )
+    session.add(company)

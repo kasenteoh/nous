@@ -945,3 +945,70 @@ def test_robots_blocked_error_is_subclass_of_exception() -> None:
 def test_tc_feed_url_constant() -> None:
     """Pin the TC feed URL — adapter has no other knob, so this is the contract."""
     assert TC_FUNDING_FEED == "https://techcrunch.com/category/venture/feed/"
+
+
+# ── Single-common-word names need funding-subject context (2026-07 QA: Away) ─
+
+
+def test_common_word_name_incidental_title_use_rejected() -> None:
+    """"Away" as a bare word in a headline about something else never
+    attributes — the pre-fix guard matched any tokenized use of the word."""
+    assert not article_mentions_company(
+        "Away",
+        "EU warns push to diversify away from China will need funding",
+    )
+    assert not article_mentions_company(
+        "Away",
+        "HUD tries, again, to move federal homelessness funding away from permanent housing",
+    )
+    # Title-case headlines capitalize every word — case can't save us, the
+    # adjacency rule must.
+    assert not article_mentions_company(
+        "Away",
+        "US Dept. of Ed Again Threatens to Take Funding Away From Jeffco Schools",
+    )
+
+
+def test_common_word_name_funding_subject_accepted() -> None:
+    assert article_mentions_company("Away", "Away raises $100M Series D")
+    assert article_mentions_company(
+        "Away", "Travel brand Away secures new funding round"
+    )
+    assert article_mentions_company(
+        "Clear", "Biometrics startup Clear lands $200M"
+    )
+
+
+def test_common_word_name_body_context_needs_funding_title() -> None:
+    """A lede mention with funding-subject context counts only when the title
+    itself is funding-flavored."""
+    assert article_mentions_company(
+        "Away",
+        "Travel startup announces major funding round",
+        body="Away raises $100M from investors to expand its luggage line.",
+    )
+    assert not article_mentions_company(
+        "Away",
+        "The best carry-on luggage of 2026",
+        body="Away raises the bar for hard-shell design.",
+    )
+
+
+def test_multiword_names_unaffected_by_common_word_rule() -> None:
+    """Multi-token names keep the phrase rule — "Blue Origin" needs the full
+    phrase, not adjacency."""
+    assert article_mentions_company(
+        "Blue Origin", "Blue Origin secures $10B in first outside funding"
+    )
+    assert not article_mentions_company(
+        "Blue Origin", "Origin stories: how startups name themselves"
+    )
+
+
+def test_common_word_name_possessive_and_verb_variants() -> None:
+    """Review findings: possessive "Away's" must not push the verb out of the
+    adjacency window, and the verb list covers receives/bags/completes."""
+    assert article_mentions_company("Away", "Away's Series D raises $100M")
+    assert article_mentions_company("Away", "Away receives $50M investment")
+    assert article_mentions_company("Away", "Away bags $100M to expand")
+    assert article_mentions_company("Away", "Away completes $80M raise")

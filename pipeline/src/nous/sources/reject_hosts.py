@@ -84,6 +84,13 @@ AGGREGATOR_HOSTS: frozenset[str] = frozenset(
         "twimg.com",
         "discordapp.com",
         "giphy.com",
+        # Access-gate / infrastructure hosts: a homepage probe that redirects
+        # into a Cloudflare Access login lands on
+        # <team>.cloudflareaccess.com/cdn-cgi/access/login/<real-host>?…
+        # — the resolver once stored that whole JWT-bearing login URL as the
+        # company website (2026-07-17 QA: away → away.ai behind CF Access).
+        # Never a homepage; the suffix walk catches every team subdomain.
+        "cloudflareaccess.com",
     }
 )
 
@@ -94,6 +101,12 @@ AGGREGATOR_HOSTS: frozenset[str] = frozenset(
 DIRECTORY_PATH_RE: str = r"^/(orgs|companies|company|startups|profile)(/|$)"
 
 _DIRECTORY_PATH_COMPILED: re.Pattern[str] = re.compile(DIRECTORY_PATH_RE)
+
+# Infrastructure paths that are never a company homepage on ANY host: Cloudflare
+# serves challenge/access/login flows under /cdn-cgi/ on the protected domain
+# itself (https://away.ai/cdn-cgi/access/login?...), so a host allowlist alone
+# can't catch the on-domain variant.
+_INFRA_PATH_COMPILED: re.Pattern[str] = re.compile(r"^/cdn-cgi(/|$)")
 
 
 def is_aggregator_host(host: str) -> bool:
@@ -137,6 +150,10 @@ def is_aggregator_url(url: str) -> bool:
     """
     parsed = urlparse(url)
     if is_aggregator_host(parsed.netloc):
+        return True
+
+    # Infrastructure path (Cloudflare challenge/login flows) on any host.
+    if _INFRA_PATH_COMPILED.match(parsed.path):
         return True
 
     # Path-pattern match (directory listing path regardless of host)

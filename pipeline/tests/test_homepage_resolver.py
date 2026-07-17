@@ -469,3 +469,26 @@ def test_real_homepage_not_parked_regression() -> None:
     from nous.sources.parked import looks_parked
 
     assert looks_parked(HTML_REAL_COMPANY) is False
+
+
+# ── Cloudflare Access login URLs are never a homepage (2026-07-17: away) ─────
+
+
+def test_cloudflareaccess_host_rejected() -> None:
+    from nous.sources.reject_hosts import is_aggregator_url
+
+    assert is_aggregator_url(
+        "https://experiencegift-zt-sec.cloudflareaccess.com/cdn-cgi/access/"
+        "login/away.ai?kid=abc&meta=xyz"
+    )
+
+
+def test_cdn_cgi_path_rejected_on_any_host() -> None:
+    """The protected domain itself serves the login under /cdn-cgi/ — the
+    path rule catches the on-domain variant the host allowlist can't."""
+    from nous.sources.reject_hosts import is_aggregator_url
+
+    assert is_aggregator_url("https://away.ai/cdn-cgi/access/login?redirect=/")
+    # A real homepage with a normal path is untouched.
+    assert not is_aggregator_url("https://away.ai/")
+    assert not is_aggregator_url("https://acme.com/products/cdn-cgi-tools")
