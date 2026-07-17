@@ -33,13 +33,16 @@ recorded source.
    log.
 
    ```sh
-   gh workflow run pipeline.yml \
-     -f skip_news=true -f skip_funding=true -f skip_resolve=true \
-     -f skip_scrape=true -f skip_enrich=true \
-     -f run_infer_country=true -f infer_country_limit=40
+   # pipeline.yml takes ONE JSON `overrides` input (the 24 individual inputs
+   # were collapsed off GitHub's 25-input cap; unknown keys fail loudly).
+   gh workflow run pipeline.yml -f overrides='{
+     "skip_news": true, "skip_funding": true, "skip_resolve": true,
+     "skip_scrape": true, "skip_enrich": true,
+     "run_infer_country": true, "infer_country_limit": "40"}'
    ```
 
-2. **Apply**: re-dispatch the same command with `-f infer_country_apply=true`.
+2. **Apply**: re-dispatch the same command with `"infer_country_apply": true`
+   added to the JSON.
    Raise `infer_country_limit` (e.g. 150) once a small applied batch looks
    right; each run stays within the step's 30-minute timeout at ≲ 40/run for
    safety, so prefer several bounded dispatches over one huge one.
@@ -54,10 +57,10 @@ tightened prompt (the LLM makes the final call; confirming rows are re-stamped
 and never re-selected).
 
 ```sh
-gh workflow run pipeline.yml \
-  -f skip_news=true -f skip_funding=true -f skip_resolve=true \
-  -f skip_scrape=true -f skip_enrich=true \
-  -f run_rejudge_nonstartup=true -f judge_limit=200
+gh workflow run pipeline.yml -f overrides='{
+  "skip_news": true, "skip_funding": true, "skip_resolve": true,
+  "skip_scrape": true, "skip_enrich": true,
+  "run_rejudge_nonstartup": true, "judge_limit": "200"}'
 ```
 
 Repeat with the same command until the judge step reports zero selected. The

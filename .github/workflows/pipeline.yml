@@ -30,116 +30,24 @@ on:
     - cron: "0 0,3,6,9,12,15,18,21 * * *"
   workflow_dispatch:
     inputs:
-      skip_news:
-        description: "Skip the Ingest news stage."
-        required: false
-        type: boolean
-        default: false
-      skip_funding:
-        description: "Skip the Extract funding (news + website) stages."
-        required: false
-        type: boolean
-        default: false
-      skip_resolve:
-        description: "Skip the Resolve homepages stage."
-        required: false
-        type: boolean
-        default: false
-      skip_scrape:
-        description: "Skip the Scrape homepages stage."
-        required: false
-        type: boolean
-        default: false
-      skip_enrich:
-        description: "Skip the Enrich companies stage."
-        required: false
-        type: boolean
-        default: false
-      news_limit:
-        description: "Ingest news: max companies for the per-company RSS rotation. Default: 400."
+      overrides:
+        description: >-
+          JSON object of stage overrides, e.g.
+          {"skip_news": true, "enrich_limit": "50", "run_repair_dupes": true}.
+          Empty/omitted = exact cron behavior. Valid keys (see the "Resolve
+          overrides" step for the enforced allowlist + each stage for
+          defaults): skip_news, skip_funding, skip_resolve, skip_scrape,
+          skip_enrich, news_limit, news_lookback_days, funding_limit,
+          website_funding_limit, website_ignore_recheck, resolve_limit,
+          scrape_limit, enrich_limit, judge_limit, run_funding_backfill,
+          run_requery_totals, run_repair_dupes, repair_dupes_apply,
+          run_enrich_backfill, enrich_backfill_limit, run_rejudge_nonstartup,
+          run_infer_country, infer_country_apply, infer_country_limit.
+          Unknown keys or malformed JSON FAIL the run loudly (a typo that
+          silently ran cron defaults would still displace the queued cron).
         required: false
         type: string
-      news_lookback_days:
-        description: "Ingest news: lookback window in days. Default: 14."
-        required: false
-        type: string
-      funding_limit:
-        description: "Extract funding: max unprocessed articles per run. Default: 80."
-        required: false
-        type: string
-      website_funding_limit:
-        description: "Website funding gap-fill: max companies per run. Default: 300."
-        required: false
-        type: string
-      website_ignore_recheck:
-        description: "Website funding drain (Task A2): ignore the 180-day back-off and mine EVERY round-less company's own site once. Pair with a high website_funding_limit. Default: false."
-        required: false
-        type: boolean
-        default: false
-      resolve_limit:
-        description: "Resolve: max companies to attempt. Default: 100."
-        required: false
-        type: string
-      scrape_limit:
-        description: "Scrape: max companies to scrape. Default: 80."
-        required: false
-        type: string
-      enrich_limit:
-        description: "Enrich: max companies to enrich (caps LLM spend). Default: 30."
-        required: false
-        type: string
-      judge_limit:
-        description: "Judge eligibility: max companies to judge this run (drains the backlog). Default: 30."
-        required: false
-        type: string
-      run_funding_backfill:
-        description: "Run backfill-funding-history (Task A3): long-lookback Google News sweep over funded/notable companies, then extract-funding, for multi-round trajectories. Default: false."
-        required: false
-        type: boolean
-        default: false
-      run_requery_totals:
-        description: "Force the extract-funding --requery-totals pass (Task A4) this run, regardless of cadence. It also runs automatically once/day on the 00:00 UTC cron. Default: false."
-        required: false
-        type: boolean
-        default: false
-      run_repair_dupes:
-        description: "Run repair-duplicate-rounds: collapse duplicate funding rounds (same company+amount, compatible type) from the news backfill. Default: false."
-        required: false
-        type: boolean
-        default: false
-      repair_dupes_apply:
-        description: "When run_repair_dupes is set: actually delete. Default false = --dry-run (log intended collapses only). Scheduled cron runs always apply."
-        required: false
-        type: boolean
-        default: false
-      run_enrich_backfill:
-        description: "Run enrich-companies --backfill-missing-taxonomy (populate industry_group for competitor-eligibility)."
-        required: false
-        type: boolean
-        default: false
-      enrich_backfill_limit:
-        description: "Limit for the enrich backfill pass."
-        required: false
-        type: string
-      run_rejudge_nonstartup:
-        description: "Judge eligibility: ALSO re-judge included companies whose description matches non-startup prose signals (directories, agencies, coaching shops — the Manta/Lucra leak). Bounded by judge_limit. See docs/runbooks/non-us-and-nonstartup-backfill.md. Default: false."
-        required: false
-        type: boolean
-        default: false
-      run_infer_country:
-        description: "Run infer-hq-country: fetch about/contact/legal pages for shown companies with NULL hq_country and exclude non-US ones. Default: false."
-        required: false
-        type: boolean
-        default: false
-      infer_country_apply:
-        description: "infer-hq-country: actually WRITE exclusions. false = dry-run preview only. Default: false."
-        required: false
-        type: boolean
-        default: false
-      infer_country_limit:
-        description: "infer-hq-country: max companies per run. Default: 40."
-        required: false
-        default: "40"
+        default: "{}"
 
 # Serialize against every other workflow that mutates the companies table (see
 # discovery.yml). resolve / enrich UPDATE company rows and ingest-news /
@@ -221,6 +129,52 @@ jobs:
       - name: Apply migrations
         run: uv run alembic upgrade head
 
+      - name: Resolve overrides
+        # Flattens the single `overrides` JSON dispatch input into OV_* env
+        # vars for every later step (OV_SKIP_NEWS, OV_ENRICH_LIMIT, ...).
+        # Replaced the 24 individual workflow_dispatch inputs (GitHub caps a
+        # workflow at 25 — a new knob is now just an allowlist entry here, not
+        # a displaced input). Cron runs carry no input → no OV_ vars → every
+        # step takes its inline default, byte-identical to the old behavior.
+        # FAIL-LOUD validation: malformed JSON, an unknown key (typo), or a
+        # non-scalar/unsafe value kills the run — a dispatch that silently
+        # fell back to cron defaults would still have displaced the queued
+        # cron, wasting the slot on the wrong work. Values are restricted to
+        # booleans/numbers/short safe strings so a value can never smuggle a
+        # newline into GITHUB_ENV (env-injection guard).
+        env:
+          OVERRIDES: ${{ inputs.overrides || '{}' }}
+        run: |
+          set -euo pipefail
+          ALLOWED='["skip_news","skip_funding","skip_resolve","skip_scrape",
+            "skip_enrich","news_limit","news_lookback_days","funding_limit",
+            "website_funding_limit","website_ignore_recheck","resolve_limit",
+            "scrape_limit","enrich_limit","judge_limit","run_funding_backfill",
+            "run_requery_totals","run_repair_dupes","repair_dupes_apply",
+            "run_enrich_backfill","enrich_backfill_limit",
+            "run_rejudge_nonstartup","run_infer_country","infer_country_apply",
+            "infer_country_limit"]'
+          if ! echo "$OVERRIDES" | jq -e 'type == "object"' >/dev/null 2>&1; then
+            echo "::error::overrides is not a JSON object: $OVERRIDES"
+            exit 1
+          fi
+          UNKNOWN=$(echo "$OVERRIDES" | jq -r --argjson allowed "$ALLOWED" \
+            '(keys - $allowed) | join(", ")')
+          if [ -n "$UNKNOWN" ]; then
+            echo "::error::unknown override key(s): $UNKNOWN"
+            exit 1
+          fi
+          if ! echo "$OVERRIDES" | jq -e \
+            'all(.[]; (type == "boolean") or (type == "number")
+                 or (type == "string" and test("^[A-Za-z0-9_.-]{0,40}$")))' \
+            >/dev/null; then
+            echo "::error::override values must be booleans, numbers, or short plain strings"
+            exit 1
+          fi
+          echo "$OVERRIDES" | jq -r \
+            'to_entries[] | "OV_\(.key | ascii_upcase)=\(.value)"' >> "$GITHUB_ENV"
+          echo "resolved overrides: $OVERRIDES"
+
       # Every stage below is continue-on-error so one stage failing or hanging
       # never blocks the later ones — idempotent stages make "skip now, catch up
       # next run" safe. Stages carry an `id` so the deploy gate at the bottom
@@ -277,14 +231,14 @@ jobs:
         # pass found month-old poisoned rows still live — so it now runs every
         # cron: idempotent, $0 (regex/heuristics, no LLM), selection self-noops
         # when nothing is poisoned. (Its former run_repair_websites input was
-        # removed — one slot back from the 25-input cap.)
+        # removed. A dispatch knob is now just an `overrides` allowlist entry.)
         timeout-minutes: 15
         continue-on-error: true
         run: uv run nous repair-wrong-websites
 
       - name: Repair duplicate funding rounds
         id: repair_dupes
-        if: ${{ github.event_name == 'schedule' || inputs.run_repair_dupes == true }}
+        if: ${{ github.event_name == 'schedule' || env.OV_RUN_REPAIR_DUPES == 'true' }}
         # Collapse duplicate funding rounds left by multi-article re-reporting
         # (e.g. Helion's $465M Series G across 5 rows) and delete signal-free
         # empty shells (blue-origin accumulated 10 from pre-rumor-guard "seeks
@@ -296,7 +250,7 @@ jobs:
         timeout-minutes: 15
         continue-on-error: true
         run: |
-          if [ "${{ github.event_name }}" = "schedule" ] || [ "${{ inputs.repair_dupes_apply }}" = "true" ]; then
+          if [ "${{ github.event_name }}" = "schedule" ] || [ "${OV_REPAIR_DUPES_APPLY:-}" = "true" ]; then
             uv run nous repair-duplicate-rounds
           else
             uv run nous repair-duplicate-rounds --dry-run
@@ -306,7 +260,7 @@ jobs:
 
       - name: Ingest news
         id: news
-        if: ${{ inputs.skip_news != true }}
+        if: ${{ env.OV_SKIP_NEWS != 'true' }}
         # Per-company Google News RSS (rotates least-recently-checked first via
         # companies.news_checked_at) + the TechCrunch venture-tag broad sweep.
         # --limit 400 x 8 runs/day ≈ 3,200 companies/day, covering the ~2.6k
@@ -320,15 +274,13 @@ jobs:
         timeout-minutes: 15
         continue-on-error: true
         run: |
-          NEWS_LIMIT="${{ inputs.news_limit }}"
-          if [ -z "$NEWS_LIMIT" ]; then NEWS_LIMIT=400; fi
-          NEWS_LOOKBACK="${{ inputs.news_lookback_days }}"
-          if [ -z "$NEWS_LOOKBACK" ]; then NEWS_LOOKBACK=14; fi
+          NEWS_LIMIT="${OV_NEWS_LIMIT:-400}"
+          NEWS_LOOKBACK="${OV_NEWS_LOOKBACK_DAYS:-14}"
           uv run nous ingest-news --limit "$NEWS_LIMIT" --lookback-days "$NEWS_LOOKBACK"
 
       - name: Extract funding
         id: funding
-        if: ${{ inputs.skip_funding != true }}
+        if: ${{ env.OV_SKIP_FUNDING != 'true' }}
         # Bounded by unprocessed articles, so steady-state cost tracks actual
         # new-article volume (usually a handful per run at 10x/day). --limit
         # caps the worst case; continue-on-error per the provider-rate-limit
@@ -336,13 +288,12 @@ jobs:
         timeout-minutes: 15
         continue-on-error: true
         run: |
-          FUNDING_LIMIT="${{ inputs.funding_limit }}"
-          if [ -z "$FUNDING_LIMIT" ]; then FUNDING_LIMIT=80; fi
+          FUNDING_LIMIT="${OV_FUNDING_LIMIT:-80}"
           uv run nous extract-funding --limit "$FUNDING_LIMIT"
 
       - name: Extract funding (re-query stated totals)
         id: funding_requery_totals
-        if: ${{ inputs.skip_funding != true }}
+        if: ${{ env.OV_SKIP_FUNDING != 'true' }}
         # Periodic backfill (Task A4): re-read ALREADY-processed articles whose
         # text states a cumulative total ("to date", "total funding", ...) for
         # companies that still have no stated total, capping LLM spend with
@@ -354,9 +305,8 @@ jobs:
         continue-on-error: true
         run: |
           HOUR="$(date -u +%H)"
-          if [ "${{ inputs.run_requery_totals }}" = "true" ] || [ "$HOUR" = "00" ]; then
-            FUNDING_LIMIT="${{ inputs.funding_limit }}"
-            if [ -z "$FUNDING_LIMIT" ]; then FUNDING_LIMIT=80; fi
+          if [ "${OV_RUN_REQUERY_TOTALS:-}" = "true" ] || [ "$HOUR" = "00" ]; then
+            FUNDING_LIMIT="${OV_FUNDING_LIMIT:-80}"
             uv run nous extract-funding --limit "$FUNDING_LIMIT" --requery-totals
           else
             echo "Skipping --requery-totals (UTC hour=$HOUR, not 00 and not forced)."
@@ -364,7 +314,7 @@ jobs:
 
       - name: Extract funding (website fallback)
         id: funding_website
-        if: ${{ inputs.skip_funding != true }}
+        if: ${{ env.OV_SKIP_FUNDING != 'true' }}
         # Gap-fill only: companies that still have no funding rounds after the
         # news pass. Standing limit raised 100 → 300 (Task A2) to drain the
         # ~1.2k round-less backlog faster now that Actions minutes are free. At
@@ -377,17 +327,16 @@ jobs:
         timeout-minutes: 45
         continue-on-error: true
         run: |
-          WF_LIMIT="${{ inputs.website_funding_limit }}"
-          if [ -z "$WF_LIMIT" ]; then WF_LIMIT=300; fi
+          WF_LIMIT="${OV_WEBSITE_FUNDING_LIMIT:-300}"
           IGNORE_RECHECK=""
-          if [ "${{ inputs.website_ignore_recheck }}" = "true" ]; then
+          if [ "${OV_WEBSITE_IGNORE_RECHECK:-}" = "true" ]; then
             IGNORE_RECHECK="--ignore-recheck"
           fi
           uv run nous extract-funding-website --limit "$WF_LIMIT" $IGNORE_RECHECK
 
       - name: Backfill funding history
         id: funding_backfill
-        if: ${{ inputs.run_funding_backfill == true }}
+        if: ${{ env.OV_RUN_FUNDING_BACKFILL == 'true' }}
         # One-off depth lever (Task A3): a ~5-year Google News sweep over
         # funded/notable companies, then funding-extraction over the new
         # articles, to build multi-round trajectories. Dup-safe via the
@@ -399,10 +348,8 @@ jobs:
         timeout-minutes: 60
         continue-on-error: true
         run: |
-          BF_NEWS_LIMIT="${{ inputs.news_limit }}"
-          if [ -z "$BF_NEWS_LIMIT" ]; then BF_NEWS_LIMIT=600; fi
-          BF_FUNDING_LIMIT="${{ inputs.funding_limit }}"
-          if [ -z "$BF_FUNDING_LIMIT" ]; then BF_FUNDING_LIMIT=600; fi
+          BF_NEWS_LIMIT="${OV_NEWS_LIMIT:-600}"
+          BF_FUNDING_LIMIT="${OV_FUNDING_LIMIT:-600}"
           uv run nous backfill-funding-history \
             --news-limit "$BF_NEWS_LIMIT" --funding-limit "$BF_FUNDING_LIMIT"
 
@@ -429,42 +376,40 @@ jobs:
         # resolve-homepages so marquee husks get a sourced website before the
         # blind TLD-guess resolver, and scrape-homepages picks them up the same
         # run. Self-bounding on its own website_fallback_checked_at stamp; $0
-        # (Wikidata + news re-fetch are free). No dispatch knob — the 25-input
-        # cap is full; the manual resolve-website-fallback.yml lever covers
-        # bounded backfills / dry runs.
+        # (Wikidata + news re-fetch are free). No dispatch knob (add an
+        # `overrides` allowlist key if one is ever needed); the manual
+        # resolve-website-fallback.yml lever covers bounded backfills/dry runs.
         timeout-minutes: 6
         continue-on-error: true
         run: uv run nous resolve-website-fallback --limit 25 --max-runtime-minutes 3
 
       - name: Resolve homepages
         id: resolve
-        if: ${{ inputs.skip_resolve != true }}
+        if: ${{ env.OV_SKIP_RESOLVE != 'true' }}
         # Concurrent network resolve (--concurrency 8) drains the small
         # website-less backlog fast, then no-ops. --max-runtime-minutes is a
         # clean-exit budget on top of --limit.
         timeout-minutes: 6
         continue-on-error: true
         run: |
-          RESOLVE_LIMIT="${{ inputs.resolve_limit }}"
-          if [ -z "$RESOLVE_LIMIT" ]; then RESOLVE_LIMIT=100; fi
+          RESOLVE_LIMIT="${OV_RESOLVE_LIMIT:-100}"
           uv run nous resolve-homepages --limit "$RESOLVE_LIMIT" --max-runtime-minutes 2 --concurrency 8
 
       - name: Scrape homepages
         id: scrape
-        if: ${{ inputs.skip_scrape != true }}
+        if: ${{ env.OV_SKIP_SCRAPE != 'true' }}
         # The heaviest network stage; concurrent fetch (--concurrency 6) is what
         # makes the ~2.3k-page backlog drain in days rather than weeks. Bounded
         # by both --limit and --max-runtime-minutes.
         timeout-minutes: 8
         continue-on-error: true
         run: |
-          SCRAPE_LIMIT="${{ inputs.scrape_limit }}"
-          if [ -z "$SCRAPE_LIMIT" ]; then SCRAPE_LIMIT=80; fi
+          SCRAPE_LIMIT="${OV_SCRAPE_LIMIT:-80}"
           uv run nous scrape-homepages --limit "$SCRAPE_LIMIT" --max-runtime-minutes 3 --concurrency 6
 
       - name: Enrich companies
         id: enrich
-        if: ${{ inputs.skip_enrich != true }}
+        if: ${{ env.OV_SKIP_ENRICH != 'true' }}
         # Write-once per company and LLM-bound, so the small --limit is the
         # spend + wall-clock governor. Since the W-F judge/describe split each
         # new company costs up to two DeepSeek calls (~10-30s), and
@@ -476,15 +421,14 @@ jobs:
         timeout-minutes: 25
         continue-on-error: true
         run: |
-          ENRICH_LIMIT="${{ inputs.enrich_limit }}"
-          if [ -z "$ENRICH_LIMIT" ]; then ENRICH_LIMIT=30; fi
+          ENRICH_LIMIT="${OV_ENRICH_LIMIT:-30}"
           uv run nous enrich-companies --limit "$ENRICH_LIMIT" --redescribe-outdated
 
       - name: Embed companies
         id: embed
         # Wave 3 (E-1): 384-dim description embeddings via fastembed on CPU —
-        # $0 LLM cost, so no skip input and no dispatch knob (pipeline.yml is
-        # at the 25-input cap anyway). Runs right after enrich so freshly
+        # $0 LLM cost, so no skip input and no dispatch knob (add an
+        # `overrides` allowlist key if ever needed). Runs right after enrich so freshly
         # (re)described companies get vectors in the same run. Idempotent via
         # embedding_text_hash: steady state selects only the ~enrich_limit
         # rows enrich just touched (seconds); the fixed --limit 200 bounds the
@@ -497,13 +441,13 @@ jobs:
 
       - name: Enrich backfill (missing taxonomy)
         id: enrich_backfill
-        if: ${{ github.event.inputs.run_enrich_backfill == 'true' }}
+        if: ${{ env.OV_RUN_ENRICH_BACKFILL == 'true' }}
         # One-off backfill: re-enriches companies that have a description but
         # NULL industry_group, making them competitor-eligible. Gated off by
         # default; dispatch with run_enrich_backfill=true to run.
         timeout-minutes: 20
         continue-on-error: true
-        run: uv run nous enrich-companies --backfill-missing-taxonomy --limit "${{ github.event.inputs.enrich_backfill_limit || '300' }}"
+        run: uv run nous enrich-companies --backfill-missing-taxonomy --limit "${OV_ENRICH_BACKFILL_LIMIT:-300}"
 
       - name: Judge eligibility
         id: judge
@@ -518,10 +462,9 @@ jobs:
         timeout-minutes: 45
         continue-on-error: true
         run: |
-          JUDGE_LIMIT="${{ inputs.judge_limit }}"
-          if [ -z "$JUDGE_LIMIT" ]; then JUDGE_LIMIT=30; fi
+          JUDGE_LIMIT="${OV_JUDGE_LIMIT:-30}"
           REJUDGE=""
-          if [ "${{ inputs.run_rejudge_nonstartup }}" = "true" ]; then
+          if [ "${OV_RUN_REJUDGE_NONSTARTUP:-}" = "true" ]; then
             # One-time backfill sweep (runbook: non-us-and-nonstartup-backfill):
             # resets the judged stamp on included rows whose description matches
             # a non-startup prose signal, so this same bounded run re-judges
@@ -540,8 +483,8 @@ jobs:
         # handful of new/changed facts per run (~$0.0004/fact ≈ $0.02 max);
         # the one-time stored-text backlog drains here in a few runs. Runs
         # after judge so facts extracted earlier in this run verify in the
-        # same pass. No dispatch knob — the 25-input cap is full; the manual
-        # verify-sources.yml lever covers bounded backfills / dry runs.
+        # same pass. No dispatch knob (an `overrides` allowlist key away if
+        # needed); the manual verify-sources.yml lever covers backfills/dry runs.
         timeout-minutes: 15
         continue-on-error: true
         # --refetch: the stored-text pool drained 2026-07-17, so steady state
@@ -551,7 +494,7 @@ jobs:
         run: uv run nous verify-sources --limit 40 --refetch
 
       - name: Infer HQ country (non-US detection backfill)
-        if: ${{ github.event.inputs.run_infer_country == 'true' }}
+        if: ${{ env.OV_RUN_INFER_COUNTRY == 'true' }}
         # Dispatch-gated repair: fetch about/contact/legal pages for shown
         # companies with NULL hq_country and soft-exclude non-US ones, sourced.
         # Dry-run by default (preview the intended exclusions in the logs); set
@@ -560,8 +503,8 @@ jobs:
         timeout-minutes: 30
         continue-on-error: true
         run: |
-          LIMIT="${{ github.event.inputs.infer_country_limit || '40' }}"
-          if [ "${{ github.event.inputs.infer_country_apply }}" = "true" ]; then
+          LIMIT="${OV_INFER_COUNTRY_LIMIT:-40}"
+          if [ "${OV_INFER_COUNTRY_APPLY:-}" = "true" ]; then
             uv run nous infer-hq-country --limit "$LIMIT"
           else
             uv run nous infer-hq-country --limit "$LIMIT" --dry-run
