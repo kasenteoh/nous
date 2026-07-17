@@ -37,24 +37,30 @@ const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "
 // next.config's EMBEDDER_ROUTES, list their .nft.json manifests here too.
 const NFT_MANIFESTS = [".next/server/app/companies/page.js.nft.json"];
 
-// MUST mirror next.config.ts (excludeGlobs / includeGlobs). Kept as literal
-// substring/dir matchers rather than glob syntax: every next.config pattern is
-// a `**/<dir path>/**`, which is equivalent to a path-segment containment test.
-const EXCLUDE_SEGMENTS = [
-  "onnxruntime-node/bin/napi-v6/darwin/",
-  "onnxruntime-node/bin/napi-v6/win32/",
-  "onnxruntime-node/bin/napi-v6/linux/arm64/",
-  "onnxruntime-web/",
-];
+// next.config's outputFileTracingExcludes are ALREADY applied by the tracer —
+// the .nft.json is post-exclude output (verified: no darwin/win32/arm64 onnx
+// or onnxruntime-web entries appear in it). Deliberately NO re-filtering
+// here: a stale local copy of the exclude list would silently mask someone
+// removing an exclude from next.config.ts (the function grows ~130MB, the
+// gate keeps filtering it out of the measurement — a false pass of the exact
+// E-2 class). Measuring the manifest verbatim means such a change shows up
+// as a budget breach, which is the point.
+//
+// The includes below MUST mirror next.config.ts's includeGlobs: those files
+// ship in the function but static analysis cannot see them, so they are
+// absent from the manifest and have to be walked directly.
 const INCLUDE_DIRS = [
   "node_modules/onnxruntime-node/bin/napi-v6/linux/x64",
   "models/Xenova",
 ];
 
 const BUDGET_BYTES = 180 * 1024 * 1024;
+// A correct measurement can never be tiny: the forced-include onnx linux-x64
+// binary alone is ~34MB. A total below this means the measurement itself is
+// broken (nft path-resolution drift, schema change) — fail loudly rather
+// than false-pass with a zeroed total.
+const SANITY_FLOOR_BYTES = 30 * 1024 * 1024;
 const MB = (n) => (n / (1024 * 1024)).toFixed(1);
-
-const isExcluded = (p) => EXCLUDE_SEGMENTS.some((seg) => p.includes(seg));
 
 async function* walk(dir) {
   let entries;
@@ -85,11 +91,16 @@ async function main() {
       );
       process.exit(2);
     }
+    if (!Array.isArray(parsed.files)) {
+      console.error(
+        `check-function-size: ${manifest} has no "files" array — the .nft.json ` +
+          `schema changed; update this script before trusting the gate.`,
+      );
+      process.exit(2);
+    }
     const baseDir = path.dirname(manifestPath);
-    for (const rel of parsed.files ?? []) {
-      const abs = path.resolve(baseDir, rel);
-      if (isExcluded(abs)) continue;
-      files.set(abs, 0);
+    for (const rel of parsed.files) {
+      files.set(path.resolve(baseDir, rel), 0);
     }
     // The manifest's own entrypoint ships too.
     files.set(manifestPath.replace(/\.nft\.json$/, ""), 0);
@@ -97,7 +108,7 @@ async function main() {
 
   for (const dir of INCLUDE_DIRS) {
     for await (const file of walk(path.join(projectRoot, dir))) {
-      if (!isExcluded(file)) files.set(file, 0);
+      files.set(file, 0);
     }
   }
 
@@ -124,6 +135,16 @@ async function main() {
     `check-function-size: /companies traced ≈ ${MB(total)}MB across ${files.size} files (budget ${MB(BUDGET_BYTES)}MB)`,
   );
   for (const [bucket, bytes] of top) console.log(`  ${MB(bytes).padStart(8)}MB  ${bucket}`);
+
+  if (total < SANITY_FLOOR_BYTES) {
+    console.error(
+      `\ncheck-function-size: SANITY CHECK FAILED — ${MB(total)}MB is implausibly ` +
+        `small (the forced-include onnx binary alone is ~34MB). Stat failures or ` +
+        `.nft.json path-resolution drift likely zeroed the measurement; fix the ` +
+        `script before trusting the gate.`,
+    );
+    process.exit(2);
+  }
 
   if (total > BUDGET_BYTES) {
     console.error(
