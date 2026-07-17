@@ -2268,6 +2268,41 @@ def repair_catalog(dry_run: bool) -> None:
     asyncio.run(_run())
 
 
+@cli.command("repair-misattributed-news")
+@click.option(
+    "--apply",
+    "apply_",
+    is_flag=True,
+    default=False,
+    help="Actually delete. Default is a dry-run (counts + examples only).",
+)
+def repair_misattributed_news(apply_: bool) -> None:
+    """Purge stored articles (and their extracted rounds) that never mention
+    their company — the retroactive aardvark-class repair.
+
+    Re-runs ingest-news's relevance guard (article_mentions_company, incl. the
+    single-common-word funding-subject rule) over every stored article of the
+    shown cohort; dedup-merged alias names are accepted too. Articles that fail
+    for every name are deleted along with rounds whose primary_news_url is one
+    of them. DRY-RUN BY DEFAULT — measure on prod (ops.yml) before --apply.
+    """
+    import asyncio
+
+    from nous.db.session import AsyncSessionLocal
+    from nous.pipeline.repair_misattributed_news import (
+        run_repair_misattributed_news,
+    )
+
+    async def _run() -> None:
+        async with AsyncSessionLocal() as session:
+            summary = await run_repair_misattributed_news(
+                session, dry_run=not apply_
+            )
+            click.echo(summary.model_dump_json(indent=2))
+
+    asyncio.run(_run())
+
+
 @cli.command("repair-wrong-websites")
 @click.option(
     "--dry-run",

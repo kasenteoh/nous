@@ -25,9 +25,11 @@ on:
           - unexclude-company
           - inspect-company
           - reresolve-company
+          - repair-misattributed-news-dry-run
+          - repair-misattributed-news-apply
       slug:
-        description: "Company slug to operate on."
-        required: true
+        description: "Company slug to operate on (required for company-scoped commands; ignored by repair-misattributed-news-*)."
+        required: false
         type: string
       set_url:
         description: "reresolve-company only: hard-set this homepage URL (Cloudflare fallback) instead of resolving."
@@ -94,7 +96,20 @@ jobs:
         # the trailing `tee`/`echo`.
         run: |
           set -o pipefail
-          if [ "$OP_COMMAND" = "exclude-company" ]; then
+          case "$OP_COMMAND" in
+            exclude-company|unexclude-company|inspect-company|reresolve-company)
+              if [ -z "$OP_SLUG" ]; then
+                echo "::error::'$OP_COMMAND' requires the slug input"; exit 1
+              fi ;;
+          esac
+          if [ "$OP_COMMAND" = "repair-misattributed-news-dry-run" ]; then
+            # Catalog-wide $0 probe: counts + examples, writes nothing.
+            uv run nous repair-misattributed-news \
+              | { echo '```json'; cat; echo '```'; } | tee "$GITHUB_STEP_SUMMARY"
+          elif [ "$OP_COMMAND" = "repair-misattributed-news-apply" ]; then
+            uv run nous repair-misattributed-news --apply \
+              | { echo '```json'; cat; echo '```'; } | tee "$GITHUB_STEP_SUMMARY"
+          elif [ "$OP_COMMAND" = "exclude-company" ]; then
             if [ -n "$OP_DETAIL" ]; then
               uv run nous exclude-company "$OP_SLUG" --reason "$OP_REASON" --detail "$OP_DETAIL" | tee "$GITHUB_STEP_SUMMARY"
             else
