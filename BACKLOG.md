@@ -24,6 +24,75 @@ bottom of the appropriate section; close items by deleting them.
 
 ---
 
+## 2026-07-17 post-surgery QA sweep (3 lanes vs prod) — the NEXT queue
+
+Ran after the #216–#229 arcs (dedup, purge, refetch, platform health). The
+garbage classes are verifiably reduced (healed checklist: helix PASS, away/
+amiato PASS as clean husks, aardvark PASS on garbage) and browse/search took
+zero P0s under adversarial probing. The dominant unfixed class is one level
+deeper than aardvark: **same-name different-entity attribution**, which the
+mention guard passes BY CONSTRUCTION (the article really does say "Wonder").
+Full lane reports in the session transcript.
+
+### P0 — name-collision entity resolution at round ingestion [L]
+3 of 12 /trends "Biggest recent rounds" are wrong: bespoke-labs carries
+IM8's $1B (source never says Bespoke), edtech-Wonder carries food-Wonder's
+$650M, prometheus double-counts $10B+$12B of the same event. Also: wave
+($2.4B total, ~94% is Primary Wave music / Third Wave forklifts), impulse
+(+$294M from Impulse Dynamics), terrafirma (profile = TerraFirma Robotics,
+round = TerraFirma Inc; source says Series A=$100M within $115M total),
+genesis-therapeutics (a16z round on a telehealth practice profile), uala
+(CHIMERA: Italian beauty marketplace identity + Argentine neobank money,
+double-counted to $1.2B), sambanova ($100M KuCoin garble REGREW post-repair
+— recurrence, not residue). Design direction (probe-first, husk-style):
+entity-aware attachment — match the funded company's website/description
+context against source text, LLM company-match adjudication on ambiguous
+names; a retroactive entity-audit pass over high-prominence rounds; and a
+surgical ops lever (no way today to delete ONE wrong round without excluding
+the whole company). Recurrence-proofing is part of the bar.
+
+### P0 — dedup signal gaps the sweep proved [M]
+prometheus $10B/$12B: 16% gap dodges ±15%, but same valuation + same
+investor trio → widen the merge signal to valuation/investor overlap.
+sambanova $100M-vs-$1B: same $11B post-money on both → same signal. uala
+$66M "Series E" + "Series E extension": type-string variants defeat the
+type-compatibility rule → normalize "extension"/"second close" suffixes.
+bunkerhill + bunkerhill-health both carry the same fresh $55M round
+(company-level dup the domain dedup missed — investigate why).
+
+### P1 — contained wrongness + web silent mismatches
+- harbor: ~50 keyword-garbage news rows — "harbor" absent from the curated
+  _COMMON_NAME_WORDS (~70 words); replace/augment the list with a
+  frequency-derived common-word test so coverage isn't list-bound. [M]
+- callsign: pre-fix wrong-website residual (ham-radio profile + Accel
+  investor + "Well documented" badge, broken #sources anchor) — repair
+  pass coverage gap; also anthropic "Employees 10–50" (theorg) — suppress
+  employee estimates wildly inconsistent with funding scale. [S–M]
+- Investor identity splits: Nvidia vs "Nvidia Corp.", Bezos vs "Jeff
+  Bezos", JPMorgan vs "JPMorgan Chase & Co.", QIA spelled out — round rows
+  list backers twice; extend dedup-investors canonicalization. [M]
+- Timeline standalone-news firehose: "Covered by +N" collapses only
+  round-ATTACHED articles; kalshi ×35 / baseten ×27 / crusoe ×18 rows of
+  one story. Attach-or-collapse standalone funding coverage. [M]
+- /companies export vs page count under q=: page total includes semantic
+  matches, /api/export is lexical-only (30 shown → 1 exported). Export the
+  same blend or label the export. [S]
+- stage= filter is case-sensitive and silently ignores mismatches (seed →
+  all 2,326 unfiltered); normalize + surface unknown-value state. [S]
+
+### P2 — smaller
+- Completeness badge gates on document count, not entity confidence —
+  wrong-entity pages wear "Well documented" (PRODUCT CALL: gate badges on
+  entity-audit state once the P0 ships).
+- Scope creep: biotech #3 industry, Blue Origin/Synchron/Science Corp in a
+  "US software startups" catalog — eligibility sweep or reframe copy.
+- Future-dated RSS pubDate (apaluma, +4 days); /watchlist and /c/* 404
+  carry the generic root <title>; healthcare "+671%" tops Hottest off a
+  $39M base (coverage-age gate for the ranking, not just the caveat);
+  Kleiner "Backs 121" vs momentum "122"; "Together Ai" casing; compare
+  drops the 5th slug silently; garbage semantic queries return 30
+  confident results (relevance floor / soft empty state).
+
 ## 2026-07-17 embedder/Vercel decoupling — CLOSED (status quo, owner-decided)
 
 Decision record (don't re-litigate): the /companies embedder STAYS in the
