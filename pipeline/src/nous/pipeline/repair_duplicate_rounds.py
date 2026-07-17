@@ -73,7 +73,11 @@ from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from nous.db.models import FundingRound, FundingRoundInvestor, NewsArticle
-from nous.db.upsert import _CONFIDENCE_RANK, refresh_funding_round_count
+from nous.db.upsert import (
+    _CONFIDENCE_RANK,
+    normalized_round_type,
+    refresh_funding_round_count,
+)
 from nous.pipeline.extract_funding import _is_junk_source_url
 
 logger = logging.getLogger(__name__)
@@ -89,42 +93,13 @@ class RepairDuplicateRoundsSummary(BaseModel):
     dry_run: bool = False
 
 
-# round_type strings that carry NO discriminating signal — placeholder text an
-# outlet (or the extraction) used where the series letter was unknown. Treating
-# them as typed would block a merge with the real round ("Series ?" $1B vs
-# "Series F" $1B are the same event reported by an outlet that didn't know the
-# letter — observed on sambanova, 2026-07-16 QA). Normalized to None so the
-# equal-or-null compatibility rule applies. Deliberately NOT included: real
-# generic types that still discriminate ("seed", "venture round", "grant").
-_PLACEHOLDER_ROUND_TYPES: frozenset[str] = frozenset(
-    {
-        "series ?",
-        "series",
-        "round",
-        "funding round",
-        "unknown",
-        "undisclosed",
-        "unspecified",
-        "n/a",
-        "none",
-        "?",
-        "tbd",
-    }
-)
-
-
 def _normalized_type(round_type: str | None) -> str | None:
-    """Lowercased/stripped round_type for clustering, or None when blank.
-
-    Placeholder strings that carry no round identity ("Series ?", "unknown")
-    also normalize to None — see ``_PLACEHOLDER_ROUND_TYPES``.
+    """Lowercased/stripped round_type for clustering, or None when blank OR a
+    placeholder that names no actual round ("Series ?", "unknown") — see
+    ``nous.db.upsert.PLACEHOLDER_ROUND_TYPES`` (single source of truth, shared
+    with reconcile_funding_round and the data-quality census).
     """
-    if round_type is None:
-        return None
-    stripped = round_type.strip().lower()
-    if not stripped or stripped in _PLACEHOLDER_ROUND_TYPES:
-        return None
-    return stripped
+    return normalized_round_type(round_type)
 
 
 def _survivor_sort_key(row: FundingRound) -> tuple[int, int, int, int, float]:
