@@ -7,6 +7,28 @@ authoritative history), then `BACKLOG.md` (annotated with what shipped; its
 **"2026-07-16 fresh customer-perspective QA"** section is the current work
 queue). The plan docs under `docs/superpowers/plans/` are historical context.
 
+## LATEST UPDATE — post-surgery QA sweep triaged; NEXT = entity resolution (2026-07-17 late)
+
+pipeline.yml took its input refactor (#229 — ONE `overrides` JSON dispatch
+input, validated fail-loud; live-validated with a five-skip dispatch; watch
+one scheduled cron for pure-default behavior). Then a fresh 3-lane QA sweep
+ran against prod. Verdict: the #216–#228 surgery held (helix/away/amiato
+PASS, garbage classes gone, browse/search took ZERO P0s under adversarial
+probing, every sampled ✓-verified AMOUNT was source-supported) — but the
+sweep exposed the next stratum: **same-name different-entity round
+attribution**, which article_mentions_company passes BY CONSTRUCTION.
+3 of 12 /trends biggest rounds are wrong (bespoke-labs←IM8 $1B,
+edtech-Wonder←food-Wonder $650M, prometheus $10B+$12B double-count);
+sambanova's KuCoin $100M duplicate REGREW post-repair (recurrence!); uala
+is a two-company chimera. **The full prioritized queue is BACKLOG
+"2026-07-17 post-surgery QA sweep"** — headline items: entity-aware round
+ingestion [L, probe-first], dedup signal widening (valuation/investor
+overlap, "extension" type suffixes) [M], a surgical delete-one-round ops
+lever, harbor-class common-word coverage, investor identity splits,
+timeline standalone-news collapse, and two web silent-mismatch fixes
+(semantic-vs-export count, stage= case). Product call pending for the
+owner: gate completeness/"Well documented" badges on entity-audit state.
+
 ## LATEST UPDATE — the whole QA queue shipped (2026-07-17, PRs #216–#223)
 
 The 2026-07-16 QA queue's P0 + P1 + re-fetch arcs are DONE, merged, and
