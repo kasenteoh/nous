@@ -11,7 +11,7 @@ import os
 from datetime import date
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from nous.db.models import Company, FundingRound, NewsArticle, RawPage
@@ -330,3 +330,154 @@ async def test_news_round_link_requires_same_company(db: AsyncSession) -> None:
     assert summary.news_round_links_set == 0
     await db.refresh(art_b)
     assert art_b.funding_round_id is None
+
+
+# ── Pass 5: duplicate Google-News headline rows (2026-07-16 QA, blue-origin) ─
+
+
+async def test_gn_duplicate_titles_collapsed(db: AsyncSession) -> None:
+    """Three GN rows with one title for one company keep the round-linked
+    survivor; a publisher-URL row and another company's identical title are
+    untouched. Idempotent."""
+    co = _co("BO Dedup Co", "bo-dedup-co")
+    other = _co("Other Co", "other-co-gn")
+    db.add_all([co, other])
+    await db.flush()
+
+    rnd = FundingRound(
+        company_id=co.id, round_type="Series A", amount_raised=10_000_000_000
+    )
+    db.add(rnd)
+    await db.flush()
+
+    title = "Bezos seeks $10B - MSN"
+    keeper = NewsArticle(
+        company_id=co.id,
+        url="https://news.google.com/rss/articles/CBMiKEEP?oc=5",
+        title=title,
+        source="news.google.com",
+        raw_content="b",
+        funding_round_id=rnd.id,
+    )
+    dup1 = NewsArticle(
+        company_id=co.id,
+        url="https://news.google.com/rss/articles/CBMiDUP1?oc=5",
+        title=title,
+        source="news.google.com",
+        raw_content="b",
+    )
+    dup2 = NewsArticle(
+        company_id=co.id,
+        url="https://news.google.com/rss/articles/CBMiDUP2?oc=5",
+        title=title.upper(),  # case-insensitive grouping
+        source="news.google.com",
+        raw_content="b",
+    )
+    publisher_row = NewsArticle(
+        company_id=co.id,
+        url="https://reuters.com/blue-origin-10b",
+        title=title,
+        source="reuters.com",
+        raw_content="b",
+    )
+    other_co_row = NewsArticle(
+        company_id=other.id,
+        url="https://news.google.com/rss/articles/CBMiOTHERCO?oc=5",
+        title=title,
+        source="news.google.com",
+        raw_content="b",
+    )
+    db.add_all([keeper, dup1, dup2, publisher_row, other_co_row])
+    await db.commit()
+
+    summary = await run_repair_catalog(db)
+    assert summary.gn_duplicate_articles_deleted == 2
+
+    remaining = (
+        (
+            await db.execute(
+                select(NewsArticle.url).order_by(NewsArticle.url)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert "https://news.google.com/rss/articles/CBMiKEEP?oc=5" in remaining
+    assert "https://reuters.com/blue-origin-10b" in remaining
+    assert "https://news.google.com/rss/articles/CBMiOTHERCO?oc=5" in remaining
+    assert len(remaining) == 3
+
+    second = await run_repair_catalog(db)
+    assert second.gn_duplicate_articles_deleted == 0
+
+
+async def test_gn_duplicate_dry_run_counts_only(db: AsyncSession) -> None:
+    co = _co("Dry GN Co", "dry-gn-co")
+    db.add(co)
+    await db.flush()
+    for token in ("A", "B"):
+        db.add(
+            NewsArticle(
+                company_id=co.id,
+                url=f"https://news.google.com/rss/articles/CBMi{token}?oc=5",
+                title="One headline - MSN",
+                source="news.google.com",
+                raw_content="b",
+            )
+        )
+    await db.commit()
+
+    summary = await run_repair_catalog(db, dry_run=True)
+    assert summary.gn_duplicate_articles_deleted == 1
+    count = (
+        await db.execute(select(func.count()).select_from(NewsArticle))
+    ).scalar_one()
+    assert count == 2
+
+
+async def test_gn_duplicate_linked_to_different_round_is_spared(
+    db: AsyncSession,
+) -> None:
+    """A GN duplicate linked to a DIFFERENT round than the survivor is never
+    deleted — killing it would strand that round's only exact coverage link."""
+    co = _co("Two Links Co", "two-links-co")
+    db.add(co)
+    await db.flush()
+    round_a = FundingRound(
+        company_id=co.id, round_type="Series A", amount_raised=10_000_000
+    )
+    round_b = FundingRound(
+        company_id=co.id, round_type="Series B", amount_raised=50_000_000
+    )
+    db.add_all([round_a, round_b])
+    await db.flush()
+
+    title = "Two Links Co raises funding - MSN"
+    db.add_all(
+        [
+            NewsArticle(
+                company_id=co.id,
+                url="https://news.google.com/rss/articles/CBMiLINKA?oc=5",
+                title=title,
+                source="news.google.com",
+                raw_content="b",
+                funding_round_id=round_a.id,
+            ),
+            NewsArticle(
+                company_id=co.id,
+                url="https://news.google.com/rss/articles/CBMiLINKB?oc=5",
+                title=title,
+                source="news.google.com",
+                raw_content="b",
+                funding_round_id=round_b.id,
+            ),
+        ]
+    )
+    await db.commit()
+
+    summary = await run_repair_catalog(db)
+    assert summary.gn_duplicate_articles_deleted == 0
+    count = (
+        await db.execute(select(func.count()).select_from(NewsArticle))
+    ).scalar_one()
+    assert count == 2

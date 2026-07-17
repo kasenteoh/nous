@@ -98,8 +98,11 @@ $100M); blue-origin = 12 rounds, 10 signal-free shells from pre-rumor-guard
   letters fold into the single dated+typed anchor ONLY on stored
   publication-date evidence (±14d). Reconcile hardened at the source:
   placeholder types ("Series ?") never persist and never block a merge.
-- ⬜ **Next (P0c):** canonical-URL normalization / dedup for unresolved
-  news.google.com article variants (same headline stored 2–3×).
+- ✅ **Shipped (P0c):** GN headline-variant dedup — ingest skips a
+  headline-only Google-News fallback whose (company, title) already exists
+  under another opaque CBMi… URL; repair-catalog pass 5 drains the stored
+  backlog (survivor prefers round-linked > dated > oldest; publisher-URL rows
+  and other companies' identical titles untouched).
 
 ### P1 — wrong-entity news attribution (aardvark class) [M]
 QA: `/c/aardvark` timeline is keyword-scrape garbage (Arthur cartoon, rugby
