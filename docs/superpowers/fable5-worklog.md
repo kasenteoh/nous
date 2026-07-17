@@ -1928,3 +1928,24 @@ Owner: "let's do it" (the QA P0s). Both adversarially reviewed (APPROVE).
 - Also pinned in next.config: Vercel's 2026-06-29 Large Functions beta (5GB,
   auto-enroll for new projects) — the project-re-creation freeze risk is
   retired; 250MB stays the planning bar.
+
+## PR #229 — refactor(ci): pipeline.yml off the 25-input cap
+
+- The 24 workflow_dispatch inputs (at GitHub's 25 cap — three stages already
+  shipped comment apologies instead of knobs) collapse into ONE `overrides`
+  JSON input; an early "Resolve overrides" step validates it (fail-loud on
+  malformed JSON / unknown keys / non-scalar or unsafe values — a silently-
+  defaulted typo dispatch would still displace the queued cron) and flattens
+  it into OV_* env vars. A new knob is now an allowlist entry. NEW DISPATCH
+  SYNTAX: gh workflow run pipeline.yml -f overrides='{"skip_news":true,...}'
+  (the old -f skip_news=true style fails loudly; runbook migrated).
+- Cron parity proven three ways: reviewer walked every converted gate +
+  every default (zero transcription errors); the resolve-step script was
+  exercised locally against good/typo/injection/malformed inputs; and a
+  post-merge validation dispatch with five skips exercised it live. Bonus
+  hardening: the old `${{ inputs.* }}` string-interpolations into run
+  scripts are gone (env-only, the ops.yml hygiene rule), and values are
+  pattern-restricted so GITHUB_ENV newline injection is closed.
+- Review: APPROVE, zero findings at any severity — including confirmation
+  that the id-free resolve step cannot trivially satisfy the deploy gate
+  (`steps.*` only sees id'd steps; the #226/#227 invariant holds).

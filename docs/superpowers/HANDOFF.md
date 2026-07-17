@@ -609,9 +609,11 @@ Two initiatives, both complete:
   A container runtime (OrbStack) exists — recent agents ran the full
   DB-gated suite against a local `pgvector/pgvector:pg15` container; do that
   for migration work if you can.
-- **Actions is the only prod lever.** `pipeline.yml` (3-hourly; at GitHub's
-  25-input cap — a new input must displace one; prefer new behavior riding
-  existing steps/flags), `discovery.yml` (weekly), `backfill-discovery.yml`,
+- **Actions is the only prod lever.** `pipeline.yml` (3-hourly; dispatch
+  overrides via ONE JSON input since #229 —
+  `-f overrides='{"skip_news":true,...}'`, keys allowlisted in the Resolve
+  overrides step, unknown keys fail loudly), `discovery.yml` (weekly),
+  `backfill-discovery.yml`,
   `ops.yml` (exclude/unexclude by slug), `resolve-website-fallback.yml` (husk
   re-mining dry-run/backfill lever, dry-run default), `eval-record.yml` (live
   golden-set re-recording → pushes a branch; repo settings forbid
