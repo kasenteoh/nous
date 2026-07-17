@@ -1646,3 +1646,39 @@ Owner: "let's do it" (the QA P0s). Both adversarially reviewed (APPROVE).
   the gaming company is UK — non_us); a sweep with the pre-extension
   detector dispatched (descriptions heal immediately; the round purge
   lands with the next cron).
+
+## PR #216 — feat(pipeline): suspect-duplicate-rounds census + cron-wire repair-duplicate-rounds
+
+- **The $0 measure-first half of the aggregation-without-dedup P0** (2026-07-16
+  QA top item). Session opened by verifying the #215 in-flight effects on prod:
+  descriptions healed, but the residue is larger than the HANDOFF flagged —
+  helix keeps 3 cross-host wrong-entity rounds + machinebrief
+  people/industry/competitors (the REAL Selipsky/KKR $10B round files under
+  the wrong industry → /trends still crowns media-entertainment); away was
+  RE-poisoned with a cloudflareaccess.com/cdn-cgi/access login URL (new
+  wrong-site class); amiato keeps the failory founder + "Buenos Aires, US".
+  All owned by the P1 aardvark arc.
+- **Prod inspections (4 ops.yml dispatches, serialized):** sambanova = 9 rounds
+  for one Series F event (F dated / E / D / "Series ?" all $1B + 3 empty
+  shells + KuCoin's garbled $100M); blue-origin = 12 rounds, 10 signal-free
+  shells (pre-rumor-guard "seeks $10B" articles — each amount-less article
+  inserted a new shell via reconcile's None+None INSERT path); terrafirma =
+  $115M(dated) + $100M(undated) same Series A (TradingView: "$115 Mln …
+  Including $100 Mln Series A"); dup GN titles (MSN ×3, GuruFocus ×2).
+- Changes: data-quality gains a **"Suspect duplicate funding rounds"** census
+  (empty shells / exact-dup losers / near-amount pairs ±15% / type-conflict
+  groups) measuring with the repair's OWN clustering rules (imports
+  _normalized_type — measurement and fix can't drift); placeholder
+  round_types ("Series ?", "unknown", …) normalize to None across clustering,
+  survivor rank, gap-fill, phantom + shell predicates; repair-duplicate-rounds
+  **promoted to every 3h cron in apply mode** (the #215 repair-wrong-websites
+  pattern; dispatch keeps explicit gates; no new inputs — 25-cap respected).
+- Review (adversarial, APPROVE): 1 IMPORTANT test gap fixed (placeholder-typed
+  phantom valuation row is now a phantom — pinned with a test) + 2 nits
+  (exact-dup detail wording, stale input description). Reviewer confirmed the
+  normalization cannot cause a wrong merge (traced all 3 passes) and the
+  schedule/dispatch YAML logic. Forward-path reconcile normalization
+  deliberately deferred to the next slice. Suite 1771 green (local pgvector).
+- Next slices queued: P0b near-amount merge gate + publication-date-gated
+  letter fold (sized by this census's prod numbers); P0c Google News
+  URL-variant article dedup.
