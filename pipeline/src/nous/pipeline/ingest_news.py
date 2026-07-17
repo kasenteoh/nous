@@ -121,7 +121,7 @@ async def _gn_title_already_stored(
         exists().where(
             NewsArticle.company_id == company_id,
             NewsArticle.url.like(f"https://{_GOOGLE_NEWS_HOST}/%"),
-            func.lower(NewsArticle.title) == title.strip().lower(),
+            func.lower(func.trim(NewsArticle.title)) == title.strip().lower(),
         )
     )
     return bool(await session.scalar(stmt))

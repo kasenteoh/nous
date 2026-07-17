@@ -55,6 +55,7 @@ from nous.db.models import Company, FundingRound, NewsArticle, RawPage
 # shared with this one-time stage rather than duplicated. A future refactor of
 # upsert.py should know these names have an external caller.
 from nous.db.upsert import _build_slug, _find_by_normalized_name, merge_companies
+from nous.sources.news import _GOOGLE_NEWS_HOST
 from nous.sources.vc_portfolios.base import is_placeholder_name
 from nous.util.slugify import normalize_name
 from nous.util.url import hostname
@@ -393,7 +394,7 @@ async def run_repair_catalog(
                 NewsArticle.published_date,
                 NewsArticle.created_at,
             )
-            .where(NewsArticle.url.like("https://news.google.com/%"))
+            .where(NewsArticle.url.like(f"https://{_GOOGLE_NEWS_HOST}/%"))
             .order_by(NewsArticle.company_id, NewsArticle.id)
         )
     ).all()
@@ -413,7 +414,25 @@ async def run_repair_catalog(
                 str(r.id),  # deterministic final tie-break
             ),
         )
-        gn_loser_ids.extend(r.id for r in ordered[1:])
+        survivor = ordered[0]
+        for row in ordered[1:]:
+            if (
+                row.funding_round_id is not None
+                and row.funding_round_id != survivor.funding_round_id
+            ):
+                # Linked to a DIFFERENT round than the survivor: deleting it
+                # would strand that round's only exact coverage link. Same
+                # title + same company + different rounds shouldn't happen —
+                # spare it and say so rather than silently destroy the link.
+                logger.warning(
+                    "repair-catalog pass 5: sparing GN duplicate %s — linked "
+                    "to a different round (%s) than the survivor's (%s)",
+                    row.id,
+                    row.funding_round_id,
+                    survivor.funding_round_id,
+                )
+                continue
+            gn_loser_ids.append(row.id)
     summary.gn_duplicate_articles_deleted = len(gn_loser_ids)
     if gn_loser_ids and not dry_run:
         await session.execute(

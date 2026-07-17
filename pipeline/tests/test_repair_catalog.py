@@ -433,3 +433,51 @@ async def test_gn_duplicate_dry_run_counts_only(db: AsyncSession) -> None:
         await db.execute(select(func.count()).select_from(NewsArticle))
     ).scalar_one()
     assert count == 2
+
+
+async def test_gn_duplicate_linked_to_different_round_is_spared(
+    db: AsyncSession,
+) -> None:
+    """A GN duplicate linked to a DIFFERENT round than the survivor is never
+    deleted — killing it would strand that round's only exact coverage link."""
+    co = _co("Two Links Co", "two-links-co")
+    db.add(co)
+    await db.flush()
+    round_a = FundingRound(
+        company_id=co.id, round_type="Series A", amount_raised=10_000_000
+    )
+    round_b = FundingRound(
+        company_id=co.id, round_type="Series B", amount_raised=50_000_000
+    )
+    db.add_all([round_a, round_b])
+    await db.flush()
+
+    title = "Two Links Co raises funding - MSN"
+    db.add_all(
+        [
+            NewsArticle(
+                company_id=co.id,
+                url="https://news.google.com/rss/articles/CBMiLINKA?oc=5",
+                title=title,
+                source="news.google.com",
+                raw_content="b",
+                funding_round_id=round_a.id,
+            ),
+            NewsArticle(
+                company_id=co.id,
+                url="https://news.google.com/rss/articles/CBMiLINKB?oc=5",
+                title=title,
+                source="news.google.com",
+                raw_content="b",
+                funding_round_id=round_b.id,
+            ),
+        ]
+    )
+    await db.commit()
+
+    summary = await run_repair_catalog(db)
+    assert summary.gn_duplicate_articles_deleted == 0
+    count = (
+        await db.execute(select(func.count()).select_from(NewsArticle))
+    ).scalar_one()
+    assert count == 2
