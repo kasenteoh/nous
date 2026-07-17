@@ -542,7 +542,11 @@ jobs:
         # verify-sources.yml lever covers bounded backfills / dry runs.
         timeout-minutes: 15
         continue-on-error: true
-        run: uv run nous verify-sources --limit 40
+        # --refetch: the stored-text pool drained 2026-07-17, so steady state
+        # is a handful of new facts per run; refetch-bucket facts get ONE
+        # polite transient live fetch each (robots/UA/throttle/SSRF inside the
+        # stage; text never persisted). Bounded by the same --limit.
+        run: uv run nous verify-sources --limit 40 --refetch
 
       - name: Infer HQ country (non-US detection backfill)
         if: ${{ github.event.inputs.run_infer_country == 'true' }}

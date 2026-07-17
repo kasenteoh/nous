@@ -1,14 +1,14 @@
 {
   "provenance": "deepseek",
   "model": "deepseek-chat",
-  "recorded_at": "2026-07-16T15:34:07+00:00",
+  "recorded_at": "2026-07-17T16:06:14+00:00",
   "response": {
     "is_funding_announcement": true,
     "round_type": "Series A",
     "amount_raised_usd": "12000000",
     "valuation_post_money_usd": null,
     "valuation_source": null,
-    "announced_date": null,
+    "announced_date": "2026-03-01",
     "lead_investors": [
       "Prairie Gate Ventures"
     ],

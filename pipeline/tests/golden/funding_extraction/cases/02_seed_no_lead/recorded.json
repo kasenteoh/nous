@@ -1,7 +1,7 @@
 {
   "provenance": "deepseek",
   "model": "deepseek-chat",
-  "recorded_at": "2026-07-16T15:33:53+00:00",
+  "recorded_at": "2026-07-17T16:05:54+00:00",
   "response": {
     "is_funding_announcement": true,
     "round_type": "Seed",
@@ -12,8 +12,7 @@
     "lead_investors": [],
     "other_investors": [
       "Cindercone Ventures",
-      "Harbor Street Capital",
-      "a group of angel investors from the logistics industry"
+      "Harbor Street Capital"
     ],
     "confidence": "medium",
     "status_event": null,

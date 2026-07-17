@@ -32,7 +32,10 @@ from nous.llm.client import MAX_PROMPT_INPUT_CHARS
 # 2026-07-16.1: rumor guard — "in talks" / "raising" / unclosed rounds are NOT
 # funding announcements (the 2026-07-16 QA pass found an in-talks headline
 # extracted, persisted, and then ✓-verified as a completed $75M round).
-PROMPT_VERSION: str = "2026-07-16.1"
+# 2026-07-17.1: clarifying parenthetical — the always-capture-valuation rule
+# is scoped to closed rounds so it can never read as overriding the rumor
+# guard (review follow-up on #214; behavior already correct live).
+PROMPT_VERSION: str = "2026-07-17.1"
 
 # News articles are usually well under the shared ceiling, but we truncate
 # defensively so a malformed scrape can't blow the prompt budget.
@@ -173,8 +176,11 @@ Return JSON matching the schema. Rules:
 - valuation_post_money_usd: Always capture the post-money valuation whenever
   the article states one ("at a $400M post-money valuation", "valuing the
   company at $1.2B", "$3B valuation") — it is a primary, high-value fact, so
-  do not skip it. Use raw USD (e.g. 400000000 for "$400M"). Null ONLY when no
-  valuation figure is stated; never guess or infer one from the round size.
+  do not skip it. (This applies to CLOSED rounds only — it does not override
+  the rumor rule above: an in-talks/unclosed article returns null here like
+  every other round field.) Use raw USD (e.g. 400000000 for "$400M"). Null
+  ONLY when no valuation figure is stated; never guess or infer one from the
+  round size.
 - valuation_source: if a publication or attribution accompanies the valuation
   number (e.g. "according to TechCrunch", "sources told The Information"),
   capture it as a short string like "TechCrunch, March 2026". Return null if
