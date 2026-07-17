@@ -1902,3 +1902,29 @@ Owner: "let's do it" (the QA P0s). Both adversarially reviewed (APPROVE).
 - **Observability is now DONE $0-style** (visible /stats + issue alerts).
   Sentry client wiring stays deferred: needs the owner's DSN and a
   traced-function-size check against the 250MB /companies hazard.
+
+## PR #228 — feat(ci): function-size gate + the ~406MB discovery
+
+- Platform-health item 1: `check:size` reproduces the /companies function's
+  traced content (.nft.json verbatim + the tracing include walks) and fails
+  the web CI job over a 180MB budget. Review (REQUEST_CHANGES → fixed): a
+  30MB sanity floor so a zeroed measurement exits 2 instead of false-passing
+  (proven on a synthetic broken manifest), and the script's local copy of
+  the exclude globs DELETED — the .nft.json is already post-exclude tracer
+  output, so a stale copy would have masked config-exclude removal (the
+  exact E-2 false-pass). Config drift now surfaces as a budget breach.
+- **The gate's first CI run caught a live prod regression**: 406.7MB on
+  ubuntu vs 87.6MB on darwin. onnxruntime-node's postinstall downloads the
+  CUDA/TensorRT EPs (~270MB) on linux only — into bin/napi-v6/linux/x64/,
+  the ONE dir the tracing includes force-ship. Every Vercel build had been
+  deploying ~400MB, surviving only on the Large Functions beta; darwin dev
+  machines never download CUDA, so local said ~92MB all along. Fix:
+  web/.npmrc `onnxruntime-node-install=skip` (repo-controlled, reaches
+  Vercel/CI/local via npm_config_*) + cuda/tensorrt excludeGlobs as
+  defense-in-depth. Post-fix ubuntu measurement: **104.7MB** (33.9 onnx CPU
+  + 33.1 model + dual linux sharp variants). Next prod deploy shrinks the
+  real function ~400→~105MB — VERIFY next session (Vercel dashboard or
+  deploy log).
+- Also pinned in next.config: Vercel's 2026-06-29 Large Functions beta (5GB,
+  auto-enroll for new projects) — the project-re-creation freeze risk is
+  retired; 250MB stays the planning bar.
