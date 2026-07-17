@@ -1,7 +1,7 @@
 {
-  "provenance": "simulated",
-  "model": null,
-  "recorded_at": null,
+  "provenance": "deepseek",
+  "model": "deepseek-chat",
+  "recorded_at": "2026-07-17T16:02:47+00:00",
   "response": {
     "verdict": "supported",
     "supporting_quote": "Meridian Labs closed a $50 million Series B round"
