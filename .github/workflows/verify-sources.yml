@@ -9,10 +9,15 @@ name: verify-sources
 #      facts carry a source_url, bucketed stored / refetch / unreachable. Sizes
 #      the addressable set + scraping load before any spend.
 #   2. verify-sources --dry-run (PAID, only when run_dry_run=true) — verifies a
-#      bounded, prominence-ordered slice of stored-text facts against DeepSeek and
-#      prints the support/unsupported/uncertain rate, the fabrication proxy, and
-#      the $/fact. Writes nothing (the fact_verifications apply path — migration
-#      0043 — is not built yet; dispatching the apply mode fails loudly).
+#      bounded, prominence-ordered slice of facts against DeepSeek and prints the
+#      support/unsupported/uncertain rate, the fabrication proxy, and the $/fact.
+#      Writes nothing. run_apply=true persists verdicts to fact_verifications
+#      (idempotent, version+source-gated).
+#
+# refetch=true widens either paid phase to the refetch bucket: facts whose
+# http(s) source has no stored text get ONE polite live fetch (robots.txt,
+# SEC_USER_AGENT contact-email UA, 1 req/s per-domain throttle); fetched text is
+# transient — never persisted. Husk-style: dry-run the refetch cohort first.
 #
 # The exact spend is printed by observability.emit_run_telemetry in the step
 # summary. This is the ONE owner-approved PAID line beyond enrichment /
@@ -39,6 +44,11 @@ on:
         required: false
         type: string
         default: "25"
+      refetch:
+        description: "Widen to refetch-bucket facts (live-fetch sources with no stored text; polite scraping)."
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -62,6 +72,8 @@ jobs:
       # The PAID line: the dry-run calls DeepSeek per fact. The key lives only in
       # Actions secrets (never locally), the same as enrichment.
       DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+      # Contact-email UA for the --refetch live fetches (scraping etiquette).
+      SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}
     steps:
       - uses: actions/checkout@v4
 
@@ -90,9 +102,12 @@ jobs:
         if: ${{ inputs.run_dry_run }}
         env:
           OP_LIMIT: ${{ inputs.limit }}
+          OP_REFETCH: ${{ inputs.refetch }}
         run: |
           set -o pipefail
-          uv run nous verify-sources --dry-run --limit "${OP_LIMIT:-25}"
+          ARGS=(--dry-run --limit "${OP_LIMIT:-25}")
+          if [ "$OP_REFETCH" = "true" ]; then ARGS+=(--refetch); fi
+          uv run nous verify-sources "${ARGS[@]}"
 
       - name: Verification apply (paid, persists)
         # Upserts verdicts into fact_verifications (idempotent). Only when
@@ -100,6 +115,9 @@ jobs:
         if: ${{ inputs.run_apply }}
         env:
           OP_LIMIT: ${{ inputs.limit }}
+          OP_REFETCH: ${{ inputs.refetch }}
         run: |
           set -o pipefail
-          uv run nous verify-sources --limit "${OP_LIMIT:-25}"
+          ARGS=(--limit "${OP_LIMIT:-25}")
+          if [ "$OP_REFETCH" = "true" ]; then ARGS+=(--refetch); fi
+          uv run nous verify-sources "${ARGS[@]}"

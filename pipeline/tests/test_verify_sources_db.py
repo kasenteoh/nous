@@ -23,6 +23,7 @@ from nous.pipeline.verify_sources import (
     _Fact,
     _upsert_verdict,
     funding_round_claim,
+    run_verify_sources,
     run_verify_sources_probe,
     total_raised_claim,
 )
@@ -376,3 +377,127 @@ async def test_stale_claim_sweep_reselects_drifted_round(db: AsyncSession) -> No
     assert fact.claim == funding_round_claim(
         "Epsilon", Decimal("65000000"), "Series B", None, None
     )
+
+
+# ── Re-fetch path (the ~103-fact refetch bucket) ─────────────────────────────
+
+
+class _StubNewsClient:
+    """Duck-typed stand-in for NewsClient: canned fetch_article_body results.
+
+    A value of None simulates a polite-fetch failure (robots block / 4xx /
+    thin body); an Exception instance is raised (transport error).
+    """
+
+    def __init__(self, bodies: dict[str, object]) -> None:
+        self.bodies = bodies
+        self.calls: list[str] = []
+
+    async def fetch_article_body(self, url: str) -> str | None:
+        self.calls.append(url)
+        result = self.bodies.get(url)
+        if isinstance(result, Exception):
+            raise result
+        assert result is None or isinstance(result, str)
+        return result
+
+
+async def test_refetch_widens_selection_transiently(db: AsyncSession) -> None:
+    """A refetch-bucket fact (http source, no stored text) is invisible to the
+    default collection, selected with refetch=True, verified against the
+    live-fetched body, and the fetch is NEVER persisted. A bare Google News
+    redirect stays excluded either way (unreachable, not refetch)."""
+    reuters = "https://reuters.com/foxtrot-round"
+    gnews = "https://news.google.com/rss/articles/CBMiOpaque"
+    co = _company("Foxtrot", latest_round_amount=Decimal("100000000"))
+    gn_co = _company("Golf", latest_round_amount=Decimal("90000000"))
+    db.add_all([co, gn_co])
+    await db.flush()
+    db.add(
+        FundingRound(
+            company_id=co.id,
+            primary_news_url=reuters,
+            amount_raised=Decimal("100000000"),
+        )
+    )
+    db.add(
+        FundingRound(
+            company_id=gn_co.id,
+            primary_news_url=gnews,
+            amount_raised=Decimal("90000000"),
+        )
+    )
+    await db.flush()
+
+    # Default path: neither fact is selectable (no stored text).
+    assert await _collect_stored_text_facts(db, limit=10) == []
+
+    stub = _StubNewsClient({reuters: _BODY})
+    counts = {"refetched": 0, "refetch_failed": 0}
+    facts = await _collect_stored_text_facts(
+        db,
+        limit=10,
+        refetch=True,
+        news_client=stub,  # type: ignore[arg-type]
+        refetch_counts=counts,
+    )
+    assert [(f.company_name, f.fact_kind) for f in facts] == [
+        ("Foxtrot", "funding_round")
+    ]
+    assert facts[0].source_text.startswith("TechCrunch reports")
+    assert counts == {"refetched": 1, "refetch_failed": 0}
+    # Only the refetch-bucket URL was fetched — never the Google News redirect.
+    assert stub.calls == [reuters]
+    # Transient: the fetched body was NOT persisted anywhere.
+    stored = (
+        (await db.execute(select(NewsArticle).where(NewsArticle.url == reuters)))
+        .scalars()
+        .all()
+    )
+    assert stored == []
+
+
+async def test_refetch_failure_skips_fact_and_counts(db: AsyncSession) -> None:
+    """A failed polite fetch (None or transport error) drops the fact — a claim
+    is never verified against empty text — and increments refetch_failed."""
+    quiet = "https://example.com/hotel-round"
+    boom = "https://example.com/india-round"
+    hotel = _company("Hotel", latest_round_amount=Decimal("80000000"))
+    india = _company("India", latest_round_amount=Decimal("70000000"))
+    db.add_all([hotel, india])
+    await db.flush()
+    db.add(
+        FundingRound(
+            company_id=hotel.id,
+            primary_news_url=quiet,
+            amount_raised=Decimal("80000000"),
+        )
+    )
+    db.add(
+        FundingRound(
+            company_id=india.id,
+            primary_news_url=boom,
+            amount_raised=Decimal("70000000"),
+        )
+    )
+    await db.flush()
+
+    stub = _StubNewsClient({quiet: None, boom: RuntimeError("connection reset")})
+    counts = {"refetched": 0, "refetch_failed": 0}
+    facts = await _collect_stored_text_facts(
+        db,
+        limit=10,
+        refetch=True,
+        news_client=stub,  # type: ignore[arg-type]
+        refetch_counts=counts,
+    )
+    assert facts == []
+    assert counts == {"refetched": 0, "refetch_failed": 2}
+
+
+async def test_run_verify_sources_refetch_requires_user_agent(
+    db: AsyncSession,
+) -> None:
+    """The scraping-etiquette contract: no contact-email UA, no live fetches."""
+    with pytest.raises(ValueError, match="user_agent"):
+        await run_verify_sources(db, refetch=True, user_agent="")

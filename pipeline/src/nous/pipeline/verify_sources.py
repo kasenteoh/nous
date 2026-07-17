@@ -28,9 +28,16 @@ supported/unsupported/uncertain rate, a **fabrication proxy** (a ``supported``
 verdict whose quote is NOT a real substring of the source — the moat-critical
 "any false-support" check), and the $/fact. It writes NOTHING — the husk gate
 before the ``fact_verifications`` schema (migration 0043) and the persisting
-apply path are built. The **refetch** bucket is deliberately out of scope for the
-dry run: it measures the cheapest, no-request path first; re-fetching (with
-robots.txt + contact-email UA + 1 req/sec) lands with the apply stage.
+apply path are built.
+
+**--refetch** (opt-in) widens the candidate set to the **refetch** bucket: a
+fact whose http(s) source has no stored text gets ONE polite live fetch via
+``NewsClient.fetch_article_body`` (robots.txt honored, contact-email UA, the
+shared 1 req/s per-domain throttle, SSRF guard, thin-body cutoff). Fetched text
+is transient — used for this verification only, never persisted; the verdict
+row (with its verbatim ``supporting_quote``) is the durable artifact. Bare
+``news.google.com`` redirects stay excluded (consent interstitials, the
+**unreachable** bucket).
 
 Only ``supported`` (with a grounded quote) may ever earn the public ✓ —
 ``uncertain``/``unsupported`` are never marked verified (empty-not-fabricate).
@@ -77,6 +84,7 @@ from nous.llm.prompts.source_verification import (
     quote_is_grounded,
 )
 from nous.observability import write_step_summary
+from nous.sources.news import NewsClient
 from nous.util.text import truncate_to_chars
 from nous.util.url import hostname
 
@@ -205,6 +213,34 @@ class VerifySourcesProbeSummary(BaseModel):
     addressable: int  # stored + refetch
     addressable_pct: float
     buckets_by_kind: dict[str, dict[str, int]]
+
+
+def _refetchable_source(
+    source_col: InstrumentedAttribute[str | None],
+) -> ColumnElement[bool]:
+    """SQL approximation of the ``refetch`` bucket: an http(s) source that is
+    not a bare Google-News redirect (those resolve to consent interstitials).
+    ``classify_source`` remains the Python-side truth; this only widens the
+    candidate SELECT when the re-fetch path is enabled.
+    """
+    return and_(
+        source_col.like("http%"),
+        ~source_col.like(f"%//{_GOOGLE_NEWS_HOST}/%"),
+    )
+
+
+def _source_selectable(
+    source_col: InstrumentedAttribute[str | None],
+    company_id_col: InstrumentedAttribute[UUID],
+    *,
+    refetch: bool,
+) -> ColumnElement[bool]:
+    """Stored-text sources, plus (when the re-fetch path is on) live-fetchable
+    ones. The single predicate every fact collector uses."""
+    stored = _has_stored_text(source_col, company_id_col)
+    if not refetch:
+        return stored
+    return or_(stored, _refetchable_source(source_col))
 
 
 def _has_stored_text(
@@ -414,6 +450,11 @@ class VerifySourcesSummary(BaseModel):
     errors: int = 0
     results: list[FactVerdict] = []
     rows_written: int = 0  # reserved for the apply path
+    # Re-fetch path (the ~103-fact refetch bucket): sources with no stored text
+    # fetched live for this verification only (never persisted — the verdict's
+    # supporting_quote is the durable artifact).
+    refetched: int = 0
+    refetch_failed: int = 0
 
 
 async def _load_source_text(
@@ -643,7 +684,13 @@ async def _collect_stale_claim_facts(session: AsyncSession) -> list[_Fact]:
 
 
 async def _collect_stored_text_facts(
-    session: AsyncSession, *, limit: int, for_apply: bool = False
+    session: AsyncSession,
+    *,
+    limit: int,
+    for_apply: bool = False,
+    refetch: bool = False,
+    news_client: NewsClient | None = None,
+    refetch_counts: dict[str, int] | None = None,
 ) -> list[_Fact]:
     """Prominence-ordered stored-text facts across the three kinds, capped at limit.
 
@@ -663,7 +710,9 @@ async def _collect_stored_text_facts(
         _shown(),
         Company.total_raised_usd.is_not(None),
         Company.total_raised_source_url.is_not(None),
-        _has_stored_text(Company.total_raised_source_url, Company.id),
+        _source_selectable(
+            Company.total_raised_source_url, Company.id, refetch=refetch
+        ),
     ]
     if for_apply:
         tr_where.append(
@@ -707,7 +756,9 @@ async def _collect_stored_text_facts(
         _shown(),
         Company.status != "active",
         Company.status_source_url.is_not(None),
-        _has_stored_text(Company.status_source_url, Company.id),
+        _source_selectable(
+            Company.status_source_url, Company.id, refetch=refetch
+        ),
     ]
     if for_apply:
         st_where.append(
@@ -750,7 +801,9 @@ async def _collect_stored_text_facts(
         # Skip NULL-amount rounds — "raised an undisclosed amount" can't cleanly
         # verify (the #197 gate refinement; drove much of the 28% unsupported).
         FundingRound.amount_raised.is_not(None),
-        _has_stored_text(FundingRound.primary_news_url, FundingRound.company_id),
+        _source_selectable(
+            FundingRound.primary_news_url, FundingRound.company_id, refetch=refetch
+        ),
     ]
     if for_apply:
         fr_where.append(
@@ -810,20 +863,42 @@ async def _collect_stored_text_facts(
     facts.sort(key=lambda f: f.prominence, reverse=True)
     selected = facts[:limit]
 
-    # Load source text for the final set only. The SQL already filtered to facts
-    # WHERE stored text exists, so a miss here means a concurrent delete removed
-    # the article/page between the SELECT and the load — log it and drop the fact
-    # (never verify a claim against empty text).
+    # Load source text for the final set only. Stored text first; when the
+    # re-fetch path is enabled, a refetch-bucket fact (http(s) source, no
+    # stored text) gets ONE polite live fetch instead — robots.txt, the
+    # contact-email UA, the shared 1 req/s per-domain throttle, the SSRF
+    # guard, and the thin-body cutoff all live inside
+    # ``NewsClient.fetch_article_body``. The fetched text is used transiently
+    # for this verification only (never persisted; the verdict row is the
+    # durable artifact). A fact with neither stored nor fetchable text is
+    # dropped — never verify a claim against empty text.
     loaded: list[_Fact] = []
     for fact in selected:
         text = await _load_source_text(session, fact.company_id, fact.source_url)
+        if text is None and news_client is not None:
+            bucket = classify_source(fact.source_url, has_stored_text=False)
+            if bucket == "refetch":
+                try:
+                    text = await news_client.fetch_article_body(fact.source_url)
+                except Exception:  # noqa: BLE001 — one bad source never kills the run
+                    logger.warning(
+                        "verify-sources: re-fetch failed for %s (%s) — skipping.",
+                        fact.company_slug,
+                        fact.source_url,
+                        exc_info=True,
+                    )
+                    text = None
+                if text is not None and refetch_counts is not None:
+                    refetch_counts["refetched"] += 1
+                elif refetch_counts is not None:
+                    refetch_counts["refetch_failed"] += 1
         fact.source_text = truncate_to_chars(text or "", MAX_PROMPT_INPUT_CHARS)
         if len(fact.source_text) >= _MIN_SOURCE_CHARS:
             loaded.append(fact)
         else:
-            logger.warning(
-                "verify-sources: %s (%s) lost its stored source text between "
-                "selection and load (concurrent change?) — skipping.",
+            logger.info(
+                "verify-sources: %s (%s) has no stored or fetchable source "
+                "text — skipping.",
                 fact.company_slug,
                 fact.fact_kind,
             )
@@ -872,24 +947,51 @@ async def _upsert_verdict(
 
 
 async def run_verify_sources(
-    session: AsyncSession, *, limit: int = 25, dry_run: bool = True
+    session: AsyncSession,
+    *,
+    limit: int = 25,
+    dry_run: bool = True,
+    refetch: bool = False,
+    user_agent: str = "",
 ) -> VerifySourcesSummary:
-    """Verify a bounded, prominence-ordered slice of stored-text facts via DeepSeek.
+    """Verify a bounded, prominence-ordered slice of sourced facts via DeepSeek.
 
     One ``complete_json`` call per fact. A ``supported`` verdict whose quote is not
     a verbatim substring of the source is downgraded to ``uncertain`` and flagged
     (never a false ✓). Apply (``dry_run=False``) upserts every verdict into
     ``fact_verifications`` (version+source-gated selection → idempotent, no
-    re-bill) and commits once at the end; dry-run persists nothing. The re-fetch
-    (``refetch`` bucket) path is a follow-up — this stage verifies stored-text
-    facts only.
+    re-bill) and commits once at the end; dry-run persists nothing.
+
+    ``refetch=True`` widens the candidate set to the ``refetch`` bucket: facts
+    whose http(s) source has NO stored text get one polite live fetch through
+    ``NewsClient.fetch_article_body`` (robots.txt, contact-email ``user_agent``,
+    the shared 1 req/s per-domain throttle, SSRF guard, thin-body cutoff). The
+    fetched text is used transiently for this verification only — never
+    persisted; the verdict row is the durable artifact. Requires a non-empty
+    ``user_agent`` (the scraping-etiquette contract).
     """
+    if refetch and not user_agent:
+        raise ValueError("refetch=True requires a contact-email user_agent")
     summary = VerifySourcesSummary(
         dry_run=dry_run, prompt_version=PROMPT_VERSION, results=[]
     )
-    facts = await _collect_stored_text_facts(
-        session, limit=limit, for_apply=not dry_run
-    )
+    refetch_counts: dict[str, int] = {"refetched": 0, "refetch_failed": 0}
+    if refetch:
+        async with NewsClient(user_agent=user_agent) as news_client:
+            facts = await _collect_stored_text_facts(
+                session,
+                limit=limit,
+                for_apply=not dry_run,
+                refetch=True,
+                news_client=news_client,
+                refetch_counts=refetch_counts,
+            )
+    else:
+        facts = await _collect_stored_text_facts(
+            session, limit=limit, for_apply=not dry_run
+        )
+    summary.refetched = refetch_counts["refetched"]
+    summary.refetch_failed = refetch_counts["refetch_failed"]
 
     for fact in facts:
         summary.facts_seen += 1
@@ -1006,6 +1108,12 @@ def render_verify_sources_table(summary: VerifySourcesSummary) -> str:
         f"{summary.fabrication_flags}"
     )
     lines.append(f"- **Errors:** {summary.errors}")
+    if summary.refetched or summary.refetch_failed:
+        lines.append(
+            f"- **Re-fetched sources (transient, never persisted):** "
+            f"{summary.refetched} fetched, {summary.refetch_failed} failed "
+            f"(robots/4xx/5xx/thin — those facts skipped)."
+        )
     if not summary.dry_run:
         lines.append(
             f"- **Persisted:** {summary.rows_written} verdicts upserted into "
