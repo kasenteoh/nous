@@ -61,7 +61,9 @@ concurrency:
 jobs:
   ops:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # 20: the repair-misattributed-news commands scan the whole catalog
+    # (batch-loaded, ~1-2 min expected; headroom for pooler latency).
+    timeout-minutes: 20
     defaults:
       run:
         working-directory: pipeline

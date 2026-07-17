@@ -53,6 +53,7 @@ from __future__ import annotations
 
 import logging
 import re
+from collections import defaultdict
 from uuid import UUID
 
 from pydantic import BaseModel, Field
@@ -157,6 +158,10 @@ async def run_repair_misattributed_news(
     their company. Per-company commit; idempotent."""
     summary = RepairMisattributedNewsSummary(dry_run=dry_run)
 
+    # Batch-load EVERYTHING up front (three queries total), then scan in pure
+    # Python. The per-company query loop version did ~3 round-trips × every
+    # company against the Supabase pooler and blew ops.yml's 10-minute job
+    # timeout before finishing the letter "a" (2026-07-17 prod dry-run).
     companies = (
         await session.execute(
             select(Company.id, Company.name, Company.slug)
@@ -164,38 +169,41 @@ async def run_repair_misattributed_news(
             .order_by(Company.slug)
         )
     ).all()
+    shown_ids = {row.id for row in companies}
+
+    articles_by_company: dict[UUID, list[tuple[UUID, str, str, str | None]]] = (
+        defaultdict(list)
+    )
+    for aid, a_company_id, url, title, raw_content in (
+        await session.execute(
+            select(
+                NewsArticle.id,
+                NewsArticle.company_id,
+                NewsArticle.url,
+                NewsArticle.title,
+                NewsArticle.raw_content,
+            ).order_by(NewsArticle.id)
+        )
+    ).all():
+        if a_company_id in shown_ids:
+            articles_by_company[a_company_id].append(
+                (aid, url, title, raw_content)
+            )
+
+    aliases_by_company: dict[UUID, list[str]] = defaultdict(list)
+    for old_slug, alias_company_id in (
+        await session.execute(select(SlugAlias.old_slug, SlugAlias.company_id))
+    ).all():
+        aliases_by_company[alias_company_id].append(old_slug)
 
     for company_id, company_name, slug in companies:
         summary.companies_seen += 1
 
-        articles = (
-            await session.execute(
-                select(
-                    NewsArticle.id,
-                    NewsArticle.url,
-                    NewsArticle.title,
-                    NewsArticle.raw_content,
-                )
-                .where(NewsArticle.company_id == company_id)
-                .order_by(NewsArticle.id)
-            )
-        ).all()
+        articles = articles_by_company.get(company_id, [])
         if not articles:
             continue
 
-        aliases = _alias_names(
-            list(
-                (
-                    await session.execute(
-                        select(SlugAlias.old_slug).where(
-                            SlugAlias.company_id == company_id
-                        )
-                    )
-                )
-                .scalars()
-                .all()
-            )
-        )
+        aliases = _alias_names(aliases_by_company.get(company_id, []))
 
         bad_ids: list[UUID] = []
         bad_urls: list[str] = []
@@ -293,11 +301,16 @@ async def run_repair_misattributed_news(
 
         logger.info(
             "repair-misattributed-news: %s — %d article(s) never mention the "
-            "company (%d extracted round(s) go with them)%s",
+            "company (%d extracted round(s) go with them)%s: %s",
             slug,
             len(bad_ids),
             len(bad_round_ids),
             " [dry-run]" if dry_run else "",
+            "; ".join(
+                title[:90]
+                for _, url, title, _c in articles
+                if url in bad_urls
+            )[:600],
         )
         summary.articles_deleted += len(bad_ids)
         summary.rounds_deleted += len(bad_round_ids)
