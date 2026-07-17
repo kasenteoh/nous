@@ -32,6 +32,13 @@ const excludeGlobs = [
   "**/onnxruntime-node/bin/napi-v6/win32/**",
   "**/onnxruntime-node/bin/napi-v6/linux/arm64/**",
   "**/onnxruntime-web/**",
+  // The CUDA/TensorRT execution providers are postinstall DOWNLOADS into
+  // linux/x64 (the one dir the includes force-ship) — ~270MB of dead weight
+  // for a CPU-only function. web/.npmrc skips the download at the source
+  // (onnxruntime-node-install=skip); these globs are defense-in-depth so a
+  // future installer change can't re-ship them unnoticed.
+  "**/libonnxruntime_providers_cuda*",
+  "**/libonnxruntime_providers_tensorrt*",
 ];
 
 // Two things static analysis cannot see (spike-verified against .nft.json):
