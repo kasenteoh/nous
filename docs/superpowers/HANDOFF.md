@@ -7,6 +7,54 @@ authoritative history), then `BACKLOG.md` (annotated with what shipped; its
 **"2026-07-16 fresh customer-perspective QA"** section is the current work
 queue). The plan docs under `docs/superpowers/plans/` are historical context.
 
+## LATEST UPDATE — delete-round lever SHIPPED; marquee cleanup IN FLIGHT (2026-07-17 night)
+
+Slice 1 of the entity-resolution arc is live. **PR #230** (merged): the
+`delete-round` surgical ops lever — select by slug+amount (ambiguity FAILS
+listing round ids; --round-id disambiguates), dry-run default; an apply
+deletes the round + its linked/primary articles + clears stated-total/
+non-active-status when sourced from the purged URLs + the round's ✓
+verifications, then refreshes denorms. ops.yml: `delete-round-dry-run` /
+`-apply` + `amount`/`round_id` inputs. Review: COMMENT→all 5 findings fixed
+pre-merge (parse-error ClickExceptions, shared-primary-URL over-match pinned
+by test, idempotency + as_of assertions). Suite 1819 green.
+
+**Marquee cleanup (task in flight when this was written):** all NINE
+dry-runs ran clean on prod — every previewed article title confirmed the QA
+evidence (bespoke-labs←IM8 $1B, wonder←Marc Lore's $650M, wave←Primary Wave
+$2.2B + Third Wave $27M, impulse←Impulse Dynamics $136M+$158M, prometheus
+$10B rumor variant, sambanova KuCoin $100M, terrafirma←TerraFirma Inc $115M
+incl. 4 construction articles). The APPLY batch (same nine + exclude-company
+uala non_us chimera + reresolve-company callsign→callsign.com +
+genesis-therapeutics→genesistherapeutics.ai) was dispatched serially via
+`scratchpad/applies.sh`; **VERIFY FIRST next session**: check the last ~12
+ops.yml runs completed successfully, then the cleaned .md pages + /trends
+(target: 12/12 biggest rounds correct after ISR).
+
+**Known residuals to chase after the applies:**
+- bespoke-labs stated total ($1B): its total_raised_source_url is a
+  DIFFERENT syndication URL of the IM8 story, so delete-round's URL match
+  did NOT clear it (dry-run showed total_raised_cleared=false) — if the $1B
+  persists on the page, extend delete-round with an explicit --clear-total
+  flag (or clear via a tiny ops addition) rather than widening the URL match.
+- wave "shut down" status: sourced from a GN URL outside the purge sets —
+  same treatment (--clear-status flag) if it persists.
+- Purged articles inside the 14-day news lookback can RE-INGEST until they
+  age out (SambaNova already demonstrated recurrence once) — the entity-
+  aware ingest guard (next slice) is the permanent fix; until then a re-run
+  of the same delete-round dispatch re-heals in one shot.
+
+**NEXT (the arc's main course): entity-aware round ingestion [L]** — $0
+probe over stored rounds (does the source text corroborate THIS company's
+website/description context?), then the ingest-time guard with LLM
+company-match adjudication for collision-prone names, then a retroactive
+audit over high-prominence rounds. Then dedup signal widening [M]
+(valuation+investor overlap, "extension" type suffixes, the bunkerhill
+pair), then the P1 tail (harbor common-word coverage, investor identity
+splits, timeline standalone-news collapse, export-vs-semantic count,
+stage= case). Owner calls still parked: badge-gating on entity-audit
+state; Sentry DSN.
+
 ## LATEST UPDATE — post-surgery QA sweep triaged; NEXT = entity resolution (2026-07-17 late)
 
 pipeline.yml took its input refactor (#229 — ONE `overrides` JSON dispatch
