@@ -1974,3 +1974,35 @@ Owner: "let's do it" (the QA P0s). Both adversarially reviewed (APPROVE).
 - Ops-scripting gotcha: gh in a background shell may not sit in a git repo —
   every scripted gh call needs -R kasenteoh/nous (the first apply batch spun
   uselessly on "failed to determine base repo" until relaunched).
+
+## PR #231 — feat(pipeline): delete-round --clear-total/--clear-status
+
+- The two predicted residuals were confirmed live on prod this morning:
+  wave still wore "shut down" (GN URL outside the purge set) and wonder's
+  stated $650M total re-minted with its re-ingested round. Verification
+  matrix otherwise green: all 13 apply runs succeeded; impulse, sambanova,
+  callsign, genesis-therapeutics, uala (gone = excluded) all clean; /trends
+  biggest-rounds list clean.
+- **RECURRENCE CONFIRMED, both predicted and fast:** wonder's $650M Series D
+  and terrafirma's $115M round were both re-ingested by the 3h cron within
+  hours of the applies (dry-run dispatches this morning found both back in
+  the DB with fresh articles). Deletions of recent-news rounds are
+  whack-a-mole until the entity-aware ingest guard ships — the guard is now
+  the critical path, and re-heals are deferred until it's live.
+- The flags: --clear-total / --clear-status force the field clear when the
+  poison arrived via a source URL OUTSIDE the purge set (a different
+  syndication of the same wrong-entity story). No-op when nothing to clear;
+  a forced clear kills the field's ✓ with it. Folded fix: a status reset
+  (URL-matched or forced) now also deletes status-kind fact_verifications —
+  previously only the total's ✓ died (web-safe residue, ✓ is
+  source-matched, but a wrong-entity ✓ row must not survive its fact).
+- Review (code-reviewer subagent): APPROVE, 2 LOW — both applied: the
+  dry-run summary now previews the doomed values
+  (total_raised_was/_source_was, status_was/_source_was; an operator
+  forcing a clear must see WHAT dies), and a combined-flags test pins both
+  clears + both ✓ kinds on one dispatch. ops.yml: boolean
+  clear_total/clear_status inputs. Suite 1823 green.
+- New residuals spotted during verification (queued behind the guard):
+  bespoke-labs' website is a Yahoo Finance ARTICLE URL (article-URL-as-
+  homepage class, host not blocklisted) and prometheus carries an
+  unexplained second $6.2B round (total $18.2B) — audit will adjudicate.
