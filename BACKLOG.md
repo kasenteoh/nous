@@ -51,6 +51,25 @@ names; a retroactive entity-audit pass over high-prominence rounds; and a
 surgical ops lever (no way today to delete ONE wrong round without excluding
 the whole company). Recurrence-proofing is part of the bar.
 
+**Progress (2026-07-18):**
+- ~~surgical ops lever~~ — SHIPPED (#230 delete-round; #231 adds
+  --clear-total/--clear-status for out-of-purge-set residuals + status-✓
+  purge). NB: purged recent-news rounds RE-INGEST within hours via the 3h
+  cron (wonder + terrafirma both recurred) — re-heals are deferred until
+  the ingest guard lands.
+- ~~$0 probe~~ — SHIPPED (#232 audit-round-entities; #233/#234 calibrated
+  against 3 live prod dispatches: 706→213 suspects of 1112 checked). The
+  run-3 report IS the retroactive-audit candidate set; headline finds:
+  built←"Built In" $30B (outlet-name collision), blue←Blue Origin $10B,
+  magic←Magic Leap/Eden/Spoon (3 entities), adaptive←Adaptive Security,
+  clipboard←Clipboard Health, odyssey/maze/amber/fathom←Therapeutics,
+  drip←Drip Capital, bunkerhill←Bunkerhill Health (the dedup-miss pair),
+  prometheus $6.2B = "Project Prometheus" (same-entity dedup case).
+- NEXT: the ingest-time guard (cheap signals → LLM adjudication for
+  suspect/weak attachments; new small DeepSeek call class ~cents/day),
+  then the retroactive LLM audit over the 213 + lowercase/weak cohorts,
+  then re-apply the recurred purges.
+
 ### P0 — dedup signal gaps the sweep proved [M]
 prometheus $10B/$12B: 16% gap dodges ±15%, but same valuation + same
 investor trio → widen the merge signal to valuation/investor overlap.
