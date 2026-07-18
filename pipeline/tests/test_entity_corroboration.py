@@ -290,6 +290,87 @@ def test_head_token_variant_keeps_original_own_tokens() -> None:
     assert r.suspect is False
 
 
+def test_own_formal_name_via_website_is_neutral() -> None:
+    """Third prod triage: impulse's site is impulsespace.com, so "Impulse
+    Space" is its own formal name — not another entity."""
+    text = (
+        "Impulse Space Raises $300M Series C. Impulse Space builds orbital "
+        "transfer vehicles, and Impulse Space plans lunar missions."
+    )
+    r = corroborate_entity(
+        "Impulse",
+        "Impulse is a logistics company building orbital transfer vehicles "
+        "for satellite deployment missions.",
+        text,
+        own_context="https://www.impulsespace.com/ impulse",
+    )
+    assert r.extended_occurrences == 0
+    assert r.suspect is False
+
+
+def test_other_entity_not_neutralized_by_unrelated_context() -> None:
+    """Impulse Dynamics stays a suspect for the space company — its context
+    contains neither "dynamics" nor "impulsedynamics"."""
+    text = (
+        "Impulse Dynamics Raises $136M. Impulse Dynamics makes cardiac "
+        "devices, and Impulse Dynamics treats heart failure."
+    )
+    r = corroborate_entity(
+        "Impulse",
+        "Impulse is a space logistics company building orbital transfer "
+        "vehicles for satellite deployment missions.",
+        text,
+        own_context="https://www.impulsespace.com/ impulse",
+    )
+    assert r.suspect is True
+    assert any("Impulse Dynamics" in e for e in r.evidence)
+
+
+def test_attributive_prefix_and_financial_followers_neutral() -> None:
+    """"SoftBank-backed Klook" / "London-based Hibob" / "xAI Private
+    Funding" — attributions and financial nouns, not entities."""
+    text = (
+        "SoftBank-backed Klook Raises $210M. London-based Klook Expands "
+        "Into Tours, and Klook Private Funding Round Draws Interest."
+    )
+    r = corroborate_entity(
+        "Klook",
+        "Klook is a travel activities booking marketplace for tours, "
+        "attractions and experiences across Asia.",
+        text,
+    )
+    assert r.extended_occurrences == 0
+    assert r.suspect is False
+
+
+def test_lowercase_distinctive_brand_with_context_not_suspect() -> None:
+    """Third prod triage: "n8n"/"claroty"-class all-lowercase brands whose
+    article shares profile vocabulary must not be condemned; a lowercase
+    common word with ZERO overlap (bespoke) still is."""
+    text = (
+        "n8n raises $180M for workflow automation. The fair-code platform "
+        "lets teams build integrations and automate workflows with nodes."
+    )
+    r = corroborate_entity(
+        "n8n",
+        "n8n is a workflow automation platform with a fair-code license, "
+        "letting teams build node-based integrations.",
+        text,
+    )
+    assert r.lowercase_only is True
+    assert r.suspect is False
+
+    wrong = corroborate_entity(
+        "Bespoke",
+        "Bespoke builds reinforcement learning environments for training "
+        "reliable autonomous coding agents.",
+        "The wellness brand offers bespoke supplement formulations with "
+        "bespoke packaging tailored to members.",
+    )
+    assert wrong.lowercase_only is True
+    assert wrong.suspect is True
+
+
 def test_no_text_and_empty_name_fail_open() -> None:
     r = corroborate_entity("Wave", _WAVE_DESC, "")
     assert r.suspect is False

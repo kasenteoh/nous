@@ -100,7 +100,11 @@ def _name_variants(company_name: str) -> list[str]:
 
 
 def _best_corroboration(
-    company_name: str, description: str | None, text: str
+    company_name: str,
+    description: str | None,
+    text: str,
+    *,
+    own_context: str | None = None,
 ) -> CorroborationResult:
     """Evaluate every name variant; the BEST-corroborating one wins.
 
@@ -117,7 +121,9 @@ def _best_corroboration(
     # "Yuga Labs" following the head-variant "Yuga" is the company itself.
     full_tokens = set(strip_corporate_suffix(company_name).lower().split())
     results = [
-        corroborate_entity(v, description, text, own_tokens=full_tokens)
+        corroborate_entity(
+            v, description, text, own_tokens=full_tokens, own_context=own_context
+        )
         for v in _name_variants(company_name)
     ]
     eligible = [r for r in results if r.occurrences > 0]
@@ -160,7 +166,13 @@ async def run_audit_round_entities(
     module docstring. Read-only."""
     rows = (
         await session.execute(
-            select(FundingRound, Company.slug, Company.name, Company.description_short)
+            select(
+                FundingRound,
+                Company.slug,
+                Company.name,
+                Company.description_short,
+                Company.website,
+            )
             .join(Company, FundingRound.company_id == Company.id)
             .where(Company.exclusion_reason.is_(None))
         )
@@ -209,7 +221,7 @@ async def run_audit_round_entities(
             by_url.setdefault(a.url, []).append(a)
 
     all_suspects: list[tuple[Decimal, SuspectRound]] = []
-    for round_row, slug, name, description in rows:
+    for round_row, slug, name, description, website in rows:
         articles: dict[UUID, NewsArticle] = {
             a.id: a for a in by_round.get(round_row.id, [])
         }
@@ -230,7 +242,12 @@ async def run_audit_round_entities(
         else:
             summary.headline_texts += 1
 
-        result = _best_corroboration(name, description, text)
+        # Website + slug are own-identity context: they decide whether an
+        # extended phrase is the company's own FORMAL name (impulse whose
+        # site is impulsespace.com owns "Impulse Space").
+        result = _best_corroboration(
+            name, description, text, own_context=f"{website or ''} {slug}"
+        )
         reasons = list(result.reasons)
         if result.occurrences == 0:
             reasons.append("name absent from stored coverage text")
