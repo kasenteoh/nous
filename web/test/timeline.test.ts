@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildTimeline, MATCH_WINDOW_DAYS } from "@/lib/timeline";
+import { buildTimeline, MATCH_WINDOW_DAYS, titleTokens } from "@/lib/timeline";
 import type { FundingRoundWithInvestors, NewsArticleRow } from "@/lib/types";
 
 let seq = 0;
@@ -331,5 +331,180 @@ describe("buildTimeline — primary pinning & unrenderable URLs (review fixes)",
       live?.kind === "funding" ? live.coverage.map((c) => c.url) : [],
     ).toContain(article.url);
     expect(items.filter((i) => i.kind === "news")).toHaveLength(0);
+  });
+});
+
+describe("standalone story clustering (the kalshi/blue-origin firehose)", () => {
+  const NO_ROUNDS: FundingRoundWithInvestors[] = [];
+
+  it("collapses the same syndicated headline into one story with coverage", () => {
+    // The blue-origin shape: one piece re-served by four outlets, titles
+    // differing only in the trailing "- Outlet" segment.
+    const articles = [
+      news({
+        title: "Jeff Bezos Put $2 Billion of His Own Money Into Blue Origin's Funding Round - MSN",
+        url: "https://news.google.com/rss/articles/a1",
+        source: "news.google.com",
+        published_date: "2026-07-15",
+      }),
+      news({
+        title: "Jeff Bezos Put $2 Billion of His Own Money Into Blue Origin's Funding Round - AOL.com",
+        url: "https://news.google.com/rss/articles/a2",
+        source: "news.google.com",
+        published_date: "2026-07-14",
+      }),
+      news({
+        title: "Jeff Bezos Put $2 Billion of His Own Money Into Blue Origin's Funding Round - The Motley Fool",
+        url: "https://news.google.com/rss/articles/a3",
+        source: "news.google.com",
+        published_date: "2026-07-14",
+      }),
+      news({
+        title: "Jeff Bezos put $2 billion of his own money into Blue Origin funding round - Yahoo Finance",
+        url: "https://news.google.com/rss/articles/a4",
+        source: "news.google.com",
+        published_date: "2026-07-14",
+      }),
+    ];
+    const items = standaloneNews(NO_ROUNDS, articles);
+    expect(items).toHaveLength(1);
+    const story = items[0];
+    if (story.kind !== "news") throw new Error("expected news");
+    expect(story.coverage).toHaveLength(4);
+    // Lead = newest article; it renders the row.
+    expect(story.article.published_date).toBe("2026-07-15");
+    expect(story.coverage[0].url).toBe(story.article.url);
+  });
+
+  it("keeps DIFFERENT stories apart even in the same week", () => {
+    // "seeks $10B" (rumor era) vs "$2B of his own money" — different events.
+    const seeks = news({
+      title: "Blue Origin seeks $10bn in funding - TechCentral.ie",
+      url: "https://news.google.com/rss/articles/s1",
+      published_date: "2026-07-13",
+    });
+    const seeks2 = news({
+      title: "Jeff Bezos' Blue Origin Seeks $10 Billion in First Outside Funding - Tempo.co",
+      url: "https://news.google.com/rss/articles/s2",
+      published_date: "2026-07-13",
+    });
+    const ownMoney = news({
+      title: "Jeff Bezos Put $2 Billion of His Own Money Into Blue Origin's Funding Round - MSN",
+      url: "https://news.google.com/rss/articles/o1",
+      published_date: "2026-07-15",
+    });
+    const items = standaloneNews(NO_ROUNDS, [seeks, seeks2, ownMoney]);
+    expect(items).toHaveLength(2);
+    const sizes = items
+      .map((i) => (i.kind === "news" ? i.coverage.length : 0))
+      .sort();
+    expect(sizes).toEqual([1, 2]); // the two "seeks" variants merged
+  });
+
+  it("folds money spellings and announce verbs into one story", () => {
+    const a = news({
+      title: "Kalshi raises $300M at a $5B valuation - TechCrunch",
+      url: "https://techcrunch.com/kalshi",
+      published_date: "2026-07-10",
+    });
+    const b = news({
+      title: "Kalshi raised $300 million at $5 billion valuation - Reuters",
+      url: "https://reuters.com/kalshi",
+      published_date: "2026-07-11",
+    });
+    const items = standaloneNews(NO_ROUNDS, [a, b]);
+    expect(items).toHaveLength(1);
+  });
+
+  it("does not merge beyond the story window", () => {
+    const a = news({
+      title: "Acme raises $50M Series B - TechCrunch",
+      url: "https://techcrunch.com/acme-1",
+      published_date: "2026-07-01",
+    });
+    const b = news({
+      title: "Acme raises $50M Series B - Reuters",
+      url: "https://reuters.com/acme-2",
+      published_date: "2026-07-12", // 11 days later, beyond STORY_WINDOW_DAYS
+    });
+    expect(standaloneNews(NO_ROUNDS, [a, b])).toHaveLength(2);
+  });
+
+  it("never merges undated articles and keeps singletons as plain rows", () => {
+    const a = news({
+      title: "Acme raises $50M - TechCrunch",
+      url: "https://techcrunch.com/u1",
+      published_date: null,
+    });
+    const b = news({
+      title: "Acme raises $50M - Reuters",
+      url: "https://reuters.com/u2",
+      published_date: null,
+    });
+    const items = standaloneNews(NO_ROUNDS, [a, b]);
+    expect(items).toHaveLength(2);
+    for (const i of items) {
+      if (i.kind !== "news") throw new Error("expected news");
+      expect(i.coverage).toHaveLength(1);
+    }
+  });
+
+  it("round-attached articles never leak into story clusters", () => {
+    // An article that attaches to a round (in-window) must not ALSO seed a
+    // story cluster; a far-away syndicated pair still clusters on its own.
+    const r = round({ announced_date: "2026-07-10" });
+    const attached = news({
+      title: "Acme raises $50M Series B - TechCrunch",
+      url: "https://techcrunch.com/attached",
+      published_date: "2026-07-11",
+    });
+    const stray1 = news({
+      title: "Acme eyes IPO next year, sources say - Forbes",
+      url: "https://forbes.com/stray-1",
+      published_date: "2026-08-20", // far outside the round's window
+    });
+    const stray2 = news({
+      title: "Acme eyes IPO next year, sources say - MSN",
+      url: "https://news.google.com/rss/articles/stray-2",
+      published_date: "2026-08-21",
+    });
+    const items = buildTimeline([r], [attached, stray1, stray2]);
+    const newsItems = items.filter((i) => i.kind === "news");
+    expect(newsItems).toHaveLength(1); // one story cluster, not two rows
+    if (newsItems[0].kind === "news") {
+      expect(newsItems[0].coverage).toHaveLength(2);
+      expect(
+        newsItems[0].coverage.map((c) => c.url),
+      ).not.toContain(attached.url);
+    }
+    const funding = items.find((i) => i.kind === "funding");
+    if (funding?.kind === "funding") {
+      expect(funding.coverage.map((c) => c.url)).toContain(attached.url);
+    }
+  });
+});
+
+describe("titleTokens normalization edges", () => {
+  it("strips outlet suffixes but keeps dash-clauses that are content", () => {
+    const outlet = titleTokens("Acme raises $50M Series B - TechCrunch");
+    expect(outlet.tokens.has("techcrunch")).toBe(false);
+    const clause = titleTokens("Acme raises $50M - and it is just the start");
+    expect(clause.tokens.has("start")).toBe(true);
+  });
+
+  it("folds $-anchored short money suffixes but not bare Nb/Nm", () => {
+    const dollar = titleTokens("Acme raises $10B at $2.5b valuation");
+    expect(dollar.money).toEqual(new Set(["10 billion", "2.5 billion"]));
+    const spelled = titleTokens("Acme raises 10 billion dollars");
+    expect(spelled.money).toEqual(new Set(["10 billion"]));
+    // "5m users" is a metric, not money — must not enter the money set.
+    const users = titleTokens("Acme hits 5m users after funding");
+    expect(users.money.size).toBe(0);
+  });
+
+  it("drops possessives and outlet-cased duplicates evenly", () => {
+    const a = titleTokens("Blue Origin's Funding Round Grows - MSN");
+    const b = titleTokens("Blue Origin Funding Round Grows - Yahoo Finance");
+    expect(a.tokens).toEqual(b.tokens);
   });
 });

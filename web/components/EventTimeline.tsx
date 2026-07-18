@@ -118,7 +118,7 @@ export function EventTimeline({ rounds, news, verified }: Props) {
                     }
                   />
                 ) : (
-                  <NewsEntry article={item.article} />
+                  <NewsEntry article={item.article} coverage={item.coverage} />
                 )}
               </li>
             );
@@ -262,7 +262,19 @@ function CoverageDisclosure({ coverage }: { coverage: CoverageLink[] }) {
   );
 }
 
-function NewsEntry({ article }: { article: NewsArticleRow }) {
+/**
+ * A standalone story: the lead article's title links out; when the story was
+ * syndicated across outlets (coverage ≥2 — the same piece re-served ×N was the
+ * kalshi/blue-origin firehose) the rest collapse into the SAME "Covered by"
+ * disclosure round coverage uses. Every article one click away, never dropped.
+ */
+function NewsEntry({
+  article,
+  coverage,
+}: {
+  article: NewsArticleRow;
+  coverage: CoverageLink[];
+}) {
   return (
     <>
       <a
@@ -278,6 +290,7 @@ function NewsEntry({ article }: { article: NewsArticleRow }) {
           {article.source}
         </p>
       )}
+      {coverage.length >= 2 && <CoverageDisclosure coverage={coverage} />}
     </>
   );
 }
