@@ -34,7 +34,7 @@ import logging
 from pydantic import BaseModel
 
 from nous.db.models import Company
-from nous.llm.client import LLMError, complete_json
+from nous.llm.client import LLMError, LLMRateLimitError, complete_json
 from nous.llm.prompts.article_subject_match import (
     ArticleSubjectMatch,
     build_article_subject_match_prompt,
@@ -50,6 +50,10 @@ class GuardDecision(BaseModel):
     attach: bool
     adjudicated: bool = False
     llm_error: bool = False
+    # A 429 means every subsequent adjudication this run would also 429 —
+    # the caller should stop calling the guard for LLM-requiring articles
+    # (skip-unstored, retried next sweep) instead of burning N futile calls.
+    rate_limited: bool = False
     reason: str
     other_entity: str | None = None
 
@@ -60,9 +64,14 @@ def _company_hq(company: Company) -> str | None:
 
 
 async def check_article_entity(
-    company: Company, *, title: str, text: str
+    company: Company, *, title: str, text: str, allow_llm: bool = True
 ) -> GuardDecision:
-    """Decide whether (title, text) is about ``company``. See module doc."""
+    """Decide whether (title, text) is about ``company``. See module doc.
+
+    ``allow_llm=False`` is the caller's rate-limit circuit breaker: cheap
+    verdicts (strong-corroboration, no-profile) still attach, but an article
+    that would need adjudication skips unstored instead of burning a call.
+    """
     if not (company.description_short or "").strip():
         return GuardDecision(attach=True, reason="no-profile")
 
@@ -77,6 +86,11 @@ async def check_article_entity(
     if not cheap.suspect and bare >= 1 and cheap.context_overlap >= 1:
         return GuardDecision(attach=True, reason="strong-corroboration")
 
+    if not allow_llm:
+        return GuardDecision(
+            attach=False, llm_error=True, reason="llm-circuit-open"
+        )
+
     prompt = build_article_subject_match_prompt(
         name=company.name,
         website=company.website,
@@ -88,6 +102,21 @@ async def check_article_entity(
     )
     try:
         verdict = await complete_json(prompt, ArticleSubjectMatch)
+    except LLMRateLimitError:
+        logger.warning(
+            "entity-guard rate-limited for %s on %r — the caller should stop "
+            "adjudicating for the rest of this run (articles skip unstored "
+            "and retry next sweep)",
+            company.slug,
+            title[:90],
+        )
+        return GuardDecision(
+            attach=False,
+            adjudicated=True,
+            llm_error=True,
+            rate_limited=True,
+            reason="llm-rate-limited",
+        )
     except LLMError:
         logger.exception(
             "entity-guard adjudication failed for %s on %r — skipping the "

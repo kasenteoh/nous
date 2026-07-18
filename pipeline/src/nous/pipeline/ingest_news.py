@@ -102,6 +102,10 @@ class IngestNewsSummary(BaseModel):
     articles_adjudicated: int = 0
     articles_skipped_wrong_entity: int = 0
     articles_skipped_guard_error: int = 0
+    # Circuit breaker: once one adjudication 429s, the rest of the run skips
+    # LLM-requiring articles unstored (they retry next sweep) instead of
+    # burning a futile call per article.
+    guard_rate_limited: bool = False
 
 
 async def _article_already_stored(session: AsyncSession, url: str) -> bool:
@@ -235,8 +239,13 @@ async def _ingest_one_article(
     # whether the article's funded subject IS this company (same-name
     # different-entity attachments — the wonder/terrafirma recurrence class).
     decision = await check_article_entity(
-        company, title=result.title, text=content
+        company,
+        title=result.title,
+        text=content,
+        allow_llm=not summary.guard_rate_limited,
     )
+    if decision.rate_limited:
+        summary.guard_rate_limited = True
     if decision.adjudicated:
         summary.articles_adjudicated += 1
     if not decision.attach:
@@ -514,8 +523,13 @@ async def run_ingest_news(
                     # just-created company IS this article's entity by
                     # construction, so only pre-existing matches are guarded.
                     decision = await check_article_entity(
-                        company, title=result.title, text=body
+                        company,
+                        title=result.title,
+                        text=body,
+                        allow_llm=not summary.guard_rate_limited,
                     )
+                    if decision.rate_limited:
+                        summary.guard_rate_limited = True
                     if decision.adjudicated:
                         summary.articles_adjudicated += 1
                     if not decision.attach:

@@ -188,6 +188,47 @@ async def test_llm_error_reports_skip(monkeypatch: pytest.MonkeyPatch) -> None:
     assert decision.llm_error is True
 
 
+async def test_rate_limit_opens_circuit_and_allow_llm_false_skips(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A 429 marks the decision rate_limited; with allow_llm=False the guard
+    never calls the LLM for adjudication-requiring articles but cheap
+    verdicts still attach."""
+    from nous.llm.client import LLMRateLimitError
+
+    calls: list[str] = []
+
+    async def _rl(prompt: str, schema: type) -> ArticleSubjectMatch:
+        calls.append(prompt)
+        raise LLMRateLimitError("429")
+
+    monkeypatch.setattr("nous.pipeline.entity_guard.complete_json", _rl)
+    company = _co("Wonder", _EDTECH_WONDER_DESC)
+    d1 = await check_article_entity(
+        company, title="Wonder raises $650M", text=_FOOD_WONDER_BODY
+    )
+    assert d1.rate_limited is True and d1.llm_error is True
+    assert len(calls) == 1
+
+    # Circuit open: no further LLM call, adjudication-requiring skips…
+    d2 = await check_article_entity(
+        company,
+        title="Wonder raises $650M",
+        text=_FOOD_WONDER_BODY,
+        allow_llm=False,
+    )
+    assert d2.attach is False and d2.llm_error is True
+    assert len(calls) == 1  # untouched
+
+    # …but a no-profile company still attaches without the LLM.
+    husk = _co("Husk Co", None)
+    d3 = await check_article_entity(
+        husk, title="Husk Co raises $5M", text="Husk Co raised $5M.",
+        allow_llm=False,
+    )
+    assert d3.attach is True
+
+
 # ---------------------------------------------------------------------------
 # Integration through run_ingest_news — storage semantics
 # ---------------------------------------------------------------------------
@@ -257,6 +298,67 @@ async def test_wrong_entity_article_never_persists(
     assert summary.articles_inserted == 0
     rows = (await db.execute(select(NewsArticle))).scalars().all()
     assert rows == []
+
+
+@pytestmark_db
+async def test_broad_feed_guard_drops_wrong_entity_for_existing_company(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The broad-feed path: a title-parsed name matching an EXISTING company
+    goes through the guard; a rejected article must not persist and must not
+    disturb the rest of the sweep."""
+    company = _co("Wonder", _EDTECH_WONDER_DESC)
+    db.add(company)
+    await db.commit()
+
+    feed_item = NewsArticleResult(
+        url="https://tc.example.com/wonder-650m",
+        title="Wonder raises $650M for food halls",
+        source="techcrunch.com",
+        published_date=date(2026, 7, 16),
+        raw_content="snippet",
+    )
+
+    async def _one_feed(*a: Any, **k: Any) -> list[NewsArticleResult]:
+        return [feed_item]
+
+    async def _no_feed(*a: Any, **k: Any) -> list[NewsArticleResult]:
+        return []
+
+    monkeypatch.setattr(
+        "nous.pipeline.ingest_news.fetch_techcrunch_funding_articles", _one_feed
+    )
+    for feed in (
+        "fetch_siliconangle_funding_articles",
+        "fetch_prnewswire_funding_articles",
+        "fetch_crunchbase_news_funding_articles",
+        "fetch_venturebeat_funding_articles",
+        "fetch_geekwire_funding_articles",
+    ):
+        monkeypatch.setattr(f"nous.pipeline.ingest_news.{feed}", _no_feed)
+
+    async def _extract(result: NewsArticleResult) -> str | None:
+        return "Wonder"
+
+    monkeypatch.setattr(
+        "nous.pipeline.ingest_news._extract_company_from_tc_result", _extract
+    )
+    _llm_returns(
+        monkeypatch,
+        ArticleSubjectMatch(is_subject=False, confidence="high",
+                            other_entity_name="Wonder (food)"),
+    )
+
+    client = _GuardMockClient({}, _FOOD_WONDER_BODY)
+    summary = await run_ingest_news(
+        db, client, max_companies=0  # broad path only
+    )  # type: ignore[arg-type]
+
+    assert summary.articles_adjudicated == 1
+    assert summary.articles_skipped_wrong_entity == 1
+    assert summary.articles_inserted == 0
+    assert summary.auto_created_companies == 0  # matched, not created
+    assert (await db.execute(select(NewsArticle))).scalars().all() == []
 
 
 @pytestmark_db
