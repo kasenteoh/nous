@@ -64,12 +64,14 @@ def _render_company(label: str, company: dict[str, object]) -> str:
     state = _as_str(company.get("hq_state"))
     location_parts = [p for p in (city, state) if p and p.strip()]
     location = ", ".join(location_parts) if location_parts else _UNKNOWN
+    funding = _fmt(_as_str(company.get("latest_funding")))
     return (
         f"Company {label}:\n"
         f"- Name: {name}\n"
         f"- Website: {website}\n"
         f"- Description: {description}\n"
-        f"- HQ: {location}"
+        f"- HQ: {location}\n"
+        f"- Latest funding: {funding}"
     )
 
 
@@ -97,6 +99,11 @@ Weigh the evidence holistically:
 - Location: a shared HQ city/state corroborates a match; a clear conflict
   weakens it (but remote-first companies move, so treat location as supporting
   evidence, not decisive on its own).
+- Latest funding: two same-named records showing the SAME round (matching
+  amount and a close announced date) almost certainly describe one company —
+  two distinct companies sharing a name AND announcing identical raises in
+  the same week is implausible. Different rounds are weak evidence either
+  way (one record may simply be staler than the other).
 
 Rules:
 - Set same_company=true ONLY when you are genuinely confident the two records

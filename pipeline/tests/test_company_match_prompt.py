@@ -116,3 +116,20 @@ def test_company_match_rejects_invalid_confidence() -> None:
 def test_company_match_rejects_missing_fields() -> None:
     with pytest.raises(ValidationError):
         CompanyMatch.model_validate_json(json.dumps({"same_company": True}))
+
+
+def test_latest_funding_line_renders_and_defaults_unknown() -> None:
+    """The bunkerhill evidence line: a shared fresh round is the strongest
+    same-company signal for website-less husks; absent → (unknown)."""
+    a = {
+        "name": "Bunkerhill",
+        "website": None,
+        "description": None,
+        "hq_city": None,
+        "hq_state": None,
+        "latest_funding": "Series B $55,000,000 announced 2026-07-10",
+    }
+    prompt = build_company_match_prompt(a, COMPANY_B)
+    assert "- Latest funding: Series B $55,000,000 announced 2026-07-10" in prompt
+    assert "Latest funding: (unknown)" in prompt  # B has no funding line
+    assert "SAME round" in prompt  # the weighing rule is in the template

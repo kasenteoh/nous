@@ -641,3 +641,45 @@ async def test_merge_companies_raw_page_url_conflict(db: AsyncSession) -> None:
     # The kept shared row is the survivor's content, not the loser's.
     shared_row = next(p for p in pages if p.url == shared_url)
     assert shared_row.content == "survivor"
+
+
+def test_prompt_dict_carries_latest_funding() -> None:
+    from datetime import date as _date
+    from datetime import datetime as _dt
+    from decimal import Decimal as _Dec
+    from uuid import uuid4
+
+    from nous.pipeline.dedup_companies import _CompanyRow
+
+    row = _CompanyRow(
+        id=uuid4(),
+        name="Bunkerhill",
+        normalized_name="bunkerhill",
+        website=None,
+        hq_city=None,
+        hq_state=None,
+        description_short=None,
+        description_long=None,
+        latest_round_amount=_Dec("55000000"),
+        latest_round_date=_date(2026, 7, 10),
+        latest_round_type="Series B",
+        created_at=_dt(2026, 1, 1),
+    )
+    d = row.to_prompt_dict()
+    assert d["latest_funding"] == "Series B $55,000,000 announced 2026-07-10"
+
+    bare = _CompanyRow(
+        id=uuid4(),
+        name="X",
+        normalized_name="x",
+        website=None,
+        hq_city=None,
+        hq_state=None,
+        description_short=None,
+        description_long=None,
+        latest_round_amount=None,
+        latest_round_date=None,
+        latest_round_type=None,
+        created_at=_dt(2026, 1, 1),
+    )
+    assert bare.to_prompt_dict()["latest_funding"] is None
