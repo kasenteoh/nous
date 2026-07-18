@@ -27,13 +27,18 @@ mechanics; every step is a no-op when not applicable):
   guard (the arc this lever belongs to) closes that permanently;
 - clears ``companies.total_raised_usd/_source_url/_as_of`` when the stated
   total's source URL is the round's primary article or a purged article —
-  the total came from the same wrong-entity source as the round;
+  the total came from the same wrong-entity source as the round. The
+  ``--clear-total`` flag forces the clear when the total is sourced from a
+  URL OUTSIDE the purge set (the bespoke-labs case: a different syndication
+  URL of the same wrong-entity story dodges the URL match);
 - resets ``companies.status`` to active (and clears ``status_source_url``)
   under the same source-URL match — a wrong-entity article must not leave a
-  phantom "acquired"/"shut down" badge behind;
+  phantom "acquired"/"shut down" badge behind. ``--clear-status`` forces it
+  for an out-of-purge-set source (the wave "shut down" case);
 - deletes ``fact_verifications`` rows for the round (``fact_ref`` = round id)
-  and the company's total_raised verification when the total was cleared (a
-  ✓ minted against the wrong-entity source must not survive the fact);
+  plus the company's total_raised / status verifications when those fields
+  were cleared (a ✓ minted against the wrong-entity source must not survive
+  the fact);
 - refreshes ``funding_round_count`` and the ``latest_round_*`` denorms.
 
 Dry-run by default: prints exactly what an apply would do, writes nothing.
@@ -125,6 +130,8 @@ async def run_delete_round(
     amount: Decimal | None = None,
     round_id: UUID | None = None,
     purge_articles: bool = True,
+    clear_total: bool = False,
+    clear_status: bool = False,
     dry_run: bool = True,
 ) -> DeleteRoundSummary:
     """Delete one round (and its wrong-entity side effects). See module doc."""
@@ -166,12 +173,16 @@ async def run_delete_round(
         purged_urls.add(row.primary_news_url)
 
     # Stated total / status poisoned by the same source → clear with the round.
-    if company.total_raised_source_url and company.total_raised_source_url in purged_urls:
-        summary.total_raised_cleared = True
+    # The explicit flags cover the same poison arriving via a source URL
+    # OUTSIDE the purge set (a different syndication of the wrong-entity
+    # story); they still no-op when there is nothing to clear.
     if (
-        company.status != "active"
-        and company.status_source_url
-        and company.status_source_url in purged_urls
+        company.total_raised_source_url and company.total_raised_source_url in purged_urls
+    ) or (clear_total and company.total_raised_usd is not None):
+        summary.total_raised_cleared = True
+    if company.status not in (None, "active") and (
+        clear_status
+        or (company.status_source_url and company.status_source_url in purged_urls)
     ):
         summary.status_reset = True
 
@@ -185,21 +196,28 @@ async def run_delete_round(
         .scalars()
         .all()
     )
-    total_verif_count = 0
+    # Company-level fact kinds whose field is being cleared: their ✓ rows go
+    # with the fact (a verification of a wrong-entity claim must not survive).
+    cleared_kinds: list[str] = []
     if summary.total_raised_cleared:
-        total_verif_count = len(
+        cleared_kinds.append("total_raised")
+    if summary.status_reset:
+        cleared_kinds.append("status")
+    company_verif_count = 0
+    if cleared_kinds:
+        company_verif_count = len(
             (
                 await session.execute(
                     select(FactVerification.id).where(
                         FactVerification.company_id == company.id,
-                        FactVerification.fact_kind == "total_raised",
+                        FactVerification.fact_kind.in_(cleared_kinds),
                     )
                 )
             )
             .scalars()
             .all()
         )
-    summary.verifications_deleted = verif_count + total_verif_count
+    summary.verifications_deleted = verif_count + company_verif_count
 
     logger.info(
         "delete-round%s: %s — %s | articles=%d total_cleared=%s status_reset=%s "
@@ -220,13 +238,14 @@ async def run_delete_round(
     await session.execute(
         delete(FactVerification).where(*verif_where)
     )
-    if summary.total_raised_cleared:
+    if cleared_kinds:
         await session.execute(
             delete(FactVerification).where(
                 FactVerification.company_id == company.id,
-                FactVerification.fact_kind == "total_raised",
+                FactVerification.fact_kind.in_(cleared_kinds),
             )
         )
+    if summary.total_raised_cleared:
         company.total_raised_usd = None
         company.total_raised_source_url = None
         company.total_raised_as_of = None

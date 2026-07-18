@@ -2442,13 +2442,38 @@ def repair_duplicate_rounds(dry_run: bool) -> None:
     ),
 )
 @click.option(
+    "--clear-total",
+    is_flag=True,
+    default=False,
+    help=(
+        "Also clear the company's stated total_raised even when its source "
+        "URL is outside the purge set (a different syndication of the same "
+        "wrong-entity story dodges the automatic URL match)."
+    ),
+)
+@click.option(
+    "--clear-status",
+    is_flag=True,
+    default=False,
+    help=(
+        "Also reset a non-active status to active even when its source URL "
+        "is outside the purge set."
+    ),
+)
+@click.option(
     "--apply",
     is_flag=True,
     default=False,
     help="Actually delete. Default is a dry-run that prints the plan.",
 )
 def delete_round_cmd(
-    slug: str, amount: str | None, round_id: str | None, keep_articles: bool, apply: bool
+    slug: str,
+    amount: str | None,
+    round_id: str | None,
+    keep_articles: bool,
+    clear_total: bool,
+    clear_status: bool,
+    apply: bool,
 ) -> None:
     """Surgically delete ONE wrong-entity funding round by slug + amount.
 
@@ -2488,6 +2513,8 @@ def delete_round_cmd(
                     amount=parsed_amount,
                     round_id=parsed_round_id,
                     purge_articles=not keep_articles,
+                    clear_total=clear_total,
+                    clear_status=clear_status,
                     dry_run=not apply,
                 )
             except DeleteRoundError as exc:
