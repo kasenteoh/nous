@@ -2573,6 +2573,73 @@ def delete_round_cmd(
     asyncio.run(_run())
 
 
+@cli.command("clear-company-facts")
+@click.argument("slug")
+@click.option(
+    "--clear-total",
+    is_flag=True,
+    default=False,
+    help="Clear the stated total_raised (+ its ✓ verifications).",
+)
+@click.option(
+    "--clear-status",
+    is_flag=True,
+    default=False,
+    help="Reset a non-active status to active (+ its ✓ verifications).",
+)
+@click.option(
+    "--apply",
+    is_flag=True,
+    default=False,
+    help="Actually clear. Default is a dry-run that previews the doomed values.",
+)
+def clear_company_facts_cmd(
+    slug: str, clear_total: bool, clear_status: bool, apply: bool
+) -> None:
+    """Clear a company's wrong-entity stated total and/or status directly.
+
+    The standalone sibling of delete-round's --clear-* flags, for when no
+    round exists to ride on (purged rounds that didn't recur; a total
+    discovered wrong only after its round was deleted). At least one flag
+    required; no-ops when there is nothing to clear.
+    """
+    import asyncio
+    from datetime import UTC, datetime
+
+    from nous.db.session import AsyncSessionLocal
+    from nous.observability import record_pipeline_run
+    from nous.pipeline.clear_company_facts import (
+        ClearCompanyFactsError,
+        run_clear_company_facts,
+    )
+
+    async def _run() -> None:
+        started = datetime.now(UTC)
+        async with AsyncSessionLocal() as session:
+            try:
+                summary = await run_clear_company_facts(
+                    session,
+                    slug=slug,
+                    clear_total=clear_total,
+                    clear_status=clear_status,
+                    dry_run=not apply,
+                )
+            except ClearCompanyFactsError as exc:
+                raise click.ClickException(str(exc)) from exc
+            click.echo(summary.model_dump_json(indent=2))
+        if apply:
+            await record_pipeline_run(
+                "clear-company-facts",
+                started_at=started,
+                inputs_seen=1,
+                rows_written=1,
+                summary=summary,
+                flag_empty=False,
+            )
+
+    asyncio.run(_run())
+
+
 @cli.command("exclude-company")
 @click.argument("slug")
 @click.option(
