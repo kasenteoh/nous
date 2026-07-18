@@ -2006,3 +2006,32 @@ Owner: "let's do it" (the QA P0s). Both adversarially reviewed (APPROVE).
   bespoke-labs' website is a Yahoo Finance ARTICLE URL (article-URL-as-
   homepage class, host not blocklisted) and prometheus carries an
   unexplained second $6.2B round (total $18.2B) — audit will adjudicate.
+
+## PR #232 — feat(pipeline): audit-round-entities — $0 entity-corroboration probe
+
+- Arc slice 2 (measure-first). New util `entity_corroboration`: deterministic
+  signals separating "about our company" from "about a same-named other
+  entity" — lowercase-only usage ("bespoke supplements"), consistently-
+  extended entity phrases ("Primary Wave" x4; a real other-entity name
+  REPEATS, a Title-Case headline verb doesn't), weak zero-context-overlap.
+  Neutral followers = Inc/CEO-class + a superset of _FUNDING_VERBS_AFTER +
+  ~25 non-funding headline verbs ("Acme Plans $50M" is not an entity).
+- New stage `audit-round-entities` (ops.yml command, optional min_amount):
+  per shown-cohort round, text from 0044-linked + primary-URL articles
+  (publisher body > GN headline+snippet), calibrated variant ladder
+  (full/squashed/distinctive-head, mirroring repair-misattributed-news) with
+  the rule that a ZERO-occurrence variant can never clear a round. Verdicts
+  corroborated/suspect/unknown; corroborated splits strong/weak — weak (no
+  signal, no positive evidence: the food-Wonder shape) sizes the future
+  ingest guard's LLM adjudication load. Report: JSON, amount-sorted,
+  60-item suspect cap, uncapped counts.
+- Two HONEST pinned blind spots (unit-tested as non-suspect): same-name
+  same-industry (TerraFirma Inc construction vs TerraFirma Robotics — its
+  description also says "construction") and bare-mention wrong-entity
+  (food-Wonder) — the LLM adjudicator owns both; the cheap layer documents
+  rather than pretends.
+- Review (code-reviewer subagent): COMMENT, 2 MED + 3 LOW — all applied
+  (neutral-verb superset + regression test, name-absent fixture, stable
+  slug sort, blind-spot test renamed + asserting; private sources.news
+  imports kept deliberately per repair_misattributed_news precedent).
+  Suite 1838 green.
