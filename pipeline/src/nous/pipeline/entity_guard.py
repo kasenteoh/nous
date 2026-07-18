@@ -64,13 +64,27 @@ def _company_hq(company: Company) -> str | None:
 
 
 async def check_article_entity(
-    company: Company, *, title: str, text: str, allow_llm: bool = True
+    company: Company,
+    *,
+    title: str,
+    text: str,
+    allow_llm: bool = True,
+    force_adjudicate: bool = False,
 ) -> GuardDecision:
     """Decide whether (title, text) is about ``company``. See module doc.
 
     ``allow_llm=False`` is the caller's rate-limit circuit breaker: cheap
     verdicts (strong-corroboration, no-profile) still attach, but an article
     that would need adjudication skips unstored instead of burning a call.
+
+    ``force_adjudicate=True`` disables the strong-corroboration fast path so
+    EVERY profiled article gets an LLM verdict — the retroactive purge's
+    "trust nothing" mode. The first wonder purge dry-run proved the need: a
+    food-Wonder prnewswire article survived on one coincidental description
+    word plus a bare "Wonder" mention, and its round survived with it. At
+    ingest the fast path stays (volume; a wrong strong-corroborated attach
+    is caught by the next retroactive sweep), but an operator running a
+    targeted purge already believes something is wrong.
     """
     if not (company.description_short or "").strip():
         return GuardDecision(attach=True, reason="no-profile")
@@ -83,7 +97,12 @@ async def check_article_entity(
         own_context=f"{company.website or ''} {company.slug}",
     )
     bare = cheap.proper_occurrences - cheap.extended_occurrences
-    if not cheap.suspect and bare >= 1 and cheap.context_overlap >= 1:
+    if (
+        not force_adjudicate
+        and not cheap.suspect
+        and bare >= 1
+        and cheap.context_overlap >= 1
+    ):
         return GuardDecision(attach=True, reason="strong-corroboration")
 
     if not allow_llm:

@@ -351,6 +351,48 @@ async def test_rate_limit_aborts_loudly(
     assert len(arts) == 3  # nothing deleted
 
 
+async def test_force_adjudicate_defeats_cheap_strong_corroboration(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The wonder prnewswire case: a wrong-entity article that scrapes by the
+    cheap strong-corroboration bar (bare proper mention + one coincidental
+    description word) is purged under the DEFAULT force-adjudicate mode, and
+    kept only when the operator opts out."""
+    co = _co("wonder-force-purge-test")
+    db.add(co)
+    await db.flush()
+    # "students" appears in both the edtech description and this food-Wonder
+    # article ("...meal plans for students...") — one coincidental overlap
+    # word plus bare "Wonder" mentions = cheap strong corroboration.
+    db.add(
+        NewsArticle(
+            company_id=co.id,
+            url="https://prnewswire.example.com/wonder-sneaky",
+            title="Wonder Announces $650 Million Series D Round",
+            source="prnewswire.example.com",
+            raw_content=(
+                "Wonder announced a $650M Series D. Wonder runs food halls "
+                "and meal plans for students and families with celebrity "
+                "chef partners."
+            ),
+        )
+    )
+    await db.commit()
+
+    _adjudicate_by_content(monkeypatch)
+
+    # Default: everything adjudicated — the LLM sees food halls, purges it.
+    summary = await run_purge_wrong_entity_articles(db, slug=co.slug)
+    assert summary.articles_purged == 1
+
+    # Opt-out: the cheap fast path keeps it without an LLM verdict.
+    spared = await run_purge_wrong_entity_articles(
+        db, slug=co.slug, force_adjudicate=False
+    )
+    assert spared.articles_purged == 0
+    assert spared.verdicts[0].reason == "strong-corroboration"
+
+
 async def test_error_paths(db: AsyncSession) -> None:
     with pytest.raises(PurgeWrongEntityError, match="no company"):
         await run_purge_wrong_entity_articles(db, slug="does-not-exist")

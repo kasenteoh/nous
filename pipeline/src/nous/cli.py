@@ -2576,12 +2576,25 @@ def delete_round_cmd(
 @cli.command("purge-wrong-entity-articles")
 @click.argument("slug")
 @click.option(
+    "--no-force-adjudicate",
+    is_flag=True,
+    default=False,
+    help=(
+        "Allow the cheap strong-corroboration fast path to KEEP articles "
+        "without an LLM verdict. Default is to adjudicate everything — the "
+        "operator dispatching a targeted purge already suspects the cheap "
+        "signals were fooled (the wonder prnewswire case)."
+    ),
+)
+@click.option(
     "--apply",
     is_flag=True,
     default=False,
     help="Actually purge. Default is a dry-run printing every verdict.",
 )
-def purge_wrong_entity_articles_cmd(slug: str, apply: bool) -> None:
+def purge_wrong_entity_articles_cmd(
+    slug: str, no_force_adjudicate: bool, apply: bool
+) -> None:
     """Adjudicate every stored article of one company against its profile;
     purge wrong-entity articles + rounds sourced from them.
 
@@ -2605,7 +2618,10 @@ def purge_wrong_entity_articles_cmd(slug: str, apply: bool) -> None:
         async with AsyncSessionLocal() as session:
             try:
                 summary = await run_purge_wrong_entity_articles(
-                    session, slug=slug, dry_run=not apply
+                    session,
+                    slug=slug,
+                    force_adjudicate=not no_force_adjudicate,
+                    dry_run=not apply,
                 )
             except PurgeWrongEntityError as exc:
                 raise click.ClickException(str(exc)) from exc
