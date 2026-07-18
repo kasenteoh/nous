@@ -40,3 +40,4 @@ Thumbs.db
 CLAUDE.local.md
 # Claude Code local session data, settings, and agent worktrees
 .claude/
+.superpowers/
