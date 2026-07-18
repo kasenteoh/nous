@@ -156,6 +156,26 @@ _NEUTRAL_FOLLOWERS: frozenset[str] = frozenset(
         "almost",
         "again",
         "soon",
+        "more",
+        # Financial nouns / verbs following a company name in funding
+        # headlines ("xAI Private Funding", "Flexport Valuation Hits…") —
+        # third prod triage. NOT "capital"/"group"/"labs": those decide real
+        # other-entity names (Drip Capital, Amber Group).
+        "private",
+        "funding",
+        "round",
+        "deal",
+        "valuation",
+        "investment",
+        "investors",
+        "stock",
+        "shares",
+        "lets",
+        "strikes",
+        "signs",
+        "seals",
+        "represents",
+        "chatbot",
         # Informal same-company suffix: coverage writes "Cognition AI" for
         # the company named Cognition. "<Name> AI" is not another entity.
         "ai",
@@ -196,7 +216,19 @@ _NEUTRAL_PRECEDERS: frozenset[str] = frozenset(
         "watch",
         "venture-backed",
         "the",
+        "a",
+        "an",
+        "industry",
+        "start-up",
+        "startup's",
     }
+)
+
+# Preceding words shaped like "<X>-backed" / "London-based" / "founder-led":
+# investor/geography attributions, never a different entity's name.
+_ATTRIBUTIVE_PREFIX_RE = re.compile(
+    r"-(backed|based|led|founded|owned|focused|native|headquartered)$",
+    re.IGNORECASE,
 )
 
 # Generic words too common in startup coverage to be distinctive description
@@ -326,6 +358,7 @@ def corroborate_entity(
     text: str,
     *,
     own_tokens: set[str] | None = None,
+    own_context: str | None = None,
 ) -> CorroborationResult:
     """Score whether ``text`` (article title + body) corroborates
     ``company_name`` as ITS subject. See module docstring for the signals.
@@ -350,6 +383,25 @@ def corroborate_entity(
     own_full_tokens = {t.lower() for t in _WORD_RE.findall(company_name)}
     if own_tokens:
         own_full_tokens |= {t.lower() for t in own_tokens}
+    # The company's own-identity vocabulary: description + whatever the
+    # caller supplies (website host, slug). A neighbor word from this set is
+    # the company's own FORMAL name, not another entity — "Impulse Space"
+    # for the impulse whose description says "space logistics" (third prod
+    # triage: a company's fuller corporate name flagged as an extension).
+    # Squashed view of the identity context (description + website + slug):
+    # a neighbor is the company's own FORMAL name only when the WHOLE
+    # extended phrase appears contiguously — "impulsespace.com" owns
+    # "Impulse Space"; a description that merely mentions "capital" or
+    # "group" somewhere must NOT clear "Drip Capital"/"Amber Group"
+    # (review catch: a word-level check here shadowed this and undid the
+    # deliberate _NEUTRAL_FOLLOWERS exclusion of entity-deciding nouns).
+    own_identity_squashed = re.sub(
+        r"[^a-z0-9]", "", f"{description or ''} {own_context or ''}".lower()
+    )
+
+    def _is_own_phrase(phrase: str) -> bool:
+        squashed = re.sub(r"[^a-z0-9]", "", phrase.lower())
+        return bool(squashed) and squashed in own_identity_squashed
 
     pattern = _name_token_pattern(name_tokens)
     extended_phrases: Counter[str] = Counter()
@@ -385,10 +437,11 @@ def corroborate_entity(
             and word.lower() not in _NEUTRAL_FOLLOWERS
             and word.lower() not in _NEUTRAL_PRECEDERS
             and not re.search(r"['']s?$", word)
+            and not _ATTRIBUTIVE_PREFIX_RE.search(word)
         ):
-            extended_via.append(
-                " ".join((word, *chain_left, m.group(0)))
-            )
+            phrase = " ".join((word, *chain_left, m.group(0)))
+            if not _is_own_phrase(phrase):
+                extended_via.append(phrase)
         chain_right: list[str] = []
         word, pos = _next_word(text, m.end())
         while word is not None and word.lower() in own_full_tokens:
@@ -399,20 +452,48 @@ def corroborate_entity(
             and _is_proper(word)
             and word.lower() not in _NEUTRAL_FOLLOWERS
         ):
-            extended_via.append(
-                " ".join((m.group(0), *chain_right, word))
-            )
+            phrase = " ".join((m.group(0), *chain_right, word))
+            if not _is_own_phrase(phrase):
+                extended_via.append(phrase)
         if extended_via:
             result.extended_occurrences += 1
             for phrase in extended_via:
                 extended_phrases[phrase] += 1
 
+    # Description-context overlap FIRST — it gates the lowercase verdict.
+    context_available = False
+    if description:
+        candidates = {
+            w.lower()
+            for w in _WORD_RE.findall(description)
+            if len(w) > 3
+            and w.lower() not in _GENERIC_CONTEXT
+            and w.lower() not in own_full_tokens
+        }
+        result.context_candidates = len(candidates)
+        if len(candidates) >= _MIN_CONTEXT_CANDIDATES:
+            context_available = True
+            text_lower = text.lower()
+            result.context_overlap = sum(
+                1
+                for w in candidates
+                if re.search(rf"(?<![a-z0-9]){re.escape(w)}(?![a-z0-9])", text_lower)
+            )
+
     if result.occurrences and result.proper_occurrences == 0:
         result.lowercase_only = True
-        result.suspect = True
-        result.reasons.append(
-            "name occurs only as a lowercase common word, never as a proper noun"
-        )
+        # A distinctive all-lowercase brand ("n8n", "claroty") is not a
+        # common-word usage — its article shares profile vocabulary. Only
+        # condemn lowercase-only when the context ALSO fails to corroborate
+        # (third prod triage: n8n/claroty/fal-ai false-flagged). The bar is
+        # >= 2 overlapping words: one shared generic-ish word is coincidence
+        # (review catch), while a right-company article shares several.
+        if not context_available or result.context_overlap < 2:
+            result.suspect = True
+            result.reasons.append(
+                "name occurs only as a lowercase common word, never as a "
+                "proper noun"
+            )
 
     if result.proper_occurrences:
         # Evidence is always surfaced (consumers apply their own text-kind
@@ -434,35 +515,19 @@ def corroborate_entity(
                 "name consistently embedded in a longer entity phrase"
             )
 
-    # Description-context overlap. Only meaningful with enough distinctive
-    # tokens; alone it is a WEAK signal, so it only flags when the article
-    # also failed to use the bare name more than once — a well-covered right-
-    # company article nearly always shares profile vocabulary.
-    if description:
-        candidates = {
-            w.lower()
-            for w in _WORD_RE.findall(description)
-            if len(w) > 3
-            and w.lower() not in _GENERIC_CONTEXT
-            and w.lower() not in own_full_tokens
-        }
-        result.context_candidates = len(candidates)
-        if len(candidates) >= _MIN_CONTEXT_CANDIDATES:
-            text_lower = text.lower()
-            result.context_overlap = sum(
-                1
-                for w in candidates
-                if re.search(rf"(?<![a-z0-9]){re.escape(w)}(?![a-z0-9])", text_lower)
-            )
-            if (
-                result.context_overlap == 0
-                and result.proper_occurrences <= 1
-                and not result.suspect
-            ):
-                result.suspect = True
-                result.reasons.append(
-                    "zero description-context overlap and at most one bare "
-                    "proper-noun mention"
-                )
+    # The overlap alone is a WEAK signal: it only flags when the article
+    # also failed to use the bare name more than once — a well-covered
+    # right-company article nearly always shares profile vocabulary.
+    if (
+        context_available
+        and result.context_overlap == 0
+        and result.proper_occurrences <= 1
+        and not result.suspect
+    ):
+        result.suspect = True
+        result.reasons.append(
+            "zero description-context overlap and at most one bare "
+            "proper-noun mention"
+        )
 
     return result
