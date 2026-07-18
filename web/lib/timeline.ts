@@ -24,6 +24,20 @@ import { httpHost } from "@/lib/url";
  *  a round. Funding press clusters within days; the slack covers late write-ups. */
 export const MATCH_WINDOW_DAYS = 14;
 
+/** Max |published_date| gap (days) for two STANDALONE articles to be the same
+ *  story. Syndications of one piece land within days of each other; a week of
+ *  slack covers slow re-prints without gluing separate events together (the
+ *  title-similarity bar below is the real discriminator). */
+export const STORY_WINDOW_DAYS = 7;
+
+/** Minimum normalized-title overlap (|A∩B| / min(|A|,|B|)) for two standalone
+ *  articles to merge into one story, plus an absolute shared-token floor so
+ *  two short titles can't merge on two common words. Calibrated on the
+ *  observed firehose shapes: identical syndicated headlines score 1.0;
+ *  "seeks $10B" rumor coverage vs "$2B committed" coverage scores ~0.5. */
+export const STORY_SIMILARITY_MIN = 0.6;
+export const STORY_SHARED_TOKENS_MIN = 3;
+
 const DAY_MS = 86_400_000;
 
 /** One source link under a round: the article's title (null for a round's
@@ -42,7 +56,16 @@ export type TimelineItem =
       /** Deduped source coverage, primary source first then newest-first. */
       coverage: CoverageLink[];
     }
-  | { kind: "news"; article: NewsArticleRow };
+  | {
+      kind: "news";
+      /** The story's lead article (newest in its cluster) — its title/date
+       *  render the row. */
+      article: NewsArticleRow;
+      /** Every article in the story cluster (lead first, then newest-first).
+       *  Length 1 = a genuinely standalone article; ≥2 = one story covered by
+       *  several outlets, rendered collapsed like round coverage. */
+      coverage: CoverageLink[];
+    };
 
 /** Canonical dedup key (host + path, www/scheme/query/trailing-slash-insensitive)
  *  so the same story via http/https/www/tracking-params collapses to one row, and
@@ -106,6 +129,165 @@ function assembleCoverage(
     }
   }
 
+  return links;
+}
+
+// ---------------------------------------------------------------------------
+// Standalone-story clustering. Articles that attach to no round (undated
+// rounds, out-of-window press, rumor-era coverage) used to render as one
+// timeline row EACH — the same syndicated story ×10-35 rows (the kalshi /
+// blue-origin firehose, 2026-07-17 QA). Cluster them by normalized-title
+// similarity within a date window and render each story once, with the same
+// collapsed "Covered by" treatment round coverage gets. Trust-preserving:
+// every article stays one click away, never dropped.
+// ---------------------------------------------------------------------------
+
+/** Words too common in funding headlines to signal story identity. */
+const TITLE_STOPWORDS = new Set([
+  "a",
+  "an",
+  "and",
+  "as",
+  "at",
+  "by",
+  "for",
+  "from",
+  "in",
+  "into",
+  "its",
+  "of",
+  "on",
+  "the",
+  "to",
+  "with",
+  "after",
+  "amid",
+  "report",
+  "reportedly",
+  "exclusive",
+  "news",
+]);
+
+/** Fold announce-verb variants so "raises"/"raised"/"raising" don't split a
+ *  story; deliberately tiny — the amount + entity tokens do the real work. */
+const VERB_FOLDS = new Map([
+  ["raises", "raise"],
+  ["raised", "raise"],
+  ["raising", "raise"],
+  ["secures", "raise"],
+  ["secured", "raise"],
+  ["closes", "raise"],
+  ["closed", "raise"],
+  ["lands", "raise"],
+  ["nabs", "raise"],
+  ["bags", "raise"],
+  ["gets", "raise"],
+]);
+
+/**
+ * Normalized token set for story-identity comparison: the trailing
+ * " - Outlet" / " | Outlet" segment is stripped (the same headline syndicated
+ * by four outlets differs ONLY there), money spellings fold together
+ * ("$10bn" / "$10 billion" / "10B" → "10 billion"), announce-verbs fold, and
+ * stopwords drop. Possessives lose their "'s" so "Origin's" matches "Origin".
+ */
+export interface TitleSignature {
+  tokens: Set<string>;
+  /** Normalized money mentions ("2 billion", "300 million") — the strongest
+   *  story discriminator: "seeks $10B" and "put $2B in" share plenty of
+   *  entity words but are different events. */
+  money: Set<string>;
+}
+
+export function titleTokens(title: string): TitleSignature {
+  const withoutOutlet = title.replace(/\s+[-–—|]\s+[^-–—|]{1,40}$/, "");
+  const folded = withoutOutlet
+    .toLowerCase()
+    .replace(/[’']s\b/g, "")
+    // "$10bn" / "10bn" / "$10b" → "10 billion"; same for millions.
+    .replace(/\$?(\d+(?:\.\d+)?)\s*(?:bn|b|billion)\b/g, "$1 billion")
+    .replace(/\$?(\d+(?:\.\d+)?)\s*(?:mn|m|million)\b/g, "$1 million")
+    .replace(/\$(\d)/g, "$1");
+  const tokens = new Set<string>();
+  for (const raw of folded.split(/[^a-z0-9.]+/)) {
+    if (!raw) continue;
+    const word = VERB_FOLDS.get(raw) ?? raw;
+    if (TITLE_STOPWORDS.has(word)) continue;
+    tokens.add(word);
+  }
+  const money = new Set<string>();
+  for (const m of folded.matchAll(/(\d+(?:\.\d+)?) (billion|million)/g)) {
+    money.add(`${m[1]} ${m[2]}`);
+  }
+  return { tokens, money };
+}
+
+/** Overlap coefficient with an absolute shared-token floor, vetoed by
+ *  disjoint money mentions (when both titles name amounts). */
+function sameStory(a: TitleSignature, b: TitleSignature): boolean {
+  if (a.tokens.size === 0 || b.tokens.size === 0) return false;
+  if (a.money.size > 0 && b.money.size > 0) {
+    let moneyShared = false;
+    for (const m of a.money) if (b.money.has(m)) moneyShared = true;
+    if (!moneyShared) return false;
+  }
+  let shared = 0;
+  for (const t of a.tokens) if (b.tokens.has(t)) shared += 1;
+  if (shared < STORY_SHARED_TOKENS_MIN) return false;
+  return shared / Math.min(a.tokens.size, b.tokens.size) >= STORY_SIMILARITY_MIN;
+}
+
+/**
+ * Greedy newest-first clustering of standalone articles into stories. Each
+ * article joins the first existing cluster whose LEAD it matches (same story
+ * by title, within STORY_WINDOW_DAYS of the lead's date); otherwise it opens
+ * a new cluster. Undated articles never merge (no window to reason about —
+ * one row each, exactly the old behavior). Deterministic given input order.
+ */
+function clusterStories(standalone: NewsArticleRow[]): NewsArticleRow[][] {
+  const ordered = [...standalone].sort((a, b) =>
+    (b.published_date ?? "").localeCompare(a.published_date ?? ""),
+  );
+  const clusters: {
+    lead: NewsArticleRow;
+    leadTokens: TitleSignature;
+    all: NewsArticleRow[];
+  }[] = [];
+  for (const article of ordered) {
+    const tokens = titleTokens(article.title);
+    const match =
+      article.published_date === null
+        ? undefined
+        : clusters.find(
+            (c) =>
+              c.lead.published_date !== null &&
+              dayGap(
+                article.published_date as string,
+                c.lead.published_date as string,
+              ) <= STORY_WINDOW_DAYS &&
+              sameStory(tokens, c.leadTokens),
+          );
+    if (match) {
+      match.all.push(article);
+    } else {
+      clusters.push({ lead: article, leadTokens: tokens, all: [article] });
+    }
+  }
+  return clusters.map((c) => c.all);
+}
+
+/** A story cluster's coverage links: lead first (it renders the row title),
+ *  then the rest newest-first; deduped by canonical URL. */
+function storyCoverage(cluster: NewsArticleRow[]): CoverageLink[] {
+  const seen = new Set<string>();
+  const links: CoverageLink[] = [];
+  for (const article of cluster) {
+    const key = canonicalUrl(article.url);
+    const host = httpHost(article.url);
+    if (key === null || host === null || seen.has(key)) continue;
+    seen.add(key);
+    links.push({ url: article.url, title: article.title, host });
+  }
   return links;
 }
 
@@ -228,7 +410,13 @@ export function buildTimeline(
         coverage: assembleCoverage(round, coverageByRound.get(round.id) ?? []),
       }),
     ),
-    ...standalone.map((article): TimelineItem => ({ kind: "news", article })),
+    ...clusterStories(standalone).map(
+      (cluster): TimelineItem => ({
+        kind: "news",
+        article: cluster[0],
+        coverage: storyCoverage(cluster),
+      }),
+    ),
   ];
 
   return items.sort((a, b) => {
