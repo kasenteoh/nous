@@ -246,6 +246,260 @@ async def test_status_reset_when_sourced_from_purged_article(db: AsyncSession) -
     assert co.status_source_url is None
 
 
+async def test_clear_total_flag_covers_out_of_purge_set_source(
+    db: AsyncSession,
+) -> None:
+    """The bespoke-labs residual: the stated total's source is a DIFFERENT
+    syndication URL of the wrong-entity story, so the automatic URL match
+    misses it. --clear-total forces the clear (and kills the total's ✓);
+    without the flag the total must survive untouched."""
+    other_syndication = "https://gn.example.com/im8-1b-other-syndication"
+    co = _co(
+        "clear-total-co",
+        total_raised_usd=Decimal("1000000000"),
+        total_raised_source_url=other_syndication,
+    )
+    db.add(co)
+    await db.flush()
+    wrong = FundingRound(
+        company_id=co.id,
+        amount_raised=Decimal("1000000000"),
+        primary_news_url=_WRONG_URL,
+    )
+    db.add(wrong)
+    await db.flush()
+    db.add(
+        FactVerification(
+            company_id=co.id,
+            fact_kind="total_raised",
+            fact_ref="",
+            source_url=other_syndication,
+            claim="Clear Total Co has raised a total of $1.0B.",
+            verdict="supported",
+            supporting_quote="takes $1B",
+            prompt_version="2026-07-17.1",
+        )
+    )
+    await db.commit()
+
+    # Without the flag: the out-of-set source dodges the match (the prod
+    # dry-run that motivated the flag showed exactly this).
+    preview = await run_delete_round(db, slug=co.slug, amount=Decimal("1000000000"))
+    assert preview.total_raised_cleared is False
+
+    summary = await run_delete_round(
+        db,
+        slug=co.slug,
+        amount=Decimal("1000000000"),
+        clear_total=True,
+        dry_run=False,
+    )
+    assert summary.total_raised_cleared is True
+    assert summary.verifications_deleted == 1  # the total's ✓
+    await db.refresh(co)
+    assert co.total_raised_usd is None
+    assert co.total_raised_source_url is None
+    verifs = (
+        (
+            await db.execute(
+                select(FactVerification).where(FactVerification.company_id == co.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert verifs == []
+
+
+async def test_clear_status_flag_covers_out_of_purge_set_source(
+    db: AsyncSession,
+) -> None:
+    """The wave residual: "shut down" sourced from a URL outside the purge
+    set. --clear-status resets it (and kills the status ✓). Without the flag
+    it survives. The flag is a no-op on an active status."""
+    outside = "https://gn.example.com/primary-wave-shut-down"
+    co = _co("clear-status-co", status="shut_down", status_source_url=outside)
+    db.add(co)
+    await db.flush()
+    wrong = FundingRound(
+        company_id=co.id,
+        amount_raised=Decimal("2200000000"),
+        primary_news_url=_WRONG_URL,
+    )
+    db.add(wrong)
+    await db.flush()
+    db.add(
+        FactVerification(
+            company_id=co.id,
+            fact_kind="status",
+            fact_ref="",
+            source_url=outside,
+            claim="Clear Status Co has shut down.",
+            verdict="supported",
+            supporting_quote="shut down",
+            prompt_version="2026-07-17.1",
+        )
+    )
+    await db.commit()
+
+    preview = await run_delete_round(db, slug=co.slug, amount=Decimal("2200000000"))
+    assert preview.status_reset is False
+
+    summary = await run_delete_round(
+        db,
+        slug=co.slug,
+        amount=Decimal("2200000000"),
+        clear_status=True,
+        dry_run=False,
+    )
+    assert summary.status_reset is True
+    assert summary.verifications_deleted == 1  # the status ✓
+    await db.refresh(co)
+    assert co.status == "active"
+    assert co.status_source_url is None
+    verifs = (
+        (
+            await db.execute(
+                select(FactVerification).where(FactVerification.company_id == co.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert verifs == []
+
+    # No-op when already active: re-seed a round, flag set, nothing to reset.
+    r2 = FundingRound(company_id=co.id, amount_raised=Decimal("5000000"))
+    db.add(r2)
+    await db.commit()
+    summary2 = await run_delete_round(
+        db, slug=co.slug, amount=Decimal("5000000"), clear_status=True, dry_run=False
+    )
+    assert summary2.status_reset is False
+
+
+async def test_both_clear_flags_together_and_preview_shows_doomed_values(
+    db: AsyncSession,
+) -> None:
+    """Both flags on one dispatch: total + status cleared, both ✓ kinds die,
+    and the dry-run preview names the values being destroyed (the operator
+    must see WHAT a forced clear kills, not just that it will)."""
+    total_src = "https://gn.example.com/other-syndication"
+    status_src = "https://gn.example.com/shutdown-story"
+    co = _co(
+        "both-flags-co",
+        total_raised_usd=Decimal("1200000000"),
+        total_raised_source_url=total_src,
+        status="shut_down",
+        status_source_url=status_src,
+    )
+    db.add(co)
+    await db.flush()
+    wrong = FundingRound(
+        company_id=co.id,
+        amount_raised=Decimal("66000000"),
+        primary_news_url=_WRONG_URL,
+    )
+    db.add(wrong)
+    await db.flush()
+    for kind, src in (("total_raised", total_src), ("status", status_src)):
+        db.add(
+            FactVerification(
+                company_id=co.id,
+                fact_kind=kind,
+                fact_ref="",
+                source_url=src,
+                claim=f"claim about {kind}",
+                verdict="supported",
+                supporting_quote="quote",
+                prompt_version="2026-07-17.1",
+            )
+        )
+    await db.commit()
+
+    preview = await run_delete_round(
+        db,
+        slug=co.slug,
+        amount=Decimal("66000000"),
+        clear_total=True,
+        clear_status=True,
+    )
+    assert preview.total_raised_cleared and preview.status_reset
+    assert preview.total_raised_was == "$1,200,000,000"
+    assert preview.total_raised_source_was == total_src
+    assert preview.status_was == "shut_down"
+    assert preview.status_source_was == status_src
+    assert preview.verifications_deleted == 2
+
+    summary = await run_delete_round(
+        db,
+        slug=co.slug,
+        amount=Decimal("66000000"),
+        clear_total=True,
+        clear_status=True,
+        dry_run=False,
+    )
+    assert summary.verifications_deleted == 2
+    await db.refresh(co)
+    assert co.total_raised_usd is None
+    assert co.status == "active"
+    verifs = (
+        (
+            await db.execute(
+                select(FactVerification).where(FactVerification.company_id == co.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert verifs == []
+
+
+async def test_status_verification_deleted_on_url_matched_reset(
+    db: AsyncSession,
+) -> None:
+    """The URL-matched status reset (no flag) must also delete the status ✓ —
+    previously only total_raised verifications were purged."""
+    url = "https://gn.example.com/wave-shut-down"
+    co = _co("status-verif-co", status="shut_down", status_source_url=url)
+    db.add(co)
+    await db.flush()
+    wrong = FundingRound(
+        company_id=co.id, amount_raised=Decimal("2200000000"), primary_news_url=url
+    )
+    db.add(wrong)
+    await db.flush()
+    db.add(
+        FactVerification(
+            company_id=co.id,
+            fact_kind="status",
+            fact_ref="",
+            source_url=url,
+            claim="Status Verif Co has shut down.",
+            verdict="supported",
+            supporting_quote="shut down",
+            prompt_version="2026-07-17.1",
+        )
+    )
+    await db.commit()
+
+    summary = await run_delete_round(
+        db, slug=co.slug, amount=Decimal("2200000000"), dry_run=False
+    )
+    assert summary.status_reset is True
+    assert summary.verifications_deleted == 1
+    verifs = (
+        (
+            await db.execute(
+                select(FactVerification).where(FactVerification.company_id == co.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert verifs == []
+
+
 async def test_keep_articles_and_error_paths(db: AsyncSession) -> None:
     co, _, wrong = await _seed_bespoke(db)
 

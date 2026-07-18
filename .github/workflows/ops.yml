@@ -59,6 +59,16 @@ on:
         description: "delete-round-* only: round UUID disambiguator when amount matches 2+ rounds."
         required: false
         type: string
+      clear_total:
+        description: "delete-round-* only: also clear the stated total_raised even when its source URL is outside the purge set."
+        required: false
+        type: boolean
+        default: false
+      clear_status:
+        description: "delete-round-* only: also reset a non-active status even when its source URL is outside the purge set."
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -104,6 +114,8 @@ jobs:
           OP_SET_URL: ${{ inputs.set_url }}
           OP_AMOUNT: ${{ inputs.amount }}
           OP_ROUND_ID: ${{ inputs.round_id }}
+          OP_CLEAR_TOTAL: ${{ inputs.clear_total }}
+          OP_CLEAR_STATUS: ${{ inputs.clear_status }}
         # Inputs pass through env vars (never string-interpolated into the
         # script) and the command itself is a choice allowlist. pipefail so a
         # failing `uv run` surfaces as a failed step instead of being masked by
@@ -124,6 +136,8 @@ jobs:
             ARGS=("$OP_SLUG")
             if [ -n "$OP_AMOUNT" ]; then ARGS+=(--amount "$OP_AMOUNT"); fi
             if [ -n "$OP_ROUND_ID" ]; then ARGS+=(--round-id "$OP_ROUND_ID"); fi
+            if [ "$OP_CLEAR_TOTAL" = "true" ]; then ARGS+=(--clear-total); fi
+            if [ "$OP_CLEAR_STATUS" = "true" ]; then ARGS+=(--clear-status); fi
             if [ "$OP_COMMAND" = "delete-round-apply" ]; then ARGS+=(--apply); fi
             uv run nous delete-round "${ARGS[@]}" \
               | { echo '```json'; cat; echo '```'; } | tee "$GITHUB_STEP_SUMMARY"
