@@ -1949,3 +1949,28 @@ Owner: "let's do it" (the QA P0s). Both adversarially reviewed (APPROVE).
 - Review: APPROVE, zero findings at any severity — including confirmation
   that the id-free resolve step cannot trivially satisfy the deploy gate
   (`steps.*` only sees id'd steps; the #226/#227 invariant holds).
+
+## Prod ops (2026-07-17 night) — marquee wrong-entity cleanup APPLIED
+
+- All NINE delete-round applies ran green after nine clean dry-runs (every
+  previewed article title matched the QA evidence): bespoke-labs $1B (IM8),
+  wonder $650M Series D (food-Wonder, 4 articles), wave $2.2B (Primary Wave)
+  + $27M Series C (Third Wave), impulse $136M + $158M (Impulse Dynamics),
+  prometheus $10B (tech-insider rumor variant), sambanova $100M (KuCoin
+  garble, second kill), terrafirma $115M Series A (TerraFirma Inc + its 4
+  construction articles). 14 wrong-entity articles purged with the rounds;
+  bespoke-labs confirmed post-apply: exactly one round, the real $40M
+  Series A. Plus exclude-company uala (two-company chimera, non_us both
+  ways) and reresolve-company callsign→callsign.com /
+  genesis-therapeutics→genesistherapeutics.ai (profiles were the wrong
+  entity; rounds were right).
+- Residuals for next session (in HANDOFF): bespoke-labs' stated $1B total +
+  wave's phantom "shut down" status — both sourced from URLs outside the
+  purge sets (delete-round's URL match is deliberately narrow); verify on
+  the pages after the next cron deploy, ship --clear-total/--clear-status
+  flags if they persist. Recurrence window: purged articles inside the 14d
+  lookback can re-ingest until the entity-aware guard lands — a re-dispatch
+  of the same delete-round re-heals in one shot.
+- Ops-scripting gotcha: gh in a background shell may not sit in a git repo —
+  every scripted gh call needs -R kasenteoh/nous (the first apply batch spun
+  uselessly on "failed to determine base repo" until relaunched).
