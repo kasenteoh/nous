@@ -202,6 +202,11 @@ _GENERIC_CONTEXT: frozenset[str] = frozenset(
 
 _WORD_RE = re.compile(r"[A-Za-z][A-Za-z0-9''\-]*")
 
+# Adjacency boundary: a sentence terminator OR a space-adjacent dash/pipe
+# (the Google-News "Title - Outlet" convention). A no-space hyphen
+# ("Impulse-Dynamics") is genuine entity punctuation and stays adjacent.
+_BOUNDARY_RE = re.compile(r"[.!?:]|\s[-–—|]|[-–—|]\s")
+
 # Minimum distinctive description tokens for the context-overlap signal to be
 # meaningful; below this the signal reports as unavailable rather than firing
 # on noise.
@@ -246,19 +251,16 @@ def _words_around(
     or None when a sentence boundary / nothing intervenes."""
     before_text = text[:start]
     after_text = text[end:]
-    # Adjacency breaks on a sentence terminator OR a space-adjacent dash/pipe
-    # — the Google-News headline convention is "Title - Outlet", and the
-    # first prod probe run showed "…at $380B Valuation - Built In" reading
-    # "Valuation Built" as an entity. A hyphen with no space ("Impulse-
-    # Dynamics") stays adjacent — that is genuine entity punctuation.
-    boundary = re.compile(r"[.!?:]|\s[-–—|]|[-–—|]\s")
+    # The first prod probe run showed "…at $380B Valuation - Built In"
+    # reading "Valuation Built" as an entity — hence the outlet-dash rule
+    # in _BOUNDARY_RE.
     m_before = re.search(r"([A-Za-z][A-Za-z0-9''\-]*)([^A-Za-z0-9]*)$", before_text)
     before = None
-    if m_before and not boundary.search(m_before.group(2)):
+    if m_before and not _BOUNDARY_RE.search(m_before.group(2)):
         before = m_before.group(1)
     m_after = re.match(r"([^A-Za-z0-9]*)([A-Za-z][A-Za-z0-9''\-]*)", after_text)
     after = None
-    if m_after and not boundary.search(m_after.group(1)):
+    if m_after and not _BOUNDARY_RE.search(m_after.group(1)):
         after = m_after.group(2)
     return before, after
 
