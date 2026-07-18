@@ -113,8 +113,11 @@ def _best_corroboration(
     occurrences. When NO variant occurs, the full-name view is returned and
     the caller reports the name as absent.
     """
+    # Every variant keeps the ORIGINAL name's tokens as own-name context:
+    # "Yuga Labs" following the head-variant "Yuga" is the company itself.
+    full_tokens = set(strip_corporate_suffix(company_name).lower().split())
     results = [
-        corroborate_entity(v, description, text)
+        corroborate_entity(v, description, text, own_tokens=full_tokens)
         for v in _name_variants(company_name)
     ]
     eligible = [r for r in results if r.occurrences > 0]
@@ -135,14 +138,17 @@ def _round_text(articles: list[NewsArticle]) -> tuple[str, str]:
         for a in articles
         if a.raw_content and hostname(a.url) != _GOOGLE_NEWS_HOST
     ]
+    # Join with a sentence terminator, never a bare space: the first prod
+    # probe run glued one headline's trailing "- MSN" outlet to the next
+    # headline's leading company name and read "MSN Anthropic" as an entity.
     if bodies:
-        return " ".join((*titles, *bodies)), "body"
+        return ". ".join((*titles, *bodies)), "body"
     snippets = [
         a.raw_content
         for a in articles
         if a.raw_content and hostname(a.url) == _GOOGLE_NEWS_HOST
     ]
-    return " ".join((*titles, *snippets)), "headline"
+    return ". ".join((*titles, *snippets)), "headline"
 
 
 async def run_audit_round_entities(

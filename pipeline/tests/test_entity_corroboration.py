@@ -179,6 +179,117 @@ def test_role_and_corporate_followers_are_neutral() -> None:
     assert r.suspect is False
 
 
+def test_stylized_lowercase_name_is_proper_noun() -> None:
+    """First prod run regression: "xAI" carries an uppercase letter — it is a
+    proper-noun occurrence, never "lowercase-only"."""
+    text = (
+        "Elon Musk's xAI closes a $20 billion funding round. xAI will use "
+        "the capital for AI infrastructure, and xAI expects rapid growth."
+    )
+    r = corroborate_entity(
+        "xAI",
+        "xAI develops large language models and AI infrastructure for "
+        "scientific discovery applications.",
+        text,
+    )
+    assert r.lowercase_only is False
+    assert r.suspect is False
+
+
+def test_outlet_suffix_dash_breaks_adjacency() -> None:
+    """First prod run regression: the GN "Title - Outlet" convention.
+    "…at $380B Valuation - Anthropic Daily" must not read "Valuation
+    Anthropic" as an entity, in either direction."""
+    text = (
+        "Anthropic hits $965B valuation with $65B funding - MSN. "
+        "Anthropic raises the largest round on record - Yahoo Finance. "
+        "Anthropic closes $65B - Reuters."
+    )
+    r = corroborate_entity(
+        "Anthropic",
+        "Anthropic is an AI safety company building reliable language "
+        "models and research assistants.",
+        text,
+    )
+    assert r.extended_occurrences == 0
+    assert r.suspect is False
+
+
+def test_outlet_containing_company_name_still_flags() -> None:
+    """The genuine catch the calibration must NOT lose: company "Built"
+    carrying a round whose every headline ends "- Built In" (the outlet).
+    The outlet phrase follows the dash, so the leading word is fine — but
+    "Built In" itself repeats as a proper phrase the company doesn't own."""
+    text = (
+        "Anthropic Bags $30B Funding Round at $380B Valuation - Built In. "
+        "Anthropic Hits Record Valuation In Mega Round - Built In. "
+        "Anthropic Funding Round Draws Investor Interest - Built In."
+    )
+    r = corroborate_entity(
+        "Built",
+        "Built provides construction finance software for lenders "
+        "managing draw schedules and inspections.",
+        text,
+    )
+    assert r.suspect is True
+    assert any("Built In" in e for e in r.evidence)
+
+
+def test_possessive_and_descriptor_prefixes_are_neutral() -> None:
+    """Second prod triage: "India's Zepto" / "Fusion Startup Helion" —
+    possessives attribute, category nouns describe; neither names a
+    different entity."""
+    text = (
+        "India's Zepto Raises $500M For Quick Commerce. Zepto operates "
+        "dark stores across India, and Zepto delivers groceries in "
+        "minutes. Startup Zepto Also Expands Into Electronics."
+    )
+    r = corroborate_entity(
+        "Zepto",
+        "Zepto runs a quick-commerce grocery delivery network of dark "
+        "stores across Indian cities delivering within minutes.",
+        text,
+    )
+    assert r.extended_occurrences == 0
+    assert r.suspect is False
+
+
+def test_own_name_ai_suffix_is_neutral() -> None:
+    """"Cognition AI" is the company named Cognition, informally suffixed —
+    not another entity."""
+    text = (
+        "Cognition AI Closes $1B Round. Cognition AI makes the Devin "
+        "coding agent, and Cognition AI plans enterprise expansion."
+    )
+    r = corroborate_entity(
+        "Cognition",
+        "Cognition develops Devin, an autonomous software engineering "
+        "agent for coding tasks and pull requests.",
+        text,
+    )
+    assert r.extended_occurrences == 0
+    assert r.suspect is False
+
+
+def test_head_token_variant_keeps_original_own_tokens() -> None:
+    """Second prod triage bug: evaluating the head-token variant "Yuga" must
+    not read "Yuga Labs" (the company's own name) as another entity —
+    own_tokens carries the original full name."""
+    text = (
+        "Yuga Labs Raises $450M. Yuga Labs created Bored Ape Yacht Club, "
+        "and Yuga Labs plans a metaverse launch."
+    )
+    r = corroborate_entity(
+        "Yuga",
+        "Yuga Labs creates NFT collections including Bored Ape Yacht Club "
+        "and builds metaverse experiences.",
+        text,
+        own_tokens={"yuga", "labs", "bayc"},
+    )
+    assert r.extended_occurrences == 0
+    assert r.suspect is False
+
+
 def test_no_text_and_empty_name_fail_open() -> None:
     r = corroborate_entity("Wave", _WAVE_DESC, "")
     assert r.suspect is False
