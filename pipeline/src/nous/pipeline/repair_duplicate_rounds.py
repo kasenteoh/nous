@@ -148,8 +148,10 @@ NEAR_AMOUNT_TOLERANCE: float = 0.15
 # investors within the date window are the same event; a genuinely new round
 # re-links its investors as new rows only after its own extraction, so shared
 # links this dense across two close-dated compatible-type rows are
-# re-reports.
-WIDE_AMOUNT_TOLERANCE: float = 0.5
+# re-reports. 25% (not wider): it covers the observed divergence class with
+# margin while rejecting tranche-then-priced pairs (~30%+ gaps) — a wrong
+# merge is worse than a duplicate (#240 review).
+WIDE_AMOUNT_TOLERANCE: float = 0.25
 WIDE_SHARED_INVESTORS_MIN: int = 2
 # Two dates farther apart than this window never describe the same event.
 NEAR_DATE_WINDOW_DAYS: int = 14
@@ -365,40 +367,58 @@ async def _collapse_near_amounts(
         if anchor.id in claimed:
             continue
         losers: list[FundingRound] = []
-        for other in amounted[i + 1 :]:
-            if other.id in claimed:
-                continue
-            assert anchor.amount_raised is not None  # filtered above
-            assert other.amount_raised is not None
-            if not _amounts_near(anchor.amount_raised, other.amount_raised):
-                # The widened band opens ONLY on shared-investor evidence
-                # (prometheus: "$12B raised" vs the "$10B" variant, same
-                # backer trio — 16% dodges ±15%).
-                shared = investors_by_round.get(anchor.id, set()) & (
-                    investors_by_round.get(other.id, set())
-                )
+        # The anchor's WORKING investor set grows as losers join (a merge
+        # absorbs their links). Collection runs to a FIX-POINT: a candidate
+        # whose shared-investor evidence only materializes after a later
+        # loser is absorbed must still merge in THIS run, regardless of
+        # iteration order (idempotency: one run, not two — #240 review).
+        anchor_investors = set(investors_by_round.get(anchor.id, set()))
+        grew = True
+        while grew:
+            grew = False
+            for other in amounted[i + 1 :]:
+                if other.id in claimed:
+                    continue
+                assert anchor.amount_raised is not None  # filtered above
+                assert other.amount_raised is not None
+                if not _amounts_near(anchor.amount_raised, other.amount_raised):
+                    # The widened band opens ONLY on shared-investor evidence
+                    # (prometheus: "$12B raised" vs the "$10B" variant, same
+                    # backer trio — 16% dodges ±15%).
+                    shared = anchor_investors & investors_by_round.get(
+                        other.id, set()
+                    )
+                    if not (
+                        _amounts_wide_near(
+                            anchor.amount_raised, other.amount_raised
+                        )
+                        and len(shared) >= WIDE_SHARED_INVESTORS_MIN
+                    ):
+                        continue
+                anchor_type = _normalized_type(anchor.round_type)
+                other_type = _normalized_type(other.round_type)
                 if not (
-                    _amounts_wide_near(anchor.amount_raised, other.amount_raised)
-                    and len(shared) >= WIDE_SHARED_INVESTORS_MIN
+                    anchor_type is None
+                    or other_type is None
+                    or anchor_type == other_type
                 ):
                     continue
-            anchor_type = _normalized_type(anchor.round_type)
-            other_type = _normalized_type(other.round_type)
-            if not (
-                anchor_type is None or other_type is None or anchor_type == other_type
-            ):
-                continue
-            if not _dates_compatible(anchor.announced_date, other.announced_date):
-                continue
-            if anchor.announced_date is None and other.announced_date is None:
-                # BOTH undated: a same-type near-amount pair with no date on
-                # either side can be two genuinely different rounds (a $5M
-                # seed and a later $4.5M seed, neither dated). A wrong merge
-                # is worse than a duplicate — require at least one dated row.
-                # The census's near_amount_pairs counter surfaces the residue.
-                continue
-            losers.append(other)
-            claimed.add(other.id)
+                if not _dates_compatible(
+                    anchor.announced_date, other.announced_date
+                ):
+                    continue
+                if anchor.announced_date is None and other.announced_date is None:
+                    # BOTH undated: a same-type near-amount pair with no date
+                    # on either side can be two genuinely different rounds (a
+                    # $5M seed and a later $4.5M seed, neither dated). A wrong
+                    # merge is worse than a duplicate — require at least one
+                    # dated row. The census's near_amount_pairs counter
+                    # surfaces the residue.
+                    continue
+                losers.append(other)
+                claimed.add(other.id)
+                anchor_investors |= investors_by_round.get(other.id, set())
+                grew = True
         if not losers:
             continue
         logger.info(
@@ -418,6 +438,13 @@ async def _collapse_near_amounts(
         # most once across passes (2c would otherwise recount a 2b loser).
         loser_ids = {loser.id for loser in losers}
         rows[:] = [r for r in rows if r.id not in loser_ids]
+        # Mirror _merge_cluster's investor repointing in the snapshot: the
+        # anchor absorbed the losers' links, and a LATER anchor comparing
+        # against this one must see the merged set or a merge that should
+        # happen this run waits for the next (idempotency — #240 review).
+        absorbed = investors_by_round.setdefault(anchor.id, set())
+        for loser in losers:
+            absorbed |= investors_by_round.pop(loser.id, set())
     return merged
 
 

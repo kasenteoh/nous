@@ -1632,3 +1632,85 @@ def test_normalized_type_strips_continuation_suffixes() -> None:
         "seed round extension fund"
     )
     assert normalized_round_type("Series C") == "series c"
+
+
+async def test_equal_valuation_both_undated_preserved(db: AsyncSession) -> None:
+    """Pass 2d's both-undated guard: equal post-money on two undated rows is
+    NOT enough — without a date anchoring the event, never merge."""
+    co = _co("Undated Valuation Test", "undated-valuation-test")
+    db.add(co)
+    await db.flush()
+    db.add_all(
+        [
+            FundingRound(
+                company_id=co.id,
+                round_type="Series C",
+                amount_raised=200_000_000,
+                valuation_post_money=5_000_000_000,
+                announced_date=None,
+            ),
+            FundingRound(
+                company_id=co.id,
+                round_type=None,
+                amount_raised=120_000_000,
+                valuation_post_money=5_000_000_000,
+                announced_date=None,
+            ),
+        ]
+    )
+    await db.commit()
+    summary = await run_repair_duplicate_rounds(db, dry_run=False)
+    assert summary.equal_valuation_rows_merged == 0
+    assert len(await _rounds_for(db, co.id)) == 2
+
+
+async def test_widened_band_investor_sets_follow_merges(db: AsyncSession) -> None:
+    """#240 review: the in-memory investor snapshot must absorb merged
+    losers' links, so a chain (A absorbs B, then A+B's union reaches C) needs
+    ONE run, not two. A($12B,{X,Y}) + B($10B,{Y,Z}) + C($9.5B,{X,Z}): A-B
+    share {Y}=1 — no merge; wait, use denser sets so A-B merge first, then
+    A's absorbed set shares 2 with C."""
+    co = _co("Chain Test", "chain-test")
+    x = Investor(name="X", name_normalized="x", slug="x-chain")
+    y = Investor(name="Y", name_normalized="y", slug="y-chain")
+    z = Investor(name="Z", name_normalized="z", slug="z-chain")
+    db.add_all([co, x, y, z])
+    await db.flush()
+
+    a = FundingRound(
+        company_id=co.id,
+        round_type="Series B",
+        amount_raised=12_000_000_000,
+        announced_date=date(2026, 6, 11),
+        extraction_confidence="high",
+    )
+    b = FundingRound(
+        company_id=co.id,
+        round_type="Series B",
+        amount_raised=10_000_000_000,
+        announced_date=date(2026, 6, 12),
+    )
+    c = FundingRound(
+        company_id=co.id,
+        round_type="Series B",
+        amount_raised=9_500_000_000,
+        announced_date=date(2026, 6, 12),
+    )
+    db.add_all([a, b, c])
+    await db.flush()
+    links = [
+        (a, x), (a, y),          # A: {X, Y}
+        (b, x), (b, y), (b, z),  # B: {X, Y, Z} — merges into A, A absorbs Z
+        (c, y), (c, z),          # C: {Y, Z} — shares 2 with the ABSORBED set
+    ]
+    for r, inv in links:
+        db.add(
+            FundingRoundInvestor(funding_round_id=r.id, investor_id=inv.id)
+        )
+    await db.commit()
+
+    summary = await run_repair_duplicate_rounds(db, dry_run=False)
+    # C's gap vs A is 20.8% (widened band) and it shares {Y,Z} with A's
+    # post-merge set — one run collapses all three.
+    assert summary.near_amount_rows_merged == 2
+    assert len(await _rounds_for(db, co.id)) == 1
