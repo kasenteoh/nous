@@ -388,13 +388,13 @@ def corroborate_entity(
     # the company's own FORMAL name, not another entity — "Impulse Space"
     # for the impulse whose description says "space logistics" (third prod
     # triage: a company's fuller corporate name flagged as an extension).
-    own_identity_words = {
-        w.lower()
-        for w in _WORD_RE.findall(f"{description or ''} {own_context or ''}")
-    }
-    # Squashed view of the identity context: a website domain glues the words
-    # together ("impulsespace.com"), so "Impulse Space" corroborates via
-    # squash-substring, not word match.
+    # Squashed view of the identity context (description + website + slug):
+    # a neighbor is the company's own FORMAL name only when the WHOLE
+    # extended phrase appears contiguously — "impulsespace.com" owns
+    # "Impulse Space"; a description that merely mentions "capital" or
+    # "group" somewhere must NOT clear "Drip Capital"/"Amber Group"
+    # (review catch: a word-level check here shadowed this and undid the
+    # deliberate _NEUTRAL_FOLLOWERS exclusion of entity-deciding nouns).
     own_identity_squashed = re.sub(
         r"[^a-z0-9]", "", f"{description or ''} {own_context or ''}".lower()
     )
@@ -436,7 +436,6 @@ def corroborate_entity(
             and _is_proper(word)
             and word.lower() not in _NEUTRAL_FOLLOWERS
             and word.lower() not in _NEUTRAL_PRECEDERS
-            and word.lower() not in own_identity_words
             and not re.search(r"['']s?$", word)
             and not _ATTRIBUTIVE_PREFIX_RE.search(word)
         ):
@@ -452,7 +451,6 @@ def corroborate_entity(
             word is not None
             and _is_proper(word)
             and word.lower() not in _NEUTRAL_FOLLOWERS
-            and word.lower() not in own_identity_words
         ):
             phrase = " ".join((m.group(0), *chain_right, word))
             if not _is_own_phrase(phrase):
@@ -487,8 +485,10 @@ def corroborate_entity(
         # A distinctive all-lowercase brand ("n8n", "claroty") is not a
         # common-word usage — its article shares profile vocabulary. Only
         # condemn lowercase-only when the context ALSO fails to corroborate
-        # (third prod triage: n8n/claroty/fal-ai false-flagged).
-        if not context_available or result.context_overlap == 0:
+        # (third prod triage: n8n/claroty/fal-ai false-flagged). The bar is
+        # >= 2 overlapping words: one shared generic-ish word is coincidence
+        # (review catch), while a right-company article shares several.
+        if not context_available or result.context_overlap < 2:
             result.suspect = True
             result.reasons.append(
                 "name occurs only as a lowercase common word, never as a "

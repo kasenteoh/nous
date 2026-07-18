@@ -343,6 +343,39 @@ def test_attributive_prefix_and_financial_followers_neutral() -> None:
     assert r.suspect is False
 
 
+def test_incidental_description_word_does_not_clear_other_entity() -> None:
+    """Review catch: a description that merely mentions "group"/"money"
+    somewhere must NOT clear "Amber Group"/"Wave Money" — only a contiguous
+    formal-name match (domain/description phrase) neutralizes."""
+    text = (
+        "Amber Group Raises $100M. Amber Group operates crypto trading "
+        "desks, and Amber Group expands its market-making arm."
+    )
+    r = corroborate_entity(
+        "Amber",
+        "Amber makes a group messaging workspace helping teams organize "
+        "conversations and shared documents.",
+        text,
+        own_context="https://amber.example.com/ amber",
+    )
+    assert r.suspect is True
+    assert any("Amber Group" in e for e in r.evidence)
+
+    money_text = (
+        "Wave Money Secures $2B. Wave Money runs mobile wallets in "
+        "Myanmar, and Wave Money grows its agent network."
+    )
+    r2 = corroborate_entity(
+        "Wave",
+        "Wave is building a mobile money network across Africa with free "
+        "deposits and withdrawals.",
+        money_text,
+        own_context="https://www.wave.com/ wave",
+    )
+    assert r2.suspect is True
+    assert any("Wave Money" in e for e in r2.evidence)
+
+
 def test_lowercase_distinctive_brand_with_context_not_suspect() -> None:
     """Third prod triage: "n8n"/"claroty"-class all-lowercase brands whose
     article shares profile vocabulary must not be condemned; a lowercase
