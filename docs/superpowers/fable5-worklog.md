@@ -2070,3 +2070,58 @@ Owner: "let's do it" (the QA P0s). Both adversarially reviewed (APPROVE).
   Solutions… 213 suspects total; the report is the retroactive-audit
   candidate set. corroborated_weak = 613 (no signal, no positive
   evidence) sizes the LLM adjudication surface.
+
+## PR #235 — feat(pipeline): entity-aware ingest guard (the recurrence killer)
+
+- The arc's centerpiece. `pipeline/entity_guard.check_article_entity`:
+  cheap calibrated signals first (STRONG corroboration — bare proper
+  mention + description-context overlap — attaches free; a no-description
+  husk attaches, the retroactive audit owns that cohort), then LLM
+  adjudication (`article_subject_match`, PROMPT_VERSION 2026-07-18.1,
+  discriminative + conservative: attach only on is_subject && confidence
+  != low; the verdict names the other entity). Wired into BOTH attachment
+  paths (per-company GN + broad-feed existing-company matches).
+- Failure semantics: LLM error → skip WITHOUT storing (URL re-selects
+  next sweep); 429 → per-run circuit breaker (guard_rate_limited) so a
+  rate-limited run doesn't burn a futile call per article. Review's HIGH
+  catch: httpx transport errors (DNS/conn-refused) escaped complete_json
+  as raw exceptions with a path to kill the whole unattended sweep — now
+  wrapped as LLMError in client._call, fixing every caller.
+- New DeepSeek call class flagged: adjudication only for non-strong
+  attachments of profiled companies, ≈ cents/day.
+- **Validated live minutes after merge** (news-only pipeline dispatch,
+  news_limit=25): 2 articles adjudicated, BOTH correctly dropped —
+  keyword garbage for the dictionary-word company "keep" ("Funding It
+  Takes to Keep Learning Forever" – 24/7 Wall St; a Nigerian sports
+  funding story). 0 errors, no rate limit, 1 legit article inserted.
+- Follow-up (next session): golden set for article_subject_match
+  (register in evals/prompts.py, fixtures from the probe's real cases,
+  eval-record live recording). Until then the prompt is unit-tested with
+  mocked LLM but unmeasured against live DeepSeek.
+
+## PR #236 — feat(pipeline): clear-company-facts (standalone total/status clearer)
+
+- The re-heal exposed the gap: delete-round's --clear-* flags ride on a
+  ROUND selection. wave's phantom "shut down" had no round left (its
+  wrong rounds never recurred); terrafirma's stated total was suspected
+  wrong only after its round died. New lever clears company-level facts
+  directly (--clear-total/--clear-status, ≥1 required), kind-scoped ✓
+  deletion (unrelated funding_round ✓s survive, pinned), dry-run
+  previews doomed values, idempotent. ops.yml commands reuse the
+  clear_total/clear_status inputs + shell pre-flight.
+
+## Prod ops (2026-07-18) — re-heal APPLIED behind the guard
+
+- wonder: delete-round-apply $650M + clear_total + clear_status (dry-run
+  previewed: Series D $650M, 2 food-Wonder articles incl. "Restaurant
+  Dive", stated total $650M w/ GN source, status "ipo", 2 ✓s) — success.
+- terrafirma: delete-round-apply $115M (3 articles) — success; the
+  standalone clear-total then found stated total ALREADY null (the page's
+  $115M was the computed round sum, gone with the round) — clean no-op.
+- wave: clear-company-facts-apply --clear-status ("shut_down" → active,
+  0 ✓s) — success.
+- These heals now sit behind the live ingest guard, so the 14-day
+  re-ingest window is guarded: a food-Wonder re-ingest must pass LLM
+  adjudication against the edtech profile. **VERIFY next session**:
+  /c/wonder.md /c/terrafirma.md /c/wave.md after ISR (6h), and the guard
+  counters in the next few 3h-cron step summaries.
