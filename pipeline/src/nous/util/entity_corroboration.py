@@ -140,6 +140,62 @@ _NEUTRAL_FOLLOWERS: frozenset[str] = frozenset(
         "was",
         "is",
         "to",
+        # Title-Case adverbs/auxiliaries mid-headline ("Zepto Also Expands")
+        "also",
+        "now",
+        "just",
+        "still",
+        "may",
+        "might",
+        "could",
+        "can",
+        "reportedly",
+        "officially",
+        "finally",
+        "nearly",
+        "almost",
+        "again",
+        "soon",
+        # Informal same-company suffix: coverage writes "Cognition AI" for
+        # the company named Cognition. "<Name> AI" is not another entity.
+        "ai",
+    }
+)
+
+# Title-Case DESCRIPTOR nouns that precede a company name in headlines
+# ("Fusion Startup Helion…", "Legal AI Platform Legora Raises…") — category
+# words, not entity names. A real other-entity prefix ("Primary Wave",
+# "Third Wave") is a proper name, never a category noun. Kept small and
+# generic; second prod probe triage is the source.
+_NEUTRAL_PRECEDERS: frozenset[str] = frozenset(
+    {
+        "startup",
+        "startups",
+        "company",
+        "firm",
+        "maker",
+        "developer",
+        "platform",
+        "app",
+        "giant",
+        "unicorn",
+        "rival",
+        "competitor",
+        "fintech",
+        "biotech",
+        "insurtech",
+        "edtech",
+        "healthtech",
+        "proptech",
+        "exclusive",
+        "breaking",
+        "report",
+        "reports",
+        "sources",
+        "update",
+        "watch",
+        "venture-backed",
+        "the",
     }
 )
 
@@ -244,31 +300,32 @@ def _is_proper(word: str) -> bool:
     return any(ch.isupper() for ch in word)
 
 
-def _words_around(
-    text: str, start: int, end: int
-) -> tuple[str | None, str | None]:
-    """The alphabetic word immediately before ``start`` and after ``end``,
-    or None when a sentence boundary / nothing intervenes."""
-    before_text = text[:start]
-    after_text = text[end:]
-    # The first prod probe run showed "…at $380B Valuation - Built In"
-    # reading "Valuation Built" as an entity — hence the outlet-dash rule
-    # in _BOUNDARY_RE.
-    m_before = re.search(r"([A-Za-z][A-Za-z0-9''\-]*)([^A-Za-z0-9]*)$", before_text)
-    before = None
-    if m_before and not _BOUNDARY_RE.search(m_before.group(2)):
-        before = m_before.group(1)
-    m_after = re.match(r"([^A-Za-z0-9]*)([A-Za-z][A-Za-z0-9''\-]*)", after_text)
-    after = None
-    if m_after and not _BOUNDARY_RE.search(m_after.group(1)):
-        after = m_after.group(2)
-    return before, after
+def _prev_word(text: str, pos: int) -> tuple[str | None, int]:
+    """The word immediately before ``pos`` and its start offset, or (None, pos)
+    when a boundary (sentence terminator / outlet dash — _BOUNDARY_RE)
+    intervenes. The first prod probe run showed "…at $380B Valuation - Built
+    In" reading "Valuation Built" as an entity — hence the boundary rule."""
+    m = re.search(r"([A-Za-z][A-Za-z0-9''\-]*)([^A-Za-z0-9]*)$", text[:pos])
+    if m and not _BOUNDARY_RE.search(m.group(2)):
+        return m.group(1), m.start(1)
+    return None, pos
+
+
+def _next_word(text: str, pos: int) -> tuple[str | None, int]:
+    """The word immediately after ``pos`` and its end offset, or (None, pos)
+    when a boundary intervenes."""
+    m = re.match(r"([^A-Za-z0-9]*)([A-Za-z][A-Za-z0-9''\-]*)", text[pos:])
+    if m and not _BOUNDARY_RE.search(m.group(1)):
+        return m.group(2), pos + m.end(2)
+    return None, pos
 
 
 def corroborate_entity(
     company_name: str,
     description: str | None,
     text: str,
+    *,
+    own_tokens: set[str] | None = None,
 ) -> CorroborationResult:
     """Score whether ``text`` (article title + body) corroborates
     ``company_name`` as ITS subject. See module docstring for the signals.
@@ -286,7 +343,13 @@ def corroborate_entity(
     name_tokens = [t.lower() for t in _WORD_RE.findall(stripped)]
     if not name_tokens:
         return result
+    # ``own_tokens`` lets a caller evaluating a name VARIANT (head token,
+    # squashed) keep the ORIGINAL full name's tokens: "Yuga Labs" following
+    # the head-variant "Yuga" is the company's own name, not another entity
+    # (second prod probe triage: yuga-labs flagged on its own suffix).
     own_full_tokens = {t.lower() for t in _WORD_RE.findall(company_name)}
+    if own_tokens:
+        own_full_tokens |= {t.lower() for t in own_tokens}
 
     pattern = _name_token_pattern(name_tokens)
     extended_phrases: Counter[str] = Counter()
@@ -300,32 +363,45 @@ def corroborate_entity(
             continue
         result.proper_occurrences += 1
 
-        before, after = _words_around(text, m.start(), m.end())
         extended_via: list[str] = []
-        # "Primary Wave": a capitalized predecessor extends the entity name
-        # leftward. Sentence-initial capitalization of an ordinary word is the
-        # main false-positive risk; requiring the predecessor to be capitalized
-        # while NOT sentence-adjacent is handled in _words_around (a sentence
-        # terminator breaks adjacency), and ordinary sentence-initial words
-        # ("The Wave") are excluded via the neutral/lowercase test below.
+        # Walk OUTWARD past the company's own tokens before judging the
+        # neighbor: the head-variant "Samba" must look through its own
+        # "Probe" to see "Samba Probe Dynamics" (and "Yuga" through "Labs"
+        # to see a plain verb). Then:
+        # - leftward ("Primary Wave"): excluded are neutral verbs/roles,
+        #   Title-Case category nouns ("Fusion Startup Helion"), and
+        #   POSSESSIVES — "Fei-Fei Li's World Labs" / "India's Zepto"
+        #   attribute ownership/origin, they don't name another entity;
+        # - rightward ("Impulse Dynamics" / "TerraFirma Inc"-class):
+        #   excluded are the neutral corporate/role/verb words.
+        chain_left: list[str] = []
+        word, pos = _prev_word(text, m.start())
+        while word is not None and word.lower() in own_full_tokens:
+            chain_left.insert(0, word)
+            word, pos = _prev_word(text, pos)
         if (
-            before is not None
-            and _is_proper(before)
-            and before.lower() not in _NEUTRAL_FOLLOWERS
-            and before.lower() != "the"
-            and before.lower() not in own_full_tokens
+            word is not None
+            and _is_proper(word)
+            and word.lower() not in _NEUTRAL_FOLLOWERS
+            and word.lower() not in _NEUTRAL_PRECEDERS
+            and not re.search(r"['']s?$", word)
         ):
-            extended_via.append(f"{before} {m.group(0)}")
-        # "Impulse Dynamics" / "TerraFirma Inc"-class: a capitalized successor
-        # that is neither a neutral corporate/role word nor part of the
-        # company's own full name extends it rightward.
+            extended_via.append(
+                " ".join((word, *chain_left, m.group(0)))
+            )
+        chain_right: list[str] = []
+        word, pos = _next_word(text, m.end())
+        while word is not None and word.lower() in own_full_tokens:
+            chain_right.append(word)
+            word, pos = _next_word(text, pos)
         if (
-            after is not None
-            and _is_proper(after)
-            and after.lower() not in _NEUTRAL_FOLLOWERS
-            and after.lower() not in own_full_tokens
+            word is not None
+            and _is_proper(word)
+            and word.lower() not in _NEUTRAL_FOLLOWERS
         ):
-            extended_via.append(f"{m.group(0)} {after}")
+            extended_via.append(
+                " ".join((m.group(0), *chain_right, word))
+            )
         if extended_via:
             result.extended_occurrences += 1
             for phrase in extended_via:

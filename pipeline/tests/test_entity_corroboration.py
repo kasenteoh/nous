@@ -235,6 +235,61 @@ def test_outlet_containing_company_name_still_flags() -> None:
     assert any("Built In" in e for e in r.evidence)
 
 
+def test_possessive_and_descriptor_prefixes_are_neutral() -> None:
+    """Second prod triage: "India's Zepto" / "Fusion Startup Helion" —
+    possessives attribute, category nouns describe; neither names a
+    different entity."""
+    text = (
+        "India's Zepto Raises $500M For Quick Commerce. Zepto operates "
+        "dark stores across India, and Zepto delivers groceries in "
+        "minutes. Startup Zepto Also Expands Into Electronics."
+    )
+    r = corroborate_entity(
+        "Zepto",
+        "Zepto runs a quick-commerce grocery delivery network of dark "
+        "stores across Indian cities delivering within minutes.",
+        text,
+    )
+    assert r.extended_occurrences == 0
+    assert r.suspect is False
+
+
+def test_own_name_ai_suffix_is_neutral() -> None:
+    """"Cognition AI" is the company named Cognition, informally suffixed —
+    not another entity."""
+    text = (
+        "Cognition AI Closes $1B Round. Cognition AI makes the Devin "
+        "coding agent, and Cognition AI plans enterprise expansion."
+    )
+    r = corroborate_entity(
+        "Cognition",
+        "Cognition develops Devin, an autonomous software engineering "
+        "agent for coding tasks and pull requests.",
+        text,
+    )
+    assert r.extended_occurrences == 0
+    assert r.suspect is False
+
+
+def test_head_token_variant_keeps_original_own_tokens() -> None:
+    """Second prod triage bug: evaluating the head-token variant "Yuga" must
+    not read "Yuga Labs" (the company's own name) as another entity —
+    own_tokens carries the original full name."""
+    text = (
+        "Yuga Labs Raises $450M. Yuga Labs created Bored Ape Yacht Club, "
+        "and Yuga Labs plans a metaverse launch."
+    )
+    r = corroborate_entity(
+        "Yuga",
+        "Yuga Labs creates NFT collections including Bored Ape Yacht Club "
+        "and builds metaverse experiences.",
+        text,
+        own_tokens={"yuga", "labs", "bayc"},
+    )
+    assert r.extended_occurrences == 0
+    assert r.suspect is False
+
+
 def test_no_text_and_empty_name_fail_open() -> None:
     r = corroborate_entity("Wave", _WAVE_DESC, "")
     assert r.suspect is False

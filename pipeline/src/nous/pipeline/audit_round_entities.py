@@ -113,8 +113,11 @@ def _best_corroboration(
     occurrences. When NO variant occurs, the full-name view is returned and
     the caller reports the name as absent.
     """
+    # Every variant keeps the ORIGINAL name's tokens as own-name context:
+    # "Yuga Labs" following the head-variant "Yuga" is the company itself.
+    full_tokens = set(strip_corporate_suffix(company_name).lower().split())
     results = [
-        corroborate_entity(v, description, text)
+        corroborate_entity(v, description, text, own_tokens=full_tokens)
         for v in _name_variants(company_name)
     ]
     eligible = [r for r in results if r.occurrences > 0]
