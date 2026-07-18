@@ -2632,7 +2632,11 @@ def clear_company_facts_cmd(
                 "clear-company-facts",
                 started_at=started,
                 inputs_seen=1,
-                rows_written=1,
+                rows_written=(
+                    int(summary.total_raised_cleared)
+                    + int(summary.status_reset)
+                    + summary.verifications_deleted
+                ),
                 summary=summary,
                 flag_empty=False,
             )

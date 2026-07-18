@@ -141,6 +141,9 @@ jobs:
             echo "::error::delete-round requires amount or round_id"; exit 1
           fi
           if [ "${OP_COMMAND#clear-company-facts}" != "$OP_COMMAND" ]; then
+            if [ "$OP_CLEAR_TOTAL" != "true" ] && [ "$OP_CLEAR_STATUS" != "true" ]; then
+              echo "::error::clear-company-facts requires clear_total and/or clear_status"; exit 1
+            fi
             ARGS=("$OP_SLUG")
             if [ "$OP_CLEAR_TOTAL" = "true" ]; then ARGS+=(--clear-total); fi
             if [ "$OP_CLEAR_STATUS" = "true" ]; then ARGS+=(--clear-status); fi

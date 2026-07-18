@@ -9,6 +9,7 @@ no-op semantics, error paths. Requires DATABASE_URL.
 from __future__ import annotations
 
 import os
+from datetime import date
 from decimal import Decimal
 
 import pytest
@@ -44,6 +45,7 @@ async def _seed(db: AsyncSession) -> Company:
         status_source_url="https://gn.example.com/primary-wave-shutdown",
         total_raised_usd=Decimal("115000000"),
         total_raised_source_url="https://gn.example.com/terrafirma-inc-115m",
+        total_raised_as_of=date(2026, 7, 1),
     )
     db.add(co)
     await db.flush()
