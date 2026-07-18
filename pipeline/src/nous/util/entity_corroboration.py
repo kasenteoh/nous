@@ -231,8 +231,12 @@ def _name_token_pattern(tokens: list[str]) -> re.Pattern[str]:
     return re.compile(rf"(?<![A-Za-z0-9]){joined}(?![A-Za-z0-9])", re.IGNORECASE)
 
 
-def _is_capitalized(word: str) -> bool:
-    return bool(word) and word[0].isupper()
+def _is_proper(word: str) -> bool:
+    """Proper-noun-shaped: carries ANY uppercase letter. Initial-cap is the
+    normal case; stylized names ("xAI", "iPhone"-class) must count too — the
+    first prod probe run false-flagged xAI as "lowercase-only". An all-
+    lowercase common-word usage ("bespoke supplements") stays non-proper."""
+    return any(ch.isupper() for ch in word)
 
 
 def _words_around(
@@ -242,14 +246,19 @@ def _words_around(
     or None when a sentence boundary / nothing intervenes."""
     before_text = text[:start]
     after_text = text[end:]
-    # A sentence terminator between the neighbor and the name breaks adjacency.
+    # Adjacency breaks on a sentence terminator OR a space-adjacent dash/pipe
+    # — the Google-News headline convention is "Title - Outlet", and the
+    # first prod probe run showed "…at $380B Valuation - Built In" reading
+    # "Valuation Built" as an entity. A hyphen with no space ("Impulse-
+    # Dynamics") stays adjacent — that is genuine entity punctuation.
+    boundary = re.compile(r"[.!?:]|\s[-–—|]|[-–—|]\s")
     m_before = re.search(r"([A-Za-z][A-Za-z0-9''\-]*)([^A-Za-z0-9]*)$", before_text)
     before = None
-    if m_before and not re.search(r"[.!?:]", m_before.group(2)):
+    if m_before and not boundary.search(m_before.group(2)):
         before = m_before.group(1)
     m_after = re.match(r"([^A-Za-z0-9]*)([A-Za-z][A-Za-z0-9''\-]*)", after_text)
     after = None
-    if m_after and not re.search(r"[.!?:]", m_after.group(1)):
+    if m_after and not boundary.search(m_after.group(1)):
         after = m_after.group(2)
     return before, after
 
@@ -285,7 +294,7 @@ def corroborate_entity(
         matched_words = _WORD_RE.findall(m.group(0))
         # Proper-noun occurrence: every token of the match is capitalized.
         # (All-caps headlines pass; a lowercase common-word usage does not.)
-        if not all(_is_capitalized(w) for w in matched_words):
+        if not all(_is_proper(w) for w in matched_words):
             continue
         result.proper_occurrences += 1
 
@@ -299,7 +308,7 @@ def corroborate_entity(
         # ("The Wave") are excluded via the neutral/lowercase test below.
         if (
             before is not None
-            and _is_capitalized(before)
+            and _is_proper(before)
             and before.lower() not in _NEUTRAL_FOLLOWERS
             and before.lower() != "the"
             and before.lower() not in own_full_tokens
@@ -310,7 +319,7 @@ def corroborate_entity(
         # company's own full name extends it rightward.
         if (
             after is not None
-            and _is_capitalized(after)
+            and _is_proper(after)
             and after.lower() not in _NEUTRAL_FOLLOWERS
             and after.lower() not in own_full_tokens
         ):

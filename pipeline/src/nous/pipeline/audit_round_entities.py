@@ -135,14 +135,17 @@ def _round_text(articles: list[NewsArticle]) -> tuple[str, str]:
         for a in articles
         if a.raw_content and hostname(a.url) != _GOOGLE_NEWS_HOST
     ]
+    # Join with a sentence terminator, never a bare space: the first prod
+    # probe run glued one headline's trailing "- MSN" outlet to the next
+    # headline's leading company name and read "MSN Anthropic" as an entity.
     if bodies:
-        return " ".join((*titles, *bodies)), "body"
+        return ". ".join((*titles, *bodies)), "body"
     snippets = [
         a.raw_content
         for a in articles
         if a.raw_content and hostname(a.url) == _GOOGLE_NEWS_HOST
     ]
-    return " ".join((*titles, *snippets)), "headline"
+    return ". ".join((*titles, *snippets)), "headline"
 
 
 async def run_audit_round_entities(

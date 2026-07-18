@@ -179,6 +179,62 @@ def test_role_and_corporate_followers_are_neutral() -> None:
     assert r.suspect is False
 
 
+def test_stylized_lowercase_name_is_proper_noun() -> None:
+    """First prod run regression: "xAI" carries an uppercase letter — it is a
+    proper-noun occurrence, never "lowercase-only"."""
+    text = (
+        "Elon Musk's xAI closes a $20 billion funding round. xAI will use "
+        "the capital for AI infrastructure, and xAI expects rapid growth."
+    )
+    r = corroborate_entity(
+        "xAI",
+        "xAI develops large language models and AI infrastructure for "
+        "scientific discovery applications.",
+        text,
+    )
+    assert r.lowercase_only is False
+    assert r.suspect is False
+
+
+def test_outlet_suffix_dash_breaks_adjacency() -> None:
+    """First prod run regression: the GN "Title - Outlet" convention.
+    "…at $380B Valuation - Anthropic Daily" must not read "Valuation
+    Anthropic" as an entity, in either direction."""
+    text = (
+        "Anthropic hits $965B valuation with $65B funding - MSN. "
+        "Anthropic raises the largest round on record - Yahoo Finance. "
+        "Anthropic closes $65B - Reuters."
+    )
+    r = corroborate_entity(
+        "Anthropic",
+        "Anthropic is an AI safety company building reliable language "
+        "models and research assistants.",
+        text,
+    )
+    assert r.extended_occurrences == 0
+    assert r.suspect is False
+
+
+def test_outlet_containing_company_name_still_flags() -> None:
+    """The genuine catch the calibration must NOT lose: company "Built"
+    carrying a round whose every headline ends "- Built In" (the outlet).
+    The outlet phrase follows the dash, so the leading word is fine — but
+    "Built In" itself repeats as a proper phrase the company doesn't own."""
+    text = (
+        "Anthropic Bags $30B Funding Round at $380B Valuation - Built In. "
+        "Anthropic Hits Record Valuation In Mega Round - Built In. "
+        "Anthropic Funding Round Draws Investor Interest - Built In."
+    )
+    r = corroborate_entity(
+        "Built",
+        "Built provides construction finance software for lenders "
+        "managing draw schedules and inspections.",
+        text,
+    )
+    assert r.suspect is True
+    assert any("Built In" in e for e in r.evidence)
+
+
 def test_no_text_and_empty_name_fail_open() -> None:
     r = corroborate_entity("Wave", _WAVE_DESC, "")
     assert r.suspect is False
