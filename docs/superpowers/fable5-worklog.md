@@ -2125,3 +2125,40 @@ Owner: "let's do it" (the QA P0s). Both adversarially reviewed (APPROVE).
   adjudication against the edtech profile. **VERIFY next session**:
   /c/wonder.md /c/terrafirma.md /c/wave.md after ISR (6h), and the guard
   counters in the next few 3h-cron step summaries.
+
+## PRs #237/#238 — the retroactive purge lever + force-adjudicate (the reservoir)
+
+- **The #235 guard closes the faucet; #237 closes the reservoir.** Hours
+  after the re-heal, wonder's $650M re-spawned AGAIN — extract-funding
+  re-mined it from a pre-guard prnewswire article, one of ELEVEN stored
+  food-Wonder articles that delete-round (round-linked only) and
+  repair-misattributed-news (name-mention failures only) both can't
+  reach. Stored wrong-entity articles regenerate purged rounds every cron.
+- **#237 purge-wrong-entity-articles**: runs the guard's exact decision
+  over EVERY stored article of one company; purges failing articles +
+  rounds sourced from them + kind-scoped ✓s; clears total/status from
+  purged URLs; refreshes denorms. Fail-KEEP on LLM error; 429 aborts
+  loudly; refuses description-less husks; dry-run prints every verdict
+  with the other entity named. Review's HIGH catch applied: a round a
+  KEPT article still links to is SPARED and repointed to the survivor
+  (mirrors repair-misattributed-news), and a kept article's URL never
+  joins the total/status poison set.
+- **#238 force-adjudicate (same-day)**: the first wonder dry-run purged
+  10/11 — the ONE survivor was the exact prnewswire re-spawn source, kept
+  via cheap strong-corroboration (bare mention + one coincidental
+  description word). The purge lever now adjudicates EVERYTHING by
+  default (--no-force-adjudicate opts out); the ingest guard keeps its
+  fast path (volume; retroactive sweeps backstop it). The #237 reviewer
+  had recommended exactly this mode pre-emptively.
+- **Prod applies (2026-07-18 evening):** wonder 11/11 articles + the
+  Series D $650M round purged; terrafirma 9/9 + the $100M Series A
+  purged. Operator-review moment worth recording: the terrafirma dry-run
+  LOOKED like it was purging the company's own coverage ("robotic
+  construction platform" headlines) — inspect + the live site settled it:
+  catalog-terrafirma is terrafirma-robotics.com, an autonomous sensing
+  DRONE company; the $115M belongs to a SpaceX-alumni heavy-equipment
+  TerraFirma. Three same-named entities in one slug's history. The QA's
+  original "TerraFirma Inc" label was imprecise; the wrong-entity
+  conclusion held.
+- The lever is the per-company unit of the retroactive audit: the probe's
+  213-suspect list is the dispatch queue (built/blue/magic first).
