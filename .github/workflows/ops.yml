@@ -29,6 +29,8 @@ on:
           - repair-misattributed-news-apply
           - delete-round-dry-run
           - delete-round-apply
+          - clear-company-facts-dry-run
+          - clear-company-facts-apply
           - audit-round-entities
       slug:
         description: "Company slug to operate on (required for company-scoped commands; ignored by repair-misattributed-news-*)."
@@ -61,12 +63,12 @@ on:
         required: false
         type: string
       clear_total:
-        description: "delete-round-* only: also clear the stated total_raised even when its source URL is outside the purge set."
+        description: "delete-round-* / clear-company-facts-*: also clear the stated total_raised even when its source URL is outside the purge set."
         required: false
         type: boolean
         default: false
       clear_status:
-        description: "delete-round-* only: also reset a non-active status even when its source URL is outside the purge set."
+        description: "delete-round-* / clear-company-facts-*: also reset a non-active status even when its source URL is outside the purge set."
         required: false
         type: boolean
         default: false
@@ -129,7 +131,7 @@ jobs:
         run: |
           set -o pipefail
           case "$OP_COMMAND" in
-            exclude-company|unexclude-company|inspect-company|reresolve-company|delete-round-*)
+            exclude-company|unexclude-company|inspect-company|reresolve-company|delete-round-*|clear-company-facts-*)
               if [ -z "$OP_SLUG" ]; then
                 echo "::error::'$OP_COMMAND' requires the slug input"; exit 1
               fi ;;
@@ -138,7 +140,17 @@ jobs:
              && [ -z "$OP_AMOUNT" ] && [ -z "$OP_ROUND_ID" ]; then
             echo "::error::delete-round requires amount or round_id"; exit 1
           fi
-          if [ "$OP_COMMAND" = "delete-round-dry-run" ] || [ "$OP_COMMAND" = "delete-round-apply" ]; then
+          if [ "${OP_COMMAND#clear-company-facts}" != "$OP_COMMAND" ]; then
+            if [ "$OP_CLEAR_TOTAL" != "true" ] && [ "$OP_CLEAR_STATUS" != "true" ]; then
+              echo "::error::clear-company-facts requires clear_total and/or clear_status"; exit 1
+            fi
+            ARGS=("$OP_SLUG")
+            if [ "$OP_CLEAR_TOTAL" = "true" ]; then ARGS+=(--clear-total); fi
+            if [ "$OP_CLEAR_STATUS" = "true" ]; then ARGS+=(--clear-status); fi
+            if [ "$OP_COMMAND" = "clear-company-facts-apply" ]; then ARGS+=(--apply); fi
+            uv run nous clear-company-facts "${ARGS[@]}" \
+              | { echo '```json'; cat; echo '```'; } | tee "$GITHUB_STEP_SUMMARY"
+          elif [ "$OP_COMMAND" = "delete-round-dry-run" ] || [ "$OP_COMMAND" = "delete-round-apply" ]; then
             ARGS=("$OP_SLUG")
             if [ -n "$OP_AMOUNT" ]; then ARGS+=(--amount "$OP_AMOUNT"); fi
             if [ -n "$OP_ROUND_ID" ]; then ARGS+=(--round-id "$OP_ROUND_ID"); fi
