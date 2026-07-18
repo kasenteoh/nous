@@ -2573,6 +2573,56 @@ def delete_round_cmd(
     asyncio.run(_run())
 
 
+@cli.command("purge-wrong-entity-articles")
+@click.argument("slug")
+@click.option(
+    "--apply",
+    is_flag=True,
+    default=False,
+    help="Actually purge. Default is a dry-run printing every verdict.",
+)
+def purge_wrong_entity_articles_cmd(slug: str, apply: bool) -> None:
+    """Adjudicate every stored article of one company against its profile;
+    purge wrong-entity articles + rounds sourced from them.
+
+    The retroactive sibling of the #235 ingest guard: stored pre-guard
+    articles feed extract-funding every cron and re-spawn purged rounds.
+    Uses the same cheap-signals-then-LLM decision; fail-KEEP on LLM errors;
+    aborts loudly on a rate limit (idempotent — re-dispatch later).
+    """
+    import asyncio
+    from datetime import UTC, datetime
+
+    from nous.db.session import AsyncSessionLocal
+    from nous.observability import record_pipeline_run
+    from nous.pipeline.purge_wrong_entity_articles import (
+        PurgeWrongEntityError,
+        run_purge_wrong_entity_articles,
+    )
+
+    async def _run() -> None:
+        started = datetime.now(UTC)
+        async with AsyncSessionLocal() as session:
+            try:
+                summary = await run_purge_wrong_entity_articles(
+                    session, slug=slug, dry_run=not apply
+                )
+            except PurgeWrongEntityError as exc:
+                raise click.ClickException(str(exc)) from exc
+            click.echo(summary.model_dump_json(indent=2))
+        if apply:
+            await record_pipeline_run(
+                "purge-wrong-entity-articles",
+                started_at=started,
+                inputs_seen=summary.articles_checked,
+                rows_written=summary.articles_purged + summary.rounds_purged,
+                summary=summary,
+                flag_empty=False,
+            )
+
+    asyncio.run(_run())
+
+
 @cli.command("clear-company-facts")
 @click.argument("slug")
 @click.option(
