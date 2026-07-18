@@ -78,6 +78,11 @@ on:
         description: "audit-round-entities only: only audit rounds with amount_raised >= this, whole USD."
         required: false
         type: string
+      no_force_adjudicate:
+        description: "purge-wrong-entity-articles-* only: allow the cheap strong-corroboration fast path to keep articles without an LLM verdict (default: adjudicate everything)."
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -129,6 +134,7 @@ jobs:
           OP_CLEAR_TOTAL: ${{ inputs.clear_total }}
           OP_CLEAR_STATUS: ${{ inputs.clear_status }}
           OP_MIN_AMOUNT: ${{ inputs.min_amount }}
+          OP_NO_FORCE_ADJUDICATE: ${{ inputs.no_force_adjudicate }}
         # Inputs pass through env vars (never string-interpolated into the
         # script) and the command itself is a choice allowlist. pipefail so a
         # failing `uv run` surfaces as a failed step instead of being masked by
@@ -149,6 +155,7 @@ jobs:
             # Per-company retroactive entity purge — needs the DeepSeek key
             # for adjudication (fail-KEEP on errors; aborts on rate limit).
             ARGS=("$OP_SLUG")
+            if [ "$OP_NO_FORCE_ADJUDICATE" = "true" ]; then ARGS+=(--no-force-adjudicate); fi
             if [ "$OP_COMMAND" = "purge-wrong-entity-articles-apply" ]; then ARGS+=(--apply); fi
             uv run nous purge-wrong-entity-articles "${ARGS[@]}" \
               | { echo '```json'; cat; echo '```'; } | tee "$GITHUB_STEP_SUMMARY"

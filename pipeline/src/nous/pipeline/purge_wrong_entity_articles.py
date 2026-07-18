@@ -91,6 +91,7 @@ async def run_purge_wrong_entity_articles(
     session: AsyncSession,
     *,
     slug: str,
+    force_adjudicate: bool = True,
     dry_run: bool = True,
 ) -> PurgeWrongEntitySummary:
     """Adjudicate every stored article of ``slug``; purge the wrong-entity
@@ -120,7 +121,10 @@ async def run_purge_wrong_entity_articles(
     for article in articles:
         summary.articles_checked += 1
         decision = await check_article_entity(
-            company, title=article.title, text=article.raw_content or ""
+            company,
+            title=article.title,
+            text=article.raw_content or "",
+            force_adjudicate=force_adjudicate,
         )
         if decision.rate_limited:
             raise PurgeWrongEntityError(
