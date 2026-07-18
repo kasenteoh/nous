@@ -2035,3 +2035,38 @@ Owner: "let's do it" (the QA P0s). Both adversarially reviewed (APPROVE).
   slug sort, blind-spot test renamed + asserting; private sources.news
   imports kept deliberately per repair_misattributed_news precedent).
   Suite 1838 green.
+
+## PRs #233/#234 — entity-probe calibration (2 rounds vs live prod data)
+
+- The probe's power came from ITERATING against prod: dispatch → triage the
+  itemized suspect list → fix the false-positive class → re-dispatch.
+  Suspects: 706 → 247 → **213** of 1112 checked (143 no-text), and the
+  final list is credible top-to-bottom.
+- #233 (round 1+2): headline-concatenation glue (join with '. ', never a
+  bare space — "MSN Anthropic" was two headlines touching), the GN
+  "Title - Outlet" dash as an adjacency boundary, stylized-lowercase names
+  (xAI) via _is_proper, own_tokens threading (the head-token variant must
+  not read "Yuga Labs" as another entity), the extension walk that skips
+  OUTWARD past own tokens ("Samba" sees through "Probe" to catch "Samba
+  Probe Dynamics"), possessive + Title-Case-descriptor neutral preceders.
+- #234 (round 3): own-FORMAL-name corroboration — an extended phrase whose
+  squash is a contiguous substring of description+website+slug is the
+  company itself (impulsespace.com owns "Impulse Space"); review caught a
+  word-level shadow check that would have cleared "Amber Group"/"Drip
+  Capital"/"Wave Money" off incidental description words — killed, only
+  the phrase-squash survives. Attributive prefixes (-backed/-based/-led),
+  financial-noun followers, lowercase-only gated on context overlap < 2
+  (n8n/claroty are proper usage; "bespoke supplements" still condemns).
+- **What the probe FOUND on prod (run 3, amount-sorted):** built←"Built
+  In" $30B (Anthropic's round, attributed via the OUTLET name),
+  blue←Blue Origin $10B, prometheus $6.2B = "Project Prometheus" (same-
+  entity dedup case, not wrong-entity), magic←Magic Leap $500M + Magic
+  Eden $130M + Magic Spoon $85M (three different wrong entities on one
+  slug), odyssey/maze/amber/fathom/aardvark←*Therapeutics*, drip←Drip
+  Capital ×3, bright←Bright Machines ×2 + Bright Money, adaptive←Adaptive
+  Security ×2, clipboard←Clipboard Health, pomelo←Pomelo Care,
+  bunkerhill←"Bunkerhill Health (9x)" (the BACKLOG dedup-miss pair,
+  independently rediscovered), genius←Cover Genius, lilac←Lilac
+  Solutions… 213 suspects total; the report is the retroactive-audit
+  candidate set. corroborated_weak = 613 (no signal, no positive
+  evidence) sizes the LLM adjudication surface.
