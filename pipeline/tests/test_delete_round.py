@@ -378,6 +378,83 @@ async def test_clear_status_flag_covers_out_of_purge_set_source(
     assert summary2.status_reset is False
 
 
+async def test_both_clear_flags_together_and_preview_shows_doomed_values(
+    db: AsyncSession,
+) -> None:
+    """Both flags on one dispatch: total + status cleared, both ✓ kinds die,
+    and the dry-run preview names the values being destroyed (the operator
+    must see WHAT a forced clear kills, not just that it will)."""
+    total_src = "https://gn.example.com/other-syndication"
+    status_src = "https://gn.example.com/shutdown-story"
+    co = _co(
+        "both-flags-co",
+        total_raised_usd=Decimal("1200000000"),
+        total_raised_source_url=total_src,
+        status="shut_down",
+        status_source_url=status_src,
+    )
+    db.add(co)
+    await db.flush()
+    wrong = FundingRound(
+        company_id=co.id,
+        amount_raised=Decimal("66000000"),
+        primary_news_url=_WRONG_URL,
+    )
+    db.add(wrong)
+    await db.flush()
+    for kind, src in (("total_raised", total_src), ("status", status_src)):
+        db.add(
+            FactVerification(
+                company_id=co.id,
+                fact_kind=kind,
+                fact_ref="",
+                source_url=src,
+                claim=f"claim about {kind}",
+                verdict="supported",
+                supporting_quote="quote",
+                prompt_version="2026-07-17.1",
+            )
+        )
+    await db.commit()
+
+    preview = await run_delete_round(
+        db,
+        slug=co.slug,
+        amount=Decimal("66000000"),
+        clear_total=True,
+        clear_status=True,
+    )
+    assert preview.total_raised_cleared and preview.status_reset
+    assert preview.total_raised_was == "$1,200,000,000"
+    assert preview.total_raised_source_was == total_src
+    assert preview.status_was == "shut_down"
+    assert preview.status_source_was == status_src
+    assert preview.verifications_deleted == 2
+
+    summary = await run_delete_round(
+        db,
+        slug=co.slug,
+        amount=Decimal("66000000"),
+        clear_total=True,
+        clear_status=True,
+        dry_run=False,
+    )
+    assert summary.verifications_deleted == 2
+    await db.refresh(co)
+    assert co.total_raised_usd is None
+    assert co.status == "active"
+    verifs = (
+        (
+            await db.execute(
+                select(FactVerification).where(FactVerification.company_id == co.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert verifs == []
+
+
 async def test_status_verification_deleted_on_url_matched_reset(
     db: AsyncSession,
 ) -> None:

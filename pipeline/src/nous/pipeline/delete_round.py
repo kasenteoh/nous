@@ -73,7 +73,13 @@ class DeleteRoundSummary(BaseModel):
     articles_deleted: int = 0
     article_titles: list[str] = Field(default_factory=list)
     total_raised_cleared: bool = False
+    # What a clear/reset destroys, so the dry-run preview is self-contained
+    # (an operator forcing --clear-total must see the value + source dying).
+    total_raised_was: str | None = None
+    total_raised_source_was: str | None = None
     status_reset: bool = False
+    status_was: str | None = None
+    status_source_was: str | None = None
     verifications_deleted: int = 0
     dry_run: bool = True
 
@@ -180,11 +186,16 @@ async def run_delete_round(
         company.total_raised_source_url and company.total_raised_source_url in purged_urls
     ) or (clear_total and company.total_raised_usd is not None):
         summary.total_raised_cleared = True
+        if company.total_raised_usd is not None:
+            summary.total_raised_was = f"${company.total_raised_usd:,.0f}"
+        summary.total_raised_source_was = company.total_raised_source_url
     if company.status not in (None, "active") and (
         clear_status
         or (company.status_source_url and company.status_source_url in purged_urls)
     ):
         summary.status_reset = True
+        summary.status_was = company.status
+        summary.status_source_was = company.status_source_url
 
     verif_where = [
         FactVerification.company_id == company.id,
