@@ -2190,3 +2190,37 @@ Owner: "let's do it" (the QA P0s). Both adversarially reviewed (APPROVE).
 - Verify after ISR (~6h): /c/blue-origin timeline should show the "$2B
   own money" syndications as ONE collapsed story; kalshi/baseten/crusoe
   timelines collapse similarly.
+
+## PR #240 — feat(pipeline): dedup signal widening (P0 complete)
+
+- All four items of the "dedup signal gaps" P0 in one PR:
+  (1) normalized_round_type strips CONTINUATION suffixes ("Series E
+  extension", "second close", "top-up") — uala's $66M double-count now
+  collapses in the exact-amount pass; shared single source, so reconcile
+  + repair + census all inherit. Standalone "Extension" → None (no
+  identity of its own).
+  (2) Pass 2b widened band: 15%<gap<=25% merges ONLY with >=2 shared
+  linked investor ids (prometheus's $12B-vs-$10B, 16.7%, same trio).
+  Review round: tolerance was 0.5, tightened to 0.25 (rejects
+  tranche-then-priced ~30% gaps — wrong merge worse than duplicate);
+  the anchor's investor set grows to a FIX-POINT during collection so
+  chained evidence merges in ONE run regardless of iteration order
+  (order-robust chain test; reviewer traced the transitive-evidence
+  attack and confirmed absorbed evidence is genuine, amounts always
+  checked against the ANCHOR's original figure).
+  (3) New pass 2d: equal-valuation cross-amount collapse (sambanova's
+  garbled $100M + real $1B both at $11B post) — merges across any
+  amount gap under type/date guards; real flat rounds months apart are
+  date-rejected; both-undated never merges (pinned).
+  (4) bunkerhill/bunkerhill-health root-caused via prod inspect: BOTH
+  websites NULL → domain pass can't fire; the trigram pair (0.59) IS
+  nominated weekly but the LLM gate kept declining thin husk profiles —
+  the shared fresh $55M round was INVISIBLE to the adjudicator.
+  _CompanyRow now carries the latest_round_* denorms and company_match
+  renders a "Latest funding:" line + same-round weighing rule; the
+  same_company && high gate is unchanged (evidence widened, threshold
+  not).
+- Effects land on the next 3h cron (round repair) and the next weekly
+  discovery cron (company dedup). Watch: repair summary's
+  equal_valuation_rows_merged + widened 2b merges; bunkerhill pair
+  should finally merge on the weekly run. Suite 1880 green.

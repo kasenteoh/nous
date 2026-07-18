@@ -78,14 +78,14 @@ the whole company). Recurrence-proofing is part of the bar.
   probe suspect (213 list, run 29642507263; built/blue/magic first),
   review verdicts, apply. prometheus $6.2B routes to dedup widening.
 
-### P0 — dedup signal gaps the sweep proved [M]
-prometheus $10B/$12B: 16% gap dodges ±15%, but same valuation + same
-investor trio → widen the merge signal to valuation/investor overlap.
-sambanova $100M-vs-$1B: same $11B post-money on both → same signal. uala
-$66M "Series E" + "Series E extension": type-string variants defeat the
-type-compatibility rule → normalize "extension"/"second close" suffixes.
-bunkerhill + bunkerhill-health both carry the same fresh $55M round
-(company-level dup the domain dedup missed — investigate why).
+### ~~P0 — dedup signal gaps the sweep proved~~ — SHIPPED (#240)
+All four: continuation-suffix normalization (uala), investor-evidenced
+widened near-amount band 15–25% (prometheus), equal-valuation
+cross-amount pass (sambanova), and the bunkerhill root cause (both
+websites NULL; the LLM gate never saw the shared $55M round — the
+company-match prompt now carries latest-funding evidence). Verify: the
+next 3h cron's repair counters + the weekly dedup merging the
+bunkerhill pair.
 
 ### P1 — contained wrongness + web silent mismatches
 - harbor: ~50 keyword-garbage news rows — "harbor" absent from the curated
