@@ -31,6 +31,8 @@ on:
           - delete-round-apply
           - clear-company-facts-dry-run
           - clear-company-facts-apply
+          - purge-wrong-entity-articles-dry-run
+          - purge-wrong-entity-articles-apply
           - audit-round-entities
       slug:
         description: "Company slug to operate on (required for company-scoped commands; ignored by repair-misattributed-news-*)."
@@ -99,6 +101,9 @@ jobs:
       # reresolve-company builds a HomepageClient, which requires a contact-email
       # User-Agent (empty → ValueError). Harmless for the DB-only commands.
       SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}
+      # purge-wrong-entity-articles adjudicates via DeepSeek. Harmless for the
+      # DB-only commands.
+      DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
     steps:
       - uses: actions/checkout@v4
 
@@ -131,7 +136,7 @@ jobs:
         run: |
           set -o pipefail
           case "$OP_COMMAND" in
-            exclude-company|unexclude-company|inspect-company|reresolve-company|delete-round-*|clear-company-facts-*)
+            exclude-company|unexclude-company|inspect-company|reresolve-company|delete-round-*|clear-company-facts-*|purge-wrong-entity-articles-*)
               if [ -z "$OP_SLUG" ]; then
                 echo "::error::'$OP_COMMAND' requires the slug input"; exit 1
               fi ;;
@@ -140,7 +145,14 @@ jobs:
              && [ -z "$OP_AMOUNT" ] && [ -z "$OP_ROUND_ID" ]; then
             echo "::error::delete-round requires amount or round_id"; exit 1
           fi
-          if [ "${OP_COMMAND#clear-company-facts}" != "$OP_COMMAND" ]; then
+          if [ "${OP_COMMAND#purge-wrong-entity-articles}" != "$OP_COMMAND" ]; then
+            # Per-company retroactive entity purge — needs the DeepSeek key
+            # for adjudication (fail-KEEP on errors; aborts on rate limit).
+            ARGS=("$OP_SLUG")
+            if [ "$OP_COMMAND" = "purge-wrong-entity-articles-apply" ]; then ARGS+=(--apply); fi
+            uv run nous purge-wrong-entity-articles "${ARGS[@]}" \
+              | { echo '```json'; cat; echo '```'; } | tee "$GITHUB_STEP_SUMMARY"
+          elif [ "${OP_COMMAND#clear-company-facts}" != "$OP_COMMAND" ]; then
             if [ "$OP_CLEAR_TOTAL" != "true" ] && [ "$OP_CLEAR_STATUS" != "true" ]; then
               echo "::error::clear-company-facts requires clear_total and/or clear_status"; exit 1
             fi
