@@ -38,7 +38,8 @@ reporting what *would* be merged.
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import date, datetime
+from decimal import Decimal
 from uuid import UUID
 
 from pydantic import BaseModel
@@ -84,9 +85,27 @@ class _CompanyRow(BaseModel):
     hq_state: str | None
     description_short: str | None
     description_long: str | None
+    latest_round_amount: Decimal | None
+    latest_round_date: date | None
+    latest_round_type: str | None
     created_at: datetime
 
     def to_prompt_dict(self) -> dict[str, object]:
+        # The latest-round denorms are the strongest same-company evidence
+        # for website-less husks (bunkerhill + bunkerhill-health both carried
+        # one fresh $55M round, but the adjudicator couldn't see it and kept
+        # declining the merge — 2026-07-17 QA). Rendered as one line; absent
+        # facts are omitted, never guessed.
+        funding = None
+        if self.latest_round_amount is not None or self.latest_round_date is not None:
+            parts = []
+            if self.latest_round_type:
+                parts.append(self.latest_round_type)
+            if self.latest_round_amount is not None:
+                parts.append(f"${self.latest_round_amount:,.0f}")
+            if self.latest_round_date is not None:
+                parts.append(f"announced {self.latest_round_date.isoformat()}")
+            funding = " ".join(parts)
         return {
             "name": self.name,
             "website": self.website,
@@ -94,6 +113,7 @@ class _CompanyRow(BaseModel):
             "description": self.description_long or self.description_short,
             "hq_city": self.hq_city,
             "hq_state": self.hq_state,
+            "latest_funding": funding,
         }
 
 
@@ -126,6 +146,9 @@ async def _load_companies(session: AsyncSession) -> list[_CompanyRow]:
         Company.hq_state,
         Company.description_short,
         Company.description_long,
+        Company.latest_round_amount,
+        Company.latest_round_date,
+        Company.latest_round_type,
         Company.created_at,
     )
     result = await session.execute(stmt)
@@ -139,6 +162,9 @@ async def _load_companies(session: AsyncSession) -> list[_CompanyRow]:
             hq_state=r.hq_state,
             description_short=r.description_short,
             description_long=r.description_long,
+            latest_round_amount=r.latest_round_amount,
+            latest_round_date=r.latest_round_date,
+            latest_round_type=r.latest_round_type,
             created_at=r.created_at,
         )
         for r in result

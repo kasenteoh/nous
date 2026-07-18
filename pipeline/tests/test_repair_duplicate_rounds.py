@@ -1417,3 +1417,300 @@ async def test_type_conflict_pub_date_window_boundary(db: AsyncSession) -> None:
         r.round_type for r in await _rounds_for(db, co.id)
     )
     assert types == ["Series D", "Series F"]
+
+
+async def test_widened_band_needs_shared_investors_prometheus(
+    db: AsyncSession,
+) -> None:
+    """$12B vs $10B (16.7% — outside ±15%) merges ONLY because the two rows
+    share >= 2 linked investors (the prometheus backer trio); an identical
+    pair WITHOUT the shared links survives untouched."""
+    co = _co("Prometheus Test", "prometheus-test")
+    bezos = Investor(name="Bezos", name_normalized="bezos", slug="bezos-t")
+    jpm = Investor(name="JPMorgan", name_normalized="jpmorgan", slug="jpm-t")
+    db.add_all([co, bezos, jpm])
+    await db.flush()
+
+    real = FundingRound(
+        company_id=co.id,
+        round_type="Series B",
+        amount_raised=12_000_000_000,
+        announced_date=date(2026, 6, 11),
+        primary_news_url="https://siliconangle.com/prometheus-12b",
+        extraction_confidence="high",
+    )
+    variant = FundingRound(
+        company_id=co.id,
+        round_type="Series B",
+        amount_raised=10_000_000_000,
+        announced_date=date(2026, 6, 12),
+        primary_news_url="https://news.google.com/rss/articles/prometheus-10b",
+        extraction_confidence="medium",
+    )
+    db.add_all([real, variant])
+    await db.flush()
+    for r in (real, variant):
+        for inv in (bezos, jpm):
+            db.add(
+                FundingRoundInvestor(
+                    funding_round_id=r.id, investor_id=inv.id, is_lead=True
+                )
+            )
+    await db.commit()
+
+    summary = await run_repair_duplicate_rounds(db, dry_run=False)
+    assert summary.near_amount_rows_merged == 1
+    rounds = await _rounds_for(db, co.id)
+    assert len(rounds) == 1
+    assert rounds[0].amount_raised == 12_000_000_000  # anchor keeps its figure
+
+
+async def test_widened_band_without_shared_investors_preserved(
+    db: AsyncSession,
+) -> None:
+    """The same 16.7% gap with NO shared investor links: two real rounds a
+    fortnight apart must survive — the widened band is evidence-gated."""
+    co = _co("Widegap Test", "widegap-test")
+    db.add(co)
+    await db.flush()
+    db.add_all(
+        [
+            FundingRound(
+                company_id=co.id,
+                round_type="Series B",
+                amount_raised=12_000_000_000,
+                announced_date=date(2026, 6, 11),
+            ),
+            FundingRound(
+                company_id=co.id,
+                round_type="Series B",
+                amount_raised=10_000_000_000,
+                announced_date=date(2026, 6, 12),
+            ),
+        ]
+    )
+    await db.commit()
+    summary = await run_repair_duplicate_rounds(db, dry_run=False)
+    assert summary.near_amount_rows_merged == 0
+    assert len(await _rounds_for(db, co.id)) == 2
+
+
+async def test_equal_valuation_cross_amount_merge_sambanova(
+    db: AsyncSession,
+) -> None:
+    """A garbled $100M row and the real $1B Series F both carrying $11B
+    post-money collapse to the Series F — a gap no amount tolerance bridges,
+    decided by the shared exact valuation."""
+    co = _co("Samba Valuation Test", "samba-valuation-test")
+    db.add(co)
+    await db.flush()
+    real = FundingRound(
+        company_id=co.id,
+        round_type="Series F",
+        amount_raised=1_000_000_000,
+        valuation_post_money=11_000_000_000,
+        announced_date=date(2026, 7, 8),
+        primary_news_url="https://siliconangle.com/sambanova-1b",
+        extraction_confidence="high",
+    )
+    garble = FundingRound(
+        company_id=co.id,
+        round_type=None,
+        amount_raised=100_000_000,
+        valuation_post_money=11_000_000_000,
+        announced_date=None,
+        primary_news_url="https://news.google.com/rss/articles/kucoin-garble",
+        extraction_confidence="low",
+    )
+    db.add_all([real, garble])
+    await db.commit()
+
+    summary = await run_repair_duplicate_rounds(db, dry_run=False)
+    assert summary.equal_valuation_rows_merged == 1
+    rounds = await _rounds_for(db, co.id)
+    assert len(rounds) == 1
+    assert rounds[0].round_type == "Series F"
+    assert rounds[0].amount_raised == 1_000_000_000
+
+
+async def test_equal_valuation_far_dates_preserved(db: AsyncSession) -> None:
+    """A REAL flat round: same post-money on two rounds months apart must
+    survive — the date window is the guard."""
+    co = _co("Flatround Test", "flatround-test")
+    db.add(co)
+    await db.flush()
+    db.add_all(
+        [
+            FundingRound(
+                company_id=co.id,
+                round_type="Series C",
+                amount_raised=200_000_000,
+                valuation_post_money=5_000_000_000,
+                announced_date=date(2026, 1, 10),
+            ),
+            FundingRound(
+                company_id=co.id,
+                round_type=None,
+                amount_raised=50_000_000,
+                valuation_post_money=5_000_000_000,
+                announced_date=date(2026, 7, 1),
+            ),
+        ]
+    )
+    await db.commit()
+    summary = await run_repair_duplicate_rounds(db, dry_run=False)
+    assert summary.equal_valuation_rows_merged == 0
+    assert len(await _rounds_for(db, co.id)) == 2
+
+
+async def test_extension_suffix_merges_uala(db: AsyncSession) -> None:
+    """"Series E" + "Series E extension", same $66M: the continuation suffix
+    is stripped for identity, so the exact-amount pass collapses them (uala's
+    double-count). A different-amount extension survives as its own row."""
+    co = _co("Uala Test", "uala-test")
+    db.add(co)
+    await db.flush()
+    db.add_all(
+        [
+            FundingRound(
+                company_id=co.id,
+                round_type="Series E",
+                amount_raised=66_000_000,
+                announced_date=date(2026, 5, 2),
+                extraction_confidence="high",
+            ),
+            FundingRound(
+                company_id=co.id,
+                round_type="Series E extension",
+                amount_raised=66_000_000,
+                announced_date=date(2026, 5, 3),
+            ),
+        ]
+    )
+    await db.commit()
+    summary = await run_repair_duplicate_rounds(db, dry_run=False)
+    assert summary.duplicate_rows_merged == 1
+    rounds = await _rounds_for(db, co.id)
+    assert len(rounds) == 1
+
+    # A genuinely separate second close with a DIFFERENT amount outside the
+    # near band survives.
+    co2 = _co("Uala Two Test", "uala-two-test")
+    db.add(co2)
+    await db.flush()
+    db.add_all(
+        [
+            FundingRound(
+                company_id=co2.id,
+                round_type="Series E",
+                amount_raised=66_000_000,
+                announced_date=date(2026, 5, 2),
+            ),
+            FundingRound(
+                company_id=co2.id,
+                round_type="Series E second close",
+                amount_raised=20_000_000,
+                announced_date=date(2026, 6, 20),
+            ),
+        ]
+    )
+    await db.commit()
+    await run_repair_duplicate_rounds(db, dry_run=False)
+    assert len(await _rounds_for(db, co2.id)) == 2
+
+
+def test_normalized_type_strips_continuation_suffixes() -> None:
+    from nous.db.upsert import normalized_round_type
+
+    assert normalized_round_type("Series E extension") == "series e"
+    assert normalized_round_type("Series B second close") == "series b"
+    assert normalized_round_type("Seed top-up") == "seed"
+    assert normalized_round_type("Series A (extension)") == "series a"
+    assert normalized_round_type("Extension") is None  # no base identity left
+    # Words merely CONTAINING a suffix are untouched.
+    assert normalized_round_type("Seed round extension fund") == (
+        "seed round extension fund"
+    )
+    assert normalized_round_type("Series C") == "series c"
+
+
+async def test_equal_valuation_both_undated_preserved(db: AsyncSession) -> None:
+    """Pass 2d's both-undated guard: equal post-money on two undated rows is
+    NOT enough — without a date anchoring the event, never merge."""
+    co = _co("Undated Valuation Test", "undated-valuation-test")
+    db.add(co)
+    await db.flush()
+    db.add_all(
+        [
+            FundingRound(
+                company_id=co.id,
+                round_type="Series C",
+                amount_raised=200_000_000,
+                valuation_post_money=5_000_000_000,
+                announced_date=None,
+            ),
+            FundingRound(
+                company_id=co.id,
+                round_type=None,
+                amount_raised=120_000_000,
+                valuation_post_money=5_000_000_000,
+                announced_date=None,
+            ),
+        ]
+    )
+    await db.commit()
+    summary = await run_repair_duplicate_rounds(db, dry_run=False)
+    assert summary.equal_valuation_rows_merged == 0
+    assert len(await _rounds_for(db, co.id)) == 2
+
+
+async def test_widened_band_investor_sets_follow_merges(db: AsyncSession) -> None:
+    """#240 review: the in-memory investor snapshot must absorb merged
+    losers' links, so a chain (A absorbs B, then A+B's union reaches C) needs
+    ONE run, not two. A($12B,{X,Y}) + B($10B,{Y,Z}) + C($9.5B,{X,Z}): A-B
+    share {Y}=1 — no merge; wait, use denser sets so A-B merge first, then
+    A's absorbed set shares 2 with C."""
+    co = _co("Chain Test", "chain-test")
+    x = Investor(name="X", name_normalized="x", slug="x-chain")
+    y = Investor(name="Y", name_normalized="y", slug="y-chain")
+    z = Investor(name="Z", name_normalized="z", slug="z-chain")
+    db.add_all([co, x, y, z])
+    await db.flush()
+
+    a = FundingRound(
+        company_id=co.id,
+        round_type="Series B",
+        amount_raised=12_000_000_000,
+        announced_date=date(2026, 6, 11),
+        extraction_confidence="high",
+    )
+    b = FundingRound(
+        company_id=co.id,
+        round_type="Series B",
+        amount_raised=10_000_000_000,
+        announced_date=date(2026, 6, 12),
+    )
+    c = FundingRound(
+        company_id=co.id,
+        round_type="Series B",
+        amount_raised=9_500_000_000,
+        announced_date=date(2026, 6, 12),
+    )
+    db.add_all([a, b, c])
+    await db.flush()
+    links = [
+        (a, x), (a, y),          # A: {X, Y}
+        (b, x), (b, y), (b, z),  # B: {X, Y, Z} — merges into A, A absorbs Z
+        (c, y), (c, z),          # C: {Y, Z} — shares 2 with the ABSORBED set
+    ]
+    for r, inv in links:
+        db.add(
+            FundingRoundInvestor(funding_round_id=r.id, investor_id=inv.id)
+        )
+    await db.commit()
+
+    summary = await run_repair_duplicate_rounds(db, dry_run=False)
+    # C's gap vs A is 20.8% (widened band) and it shares {Y,Z} with A's
+    # post-merge set — one run collapses all three.
+    assert summary.near_amount_rows_merged == 2
+    assert len(await _rounds_for(db, co.id)) == 1
