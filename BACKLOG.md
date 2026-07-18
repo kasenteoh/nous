@@ -98,9 +98,10 @@ bunkerhill + bunkerhill-health both carry the same fresh $55M round
 - Investor identity splits: Nvidia vs "Nvidia Corp.", Bezos vs "Jeff
   Bezos", JPMorgan vs "JPMorgan Chase & Co.", QIA spelled out — round rows
   list backers twice; extend dedup-investors canonicalization. [M]
-- Timeline standalone-news firehose: "Covered by +N" collapses only
-  round-ATTACHED articles; kalshi ×35 / baseten ×27 / crusoe ×18 rows of
-  one story. Attach-or-collapse standalone funding coverage. [M]
+- ~~Timeline standalone-news firehose~~ — SHIPPED (#239): standalone
+  articles cluster into stories (title-similarity + 7d window + money-
+  mention veto) and reuse the round-coverage collapsed disclosure.
+  Verify kalshi/baseten/crusoe/blue-origin timelines after ISR.
 - /companies export vs page count under q=: page total includes semantic
   matches, /api/export is lexical-only (30 shown → 1 exported). Export the
   same blend or label the export. [S]

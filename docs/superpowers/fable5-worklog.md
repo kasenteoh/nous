@@ -2162,3 +2162,31 @@ Owner: "let's do it" (the QA P0s). Both adversarially reviewed (APPROVE).
   conclusion held.
 - The lever is the per-company unit of the retroactive audit: the probe's
   213-suspect list is the dispatch queue (built/blue/magic first).
+
+## PR #239 — feat(web): timeline collapses syndicated standalone stories
+
+- The P1 "Timeline standalone-news firehose" (kalshi ×35 / baseten ×27 /
+  crusoe ×18 / blue-origin's "Bezos put $2B in" ×4): #194's clustering
+  groups articles under ROUNDS, but standalone articles (no round in
+  window, undated rounds, rumor-era coverage) rendered one row each.
+- Read-time only. buildTimeline now clusters standalone articles into
+  STORIES: within 7 days of the cluster lead AND normalized-title overlap
+  ≥0.6 with ≥3 shared tokens. Normalization strips the trailing
+  "- Outlet" segment (clause-aware: "- and it is just the start"
+  survives), folds money spellings ($-anchored short suffixes only —
+  "5m users" is a metric, not money) and announce-verbs, drops
+  possessives/stopwords. DISJOINT money mentions veto a merge ("seeks
+  $10B" vs "put $2B in" share entity words but are different events —
+  caught during test calibration). Undated articles never merge. Story
+  rows reuse the round-coverage "Covered by X, Y +N more" disclosure —
+  every article one click away, never dropped (trust invariant traced by
+  the reviewer across all paths).
+- Review: COMMENT, 2 MED + 3 LOW — both MEDs applied ($-anchor on short
+  money suffixes; clause-aware outlet strip) + direct titleTokens edge
+  tests; lead-in-disclosure kept deliberately (consistent with rounds).
+  Known documented tradeoffs: valuation-led vs amount-led headlines of
+  one event stay split (money veto errs to not-merging); greedy
+  lead-based chaining. Web suite 435 green.
+- Verify after ISR (~6h): /c/blue-origin timeline should show the "$2B
+  own money" syndications as ONE collapsed story; kalshi/baseten/crusoe
+  timelines collapse similarly.
