@@ -2336,6 +2336,46 @@ def repair_misattributed_news(apply_: bool) -> None:
     asyncio.run(_run())
 
 
+@cli.command("audit-round-entities")
+@click.option(
+    "--min-amount",
+    type=str,
+    default=None,
+    help="Only audit rounds with amount_raised >= this (whole USD).",
+)
+def audit_round_entities_cmd(min_amount: str | None) -> None:
+    """$0 read-only probe: which stored rounds fail entity corroboration?
+
+    For every shown company's round, checks whether the round's own coverage
+    text corroborates THIS company as its subject (proper-noun usage,
+    extended-entity phrases like "Primary Wave", description-context
+    overlap). Prints a JSON report: counts + the suspect list sorted by
+    amount. Writes nothing — the measure-first stage of the entity-aware
+    ingestion arc.
+    """
+    import asyncio
+    from decimal import Decimal
+
+    from nous.db.session import AsyncSessionLocal
+    from nous.pipeline.audit_round_entities import run_audit_round_entities
+
+    try:
+        parsed_min = Decimal(min_amount) if min_amount else None
+    except Exception:
+        raise click.ClickException(
+            f"--min-amount must be a whole-USD number, got {min_amount!r}"
+        ) from None
+
+    async def _run() -> None:
+        async with AsyncSessionLocal() as session:
+            summary = await run_audit_round_entities(
+                session, min_amount=parsed_min
+            )
+            click.echo(summary.model_dump_json(indent=2))
+
+    asyncio.run(_run())
+
+
 @cli.command("repair-wrong-websites")
 @click.option(
     "--dry-run",
