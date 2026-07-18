@@ -200,13 +200,22 @@ export interface TitleSignature {
 }
 
 export function titleTokens(title: string): TitleSignature {
-  const withoutOutlet = title.replace(/\s+[-–—|]\s+[^-–—|]{1,40}$/, "");
+  // Strip the trailing "- Outlet" segment — but not a dash-CLAUSE that is
+  // real title content ("… - and it's just the start"): a segment starting
+  // with a clause word survives (review catch).
+  const withoutOutlet = title.replace(
+    /\s+[-–—|]\s+(?!(?:and|but|as|a|an|the|it|its|here|what|why|how|not)\b)[^-–—|]{1,40}$/i,
+    "",
+  );
   const folded = withoutOutlet
     .toLowerCase()
     .replace(/[’']s\b/g, "")
-    // "$10bn" / "10bn" / "$10b" → "10 billion"; same for millions.
-    .replace(/\$?(\d+(?:\.\d+)?)\s*(?:bn|b|billion)\b/g, "$1 billion")
-    .replace(/\$?(\d+(?:\.\d+)?)\s*(?:mn|m|million)\b/g, "$1 million")
+    // "$10bn" / "$10b" → "10 billion"; bare short suffixes ("10b", "5m
+    // users") need the $ anchor or they false-fold (review catch). The
+    // spelled-out words fold bare: "10 billion".
+    .replace(/\$(\d+(?:\.\d+)?)\s*(?:bn|b|billion)\b/g, "$1 billion")
+    .replace(/\$(\d+(?:\.\d+)?)\s*(?:mn|m|million)\b/g, "$1 million")
+    .replace(/(\d+(?:\.\d+)?)\s+(billion|million)\b/g, "$1 $2")
     .replace(/\$(\d)/g, "$1");
   const tokens = new Set<string>();
   for (const raw of folded.split(/[^a-z0-9.]+/)) {

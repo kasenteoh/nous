@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildTimeline, MATCH_WINDOW_DAYS } from "@/lib/timeline";
+import { buildTimeline, MATCH_WINDOW_DAYS, titleTokens } from "@/lib/timeline";
 import type { FundingRoundWithInvestors, NewsArticleRow } from "@/lib/types";
 
 let seq = 0;
@@ -481,5 +481,30 @@ describe("standalone story clustering (the kalshi/blue-origin firehose)", () => 
     if (funding?.kind === "funding") {
       expect(funding.coverage.map((c) => c.url)).toContain(attached.url);
     }
+  });
+});
+
+describe("titleTokens normalization edges", () => {
+  it("strips outlet suffixes but keeps dash-clauses that are content", () => {
+    const outlet = titleTokens("Acme raises $50M Series B - TechCrunch");
+    expect(outlet.tokens.has("techcrunch")).toBe(false);
+    const clause = titleTokens("Acme raises $50M - and it is just the start");
+    expect(clause.tokens.has("start")).toBe(true);
+  });
+
+  it("folds $-anchored short money suffixes but not bare Nb/Nm", () => {
+    const dollar = titleTokens("Acme raises $10B at $2.5b valuation");
+    expect(dollar.money).toEqual(new Set(["10 billion", "2.5 billion"]));
+    const spelled = titleTokens("Acme raises 10 billion dollars");
+    expect(spelled.money).toEqual(new Set(["10 billion"]));
+    // "5m users" is a metric, not money — must not enter the money set.
+    const users = titleTokens("Acme hits 5m users after funding");
+    expect(users.money.size).toBe(0);
+  });
+
+  it("drops possessives and outlet-cased duplicates evenly", () => {
+    const a = titleTokens("Blue Origin's Funding Round Grows - MSN");
+    const b = titleTokens("Blue Origin Funding Round Grows - Yahoo Finance");
+    expect(a.tokens).toEqual(b.tokens);
   });
 });
