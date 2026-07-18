@@ -69,6 +69,13 @@ class AuditRoundEntitiesSummary(BaseModel):
     rounds_total: int = 0
     rounds_checked: int = 0
     corroborated: int = 0
+    # Split of `corroborated` that sizes the future ingest guard's LLM load:
+    # strong = a bare proper-noun mention AND description-context overlap
+    # (attach without adjudication); weak = no signal fired but no positive
+    # evidence either — the food-Wonder blind spot lives here, and these are
+    # exactly the attachments the guard would send to LLM adjudication.
+    corroborated_strong: int = 0
+    corroborated_weak: int = 0
     suspect: int = 0
     unknown_no_text: int = 0
     body_texts: int = 0
@@ -270,6 +277,11 @@ async def run_audit_round_entities(
             )
         else:
             summary.corroborated += 1
+            bare = result.proper_occurrences - result.extended_occurrences
+            if bare >= 1 and result.context_overlap >= 1:
+                summary.corroborated_strong += 1
+            else:
+                summary.corroborated_weak += 1
 
     # Secondary slug key: equal-amount (incl. null-amount) suspects keep a
     # stable order across runs regardless of DB iteration order.

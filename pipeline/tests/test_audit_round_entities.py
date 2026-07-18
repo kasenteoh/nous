@@ -123,6 +123,9 @@ async def test_probe_routes_verdicts_and_reports(db: AsyncSession) -> None:
     assert summary.rounds_checked == 3
     assert summary.unknown_no_text == 1
     assert summary.corroborated == 1
+    # The correct samba article shares description vocabulary → strong.
+    assert summary.corroborated_strong == 1
+    assert summary.corroborated_weak == 0
     assert summary.suspect == 2
     assert summary.body_texts == 2
     assert summary.headline_texts == 1
