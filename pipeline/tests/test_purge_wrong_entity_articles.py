@@ -246,20 +246,90 @@ async def test_llm_error_keeps_article(
 
     monkeypatch.setattr("nous.pipeline.entity_guard.complete_json", _flaky)
     summary = await run_purge_wrong_entity_articles(db, slug=co.slug, dry_run=False)
-    # The food-hall article errored -> kept; the other food article ("celebrity
-    # chefs" body, no "food hall") adjudicated normally... its body says
-    # "food halls" — both food articles contain "food hall", so both error and
-    # are kept. Only assertions on the error-keep semantics matter here.
-    assert summary.articles_llm_error_kept >= 1
-    assert summary.articles_llm_error_kept == summary.articles_checked - (
-        summary.articles_purged + (summary.articles_kept - summary.articles_llm_error_kept)
-    )
+    # Both food articles' prompts contain "food hall" -> both error -> KEPT;
+    # the tutoring article adjudicates as a genuine match. Nothing purges.
+    assert summary.articles_llm_error_kept == 2
+    assert summary.articles_purged == 0
+    assert summary.rounds_purged == 0
     arts = (
         (await db.execute(select(NewsArticle).where(NewsArticle.company_id == co.id)))
         .scalars()
         .all()
     )
-    assert len(arts) == 3 - summary.articles_purged
+    assert len(arts) == 3  # every article survives an errored run
+
+
+async def test_kept_articles_round_survives_shared_primary_url(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Review catch: a round whose primary_news_url is a DOOMED article's URL
+    but which a KEPT article still links to is spared — and its primary URL
+    is repointed to the survivor on apply. The kept article's URL must also
+    never join the poison set for total/status clearing."""
+    shared = "https://shared.example.com/wrong-copy"
+    kept_url = "https://edsurge.example.com/right-copy"
+    co = _co(
+        "shared-purge-test",
+        total_raised_usd=Decimal("30000000"),
+        total_raised_source_url=kept_url,
+    )
+    db.add(co)
+    await db.flush()
+    r = FundingRound(
+        company_id=co.id,
+        round_type="Series A",
+        amount_raised=Decimal("30000000"),
+        primary_news_url=shared,
+    )
+    db.add(r)
+    await db.flush()
+    db.add_all(
+        [
+            NewsArticle(
+                company_id=co.id,
+                url=shared,
+                title="Wonder food halls expand after raise",
+                source="shared.example.com",
+                raw_content=(
+                    "Wonder, the food hall startup with celebrity chefs, "
+                    "raised money."
+                ),
+                funding_round_id=r.id,
+            ),
+            NewsArticle(
+                company_id=co.id,
+                url=kept_url,
+                title="Wonder raises $30M for tutoring",
+                source="edsurge.example.com",
+                raw_content=(
+                    "Wonder, the online education platform, raised $30M to "
+                    "connect students with expert tutors for personalized "
+                    "learning."
+                ),
+                funding_round_id=r.id,
+            ),
+        ]
+    )
+    await db.commit()
+
+    _adjudicate_by_content(monkeypatch)
+    preview = await run_purge_wrong_entity_articles(db, slug=co.slug)
+    assert preview.articles_purged == 1
+    assert preview.rounds_purged == 0
+    assert preview.rounds_repointed == 1
+    assert preview.total_raised_cleared is False  # kept URL never poison
+
+    summary = await run_purge_wrong_entity_articles(db, slug=co.slug, dry_run=False)
+    assert summary.rounds_purged == 0
+    rounds = (
+        (await db.execute(select(FundingRound).where(FundingRound.company_id == co.id)))
+        .scalars()
+        .all()
+    )
+    assert len(rounds) == 1
+    assert rounds[0].primary_news_url == kept_url  # repointed to the survivor
+    await db.refresh(co)
+    assert co.total_raised_usd == Decimal("30000000")
 
 
 async def test_rate_limit_aborts_loudly(

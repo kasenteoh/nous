@@ -72,6 +72,9 @@ class PurgeWrongEntitySummary(BaseModel):
     articles_llm_error_kept: int = 0
     rounds_purged: int = 0
     round_labels: list[str] = Field(default_factory=list)
+    # Rounds spared because a KEPT article still links to them; on apply
+    # their primary_news_url is repointed to the surviving article.
+    rounds_repointed: int = 0
     total_raised_cleared: bool = False
     status_reset: bool = False
     verifications_deleted: int = 0
@@ -155,6 +158,9 @@ async def run_purge_wrong_entity_articles(
             doomed.append(article)
 
     purged_urls = {a.url for a in doomed}
+    doomed_ids = {a.id for a in doomed}
+    kept_articles = [a for a in articles if a.id not in doomed_ids]
+    kept_urls = {a.url for a in kept_articles}
     rounds = (
         (
             await session.execute(
@@ -164,18 +170,35 @@ async def run_purge_wrong_entity_articles(
         .scalars()
         .all()
     )
-    doomed_rounds = [
-        r
-        for r in rounds
-        if (r.primary_news_url and r.primary_news_url in purged_urls)
-        or any(
-            a.funding_round_id == r.id for a in doomed
+    # A round dies only when its sourcing is ENTIRELY purged: a surviving
+    # KEPT article linked to it proves right-entity attribution, so the
+    # round is spared and its primary_news_url repointed to the survivor
+    # (mirrors repair-misattributed-news — review catch: without this, a
+    # kept article's round died on a shared primary URL).
+    doomed_rounds: list[FundingRound] = []
+    repointed: list[tuple[FundingRound, str]] = []
+    for r in rounds:
+        implicated = (
+            r.primary_news_url and r.primary_news_url in purged_urls
+        ) or any(a.funding_round_id == r.id for a in doomed)
+        if not implicated:
+            continue
+        survivor = next(
+            (a for a in kept_articles if a.funding_round_id == r.id), None
         )
-    ]
+        if survivor is not None:
+            if r.primary_news_url and r.primary_news_url in purged_urls:
+                repointed.append((r, survivor.url))
+            continue
+        doomed_rounds.append(r)
     summary.rounds_purged = len(doomed_rounds)
     summary.round_labels = [_round_label(r) for r in doomed_rounds]
+    summary.rounds_repointed = len(repointed)
     for r in doomed_rounds:
-        if r.primary_news_url:
+        # A doomed round's primary URL joins the poison set for total/status
+        # clearing — unless it is a KEPT article's URL (never let a doomed
+        # round's stray pointer condemn surviving right-entity facts).
+        if r.primary_news_url and r.primary_news_url not in kept_urls:
             purged_urls.add(r.primary_news_url)
 
     if (
@@ -230,6 +253,8 @@ async def run_purge_wrong_entity_articles(
     if dry_run:
         return summary
 
+    for r, survivor_url in repointed:
+        r.primary_news_url = survivor_url
     for article in doomed:
         await session.delete(article)
     if doomed_rounds or cleared_kinds:
