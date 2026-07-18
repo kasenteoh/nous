@@ -30,6 +30,7 @@ from nous.db.models import Company, NewsArticle
 from nous.db.upsert import auto_create_company
 from nous.llm.client import LLMError, LLMRateLimitError, complete_json
 from nous.llm.prompts.news_company import HeadlineCompany, build_prompt
+from nous.pipeline.entity_guard import check_article_entity
 from nous.sources.crunchbase_news import fetch_crunchbase_news_funding_articles
 from nous.sources.geekwire import fetch_geekwire_funding_articles
 from nous.sources.news import (
@@ -95,6 +96,16 @@ class IngestNewsSummary(BaseModel):
     articles_skipped_duplicate_title: int = 0
     auto_created_companies: int = 0
     tc_skipped_no_company: int = 0
+    # Entity guard (same-name different-entity attachments): articles sent to
+    # LLM adjudication, dropped as wrong-entity, or skipped-unstored on a
+    # transient LLM error (the URL re-selects next sweep).
+    articles_adjudicated: int = 0
+    articles_skipped_wrong_entity: int = 0
+    articles_skipped_guard_error: int = 0
+    # Circuit breaker: once one adjudication 429s, the rest of the run skips
+    # LLM-requiring articles unstored (they retry next sweep) instead of
+    # burning a futile call per article.
+    guard_rate_limited: bool = False
 
 
 async def _article_already_stored(session: AsyncSession, url: str) -> bool:
@@ -143,8 +154,7 @@ def _headline_content(result: NewsArticleResult) -> str:
 async def _ingest_one_article(
     session: AsyncSession,
     client: NewsClient,
-    company_id: UUID,
-    company_name: str,
+    company: Company,
     result: NewsArticleResult,
     summary: IngestNewsSummary,
 ) -> None:
@@ -199,7 +209,7 @@ async def _ingest_one_article(
             # Resolution failed — keep the headline (+ snippet); still useful.
             # But not twice: Google re-serves the same story under a fresh
             # opaque URL each sweep, so dedup headline-only rows by title.
-            if await _gn_title_already_stored(session, company_id, result.title):
+            if await _gn_title_already_stored(session, company.id, result.title):
                 summary.articles_skipped_duplicate_title += 1
                 return
             content = _headline_content(result)
@@ -212,21 +222,53 @@ async def _ingest_one_article(
         body_for_guard = body
 
     if not article_mentions_company(
-        company_name,
+        company.name,
         result.title,
         snippet=result.raw_content,
         body=body_for_guard,
     ):
         logger.info(
             "dropping article (company name %r not in headline/lede): %s",
-            company_name,
+            company.name,
             result.title,
         )
         summary.articles_skipped_irrelevant += 1
         return
 
+    # Entity guard: the mention guard proves the NAME appears; this decides
+    # whether the article's funded subject IS this company (same-name
+    # different-entity attachments — the wonder/terrafirma recurrence class).
+    decision = await check_article_entity(
+        company,
+        title=result.title,
+        text=content,
+        allow_llm=not summary.guard_rate_limited,
+    )
+    if decision.rate_limited:
+        summary.guard_rate_limited = True
+    if decision.adjudicated:
+        summary.articles_adjudicated += 1
+    if not decision.attach:
+        if decision.llm_error:
+            # Skip WITHOUT storing: the URL stays absent, so the next sweep
+            # retries once the LLM is healthy — never fail-open into a wrong
+            # attach, never a permanent drop on a transient error.
+            summary.articles_skipped_guard_error += 1
+        else:
+            logger.info(
+                "entity guard dropped article for %s (%s%s): %s",
+                company.slug,
+                decision.reason,
+                f", other entity: {decision.other_entity}"
+                if decision.other_entity
+                else "",
+                result.title,
+            )
+            summary.articles_skipped_wrong_entity += 1
+        return
+
     article = NewsArticle(
-        company_id=company_id,
+        company_id=company.id,
         url=url,
         title=result.title,
         source=source,
@@ -334,7 +376,7 @@ async def run_ingest_news(
             # _ingest_one_article may still drop it (articles_skipped_irrelevant).
             summary.articles_kept += 1
             await _ingest_one_article(
-                session, client, company.id, company.name, result, summary
+                session, client, company, result, summary
             )
         # Stamp the attempt (success or failure) so the rotation advances —
         # a head-of-line company whose query keeps failing must not pin the
@@ -474,6 +516,38 @@ async def run_ingest_news(
                 )
                 if created:
                     summary.auto_created_companies += 1
+                else:
+                    # The title-parsed name matched an EXISTING company — the
+                    # same-name different-entity trap applies here too (a
+                    # broad-feed "Wonder" story finding edtech-wonder). A
+                    # just-created company IS this article's entity by
+                    # construction, so only pre-existing matches are guarded.
+                    decision = await check_article_entity(
+                        company,
+                        title=result.title,
+                        text=body,
+                        allow_llm=not summary.guard_rate_limited,
+                    )
+                    if decision.rate_limited:
+                        summary.guard_rate_limited = True
+                    if decision.adjudicated:
+                        summary.articles_adjudicated += 1
+                    if not decision.attach:
+                        if decision.llm_error:
+                            summary.articles_skipped_guard_error += 1
+                        else:
+                            logger.info(
+                                "entity guard dropped broad-feed article for "
+                                "%s (%s%s): %s",
+                                company.slug,
+                                decision.reason,
+                                f", other entity: {decision.other_entity}"
+                                if decision.other_entity
+                                else "",
+                                result.title,
+                            )
+                            summary.articles_skipped_wrong_entity += 1
+                        continue
                 summary.articles_kept += 1
                 article = NewsArticle(
                     company_id=company.id,

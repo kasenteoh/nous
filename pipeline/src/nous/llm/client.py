@@ -193,6 +193,12 @@ async def _complete_json_deepseek(
                 f"DeepSeek call exceeded the {_CALL_DEADLINE_SECONDS:.0f}s "
                 "overall deadline (wedged connection)"
             ) from exc
+        except httpx.TransportError as exc:
+            # DNS failure, connection refused, mid-read drop, httpx-level
+            # timeout — every caller's `except LLMError` contract must hold
+            # for transport faults too (a raw httpx.ConnectError once had a
+            # path to kill an unattended cron sweep — #235 review).
+            raise LLMError(f"DeepSeek transport error: {exc!r}") from exc
         if resp.status_code == 429:
             raise LLMRateLimitError(f"DeepSeek 429: {resp.text}")
         if resp.status_code >= 500:
