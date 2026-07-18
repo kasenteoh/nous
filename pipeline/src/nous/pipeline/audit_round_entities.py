@@ -42,9 +42,8 @@ from nous.db.models import Company, FundingRound, NewsArticle
 
 # Private-name imports match repair_misattributed_news.py (the sibling probe)
 # — duplicating the curated common-word list here would let the two drift.
-from nous.sources.news import _COMMON_NAME_WORDS, _GOOGLE_NEWS_HOST
-from nous.util.entity_corroboration import CorroborationResult, corroborate_entity
-from nous.util.slugify import strip_corporate_suffix
+from nous.sources.news import _GOOGLE_NEWS_HOST
+from nous.util.entity_corroboration import best_corroboration
 from nous.util.url import hostname
 
 logger = logging.getLogger(__name__)
@@ -83,55 +82,6 @@ class AuditRoundEntitiesSummary(BaseModel):
     reason_counts: dict[str, int] = Field(default_factory=dict)
     suspects: list[SuspectRound] = Field(default_factory=list)
     suspects_truncated: int = 0
-
-
-def _name_variants(company_name: str) -> list[str]:
-    """The calibrated variant ladder repair-misattributed-news trusts: full
-    name, squashed multi-token ("PhysicsWallah"), distinctive head token
-    ("Genesis" for Genesis Therapeutics — >=4 chars, not a common word)."""
-    variants = [company_name]
-    tokens = strip_corporate_suffix(company_name).lower().split()
-    if len(tokens) >= 2:
-        variants.append("".join(tokens))
-        head = tokens[0]
-        if len(head) >= 4 and head not in _COMMON_NAME_WORDS:
-            variants.append(head)
-    return variants
-
-
-def _best_corroboration(
-    company_name: str,
-    description: str | None,
-    text: str,
-    *,
-    own_context: str | None = None,
-) -> CorroborationResult:
-    """Evaluate every name variant; the BEST-corroborating one wins.
-
-    Only variants that actually OCCUR in the text get a vote — a variant with
-    zero occurrences has no evidence in either direction and must not "clear"
-    a round (the squashed variant of "Wave Probe" never appears anywhere).
-    Among occurring variants: non-suspect preferred (false-keep bias — the
-    head-token "Genesis" corroborating spares a "Genesis raises $200M"
-    headline even though the full name is absent), then most proper-noun
-    occurrences. When NO variant occurs, the full-name view is returned and
-    the caller reports the name as absent.
-    """
-    # Every variant keeps the ORIGINAL name's tokens as own-name context:
-    # "Yuga Labs" following the head-variant "Yuga" is the company itself.
-    full_tokens = set(strip_corporate_suffix(company_name).lower().split())
-    results = [
-        corroborate_entity(
-            v, description, text, own_tokens=full_tokens, own_context=own_context
-        )
-        for v in _name_variants(company_name)
-    ]
-    eligible = [r for r in results if r.occurrences > 0]
-    if not eligible:
-        return results[0]
-    return max(
-        eligible, key=lambda r: (not r.suspect, r.proper_occurrences, r.occurrences)
-    )
 
 
 def _round_text(articles: list[NewsArticle]) -> tuple[str, str]:
@@ -245,7 +195,7 @@ async def run_audit_round_entities(
         # Website + slug are own-identity context: they decide whether an
         # extended phrase is the company's own FORMAL name (impulse whose
         # site is impulsespace.com owns "Impulse Space").
-        result = _best_corroboration(
+        result = best_corroboration(
             name, description, text, own_context=f"{website or ''} {slug}"
         )
         reasons = list(result.reasons)
