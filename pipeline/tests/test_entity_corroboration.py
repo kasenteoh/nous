@@ -90,7 +90,7 @@ def test_terrafirma_inc_article_is_extension_suspect() -> None:
     assert r.suspect is False
 
 
-def test_food_wonder_article_vs_edtech_wonder_is_context_suspect() -> None:
+def test_food_wonder_vs_edtech_wonder_is_a_pinned_blind_spot() -> None:
     text = (
         "Wonder raises $650M at a $9B valuation. The food hall and delivery "
         "startup founded by Marc Lore operates dozens of locations serving "
@@ -108,6 +108,7 @@ def test_food_wonder_article_vs_edtech_wonder_is_context_suspect() -> None:
     # Honest blind spot: cheap signals alone cannot condemn this one; the
     # LLM adjudicator (or amount/context cross-checks) owns it. What the
     # cheap layer DOES contribute is the zero-overlap measurement.
+    assert r.suspect is False
     assert r.context_candidates >= 4
     assert r.context_overlap == 0
 

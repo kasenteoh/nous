@@ -39,6 +39,9 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from nous.db.models import Company, FundingRound, NewsArticle
+
+# Private-name imports match repair_misattributed_news.py (the sibling probe)
+# — duplicating the curated common-word list here would let the two drift.
 from nous.sources.news import _COMMON_NAME_WORDS, _GOOGLE_NEWS_HOST
 from nous.util.entity_corroboration import CorroborationResult, corroborate_entity
 from nous.util.slugify import strip_corporate_suffix
@@ -268,7 +271,9 @@ async def run_audit_round_entities(
         else:
             summary.corroborated += 1
 
-    all_suspects.sort(key=lambda t: t[0], reverse=True)
+    # Secondary slug key: equal-amount (incl. null-amount) suspects keep a
+    # stable order across runs regardless of DB iteration order.
+    all_suspects.sort(key=lambda t: (-t[0], t[1].slug))
     summary.suspects = [s for _, s in all_suspects[:SUSPECT_LIMIT]]
     summary.suspects_truncated = max(0, len(all_suspects) - SUSPECT_LIMIT)
 

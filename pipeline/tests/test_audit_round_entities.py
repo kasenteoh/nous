@@ -150,6 +150,80 @@ async def test_probe_routes_verdicts_and_reports(db: AsyncSession) -> None:
     assert sum(summary.reason_counts.values()) >= 2
 
 
+async def test_name_absent_from_text_is_suspect(db: AsyncSession) -> None:
+    """A round whose stored coverage text never contains the name under ANY
+    variant (the IM8-for-bespoke-labs shape): suspect with the absent reason
+    — distinct from the unknown/no-text coverage gap."""
+    co = _co(
+        "absent-probe",
+        "Absent Probe builds reinforcement learning environments for "
+        "training reliable autonomous agents.",
+    )
+    db.add(co)
+    await db.flush()
+    r = FundingRound(
+        company_id=co.id,
+        amount_raised=Decimal("1000000000"),
+        primary_news_url="https://gn.example.com/im8-1b",
+    )
+    db.add(r)
+    await db.flush()
+    db.add(
+        NewsArticle(
+            company_id=co.id,
+            url="https://gn.example.com/im8-1b",
+            title="Prenetics Raises $1 Billion For IM8",
+            source="news.google.com",
+            raw_content=(
+                "Prenetics Raises $1 Billion For IM8 - the wellness brand "
+                "offers supplement formulations."
+            ),
+            funding_round_id=r.id,
+        )
+    )
+    await db.commit()
+
+    summary = await run_audit_round_entities(db)
+    assert summary.suspect == 1
+    assert summary.unknown_no_text == 0
+    assert "name absent from stored coverage text" in summary.suspects[0].reasons
+
+
+async def test_headline_verb_is_not_an_extension(db: AsyncSession) -> None:
+    """Review-finding regression: a GN headline like "Acme Probe Plans $50M
+    Expansion" (raw_content duplicating the title, so the phrase repeats)
+    must NOT flag "Acme Probe Plans" as another entity."""
+    co = _co(
+        "acme-probe",
+        "Acme Probe manufactures industrial robotics arms for warehouse "
+        "automation and logistics fulfillment.",
+    )
+    db.add(co)
+    await db.flush()
+    r = FundingRound(
+        company_id=co.id,
+        amount_raised=Decimal("50000000"),
+        primary_news_url="https://news.google.com/rss/articles/acme-plans",
+    )
+    db.add(r)
+    await db.flush()
+    db.add(
+        NewsArticle(
+            company_id=co.id,
+            url="https://news.google.com/rss/articles/acme-plans",
+            title="Acme Probe Plans $50M Warehouse Robotics Expansion",
+            source="news.google.com",
+            raw_content="Acme Probe Plans $50M Warehouse Robotics Expansion",
+            funding_round_id=r.id,
+        )
+    )
+    await db.commit()
+
+    summary = await run_audit_round_entities(db)
+    assert summary.suspect == 0
+    assert summary.corroborated == 1
+
+
 async def test_min_amount_filter_and_head_token_spare(db: AsyncSession) -> None:
     genesis = _co(
         "genesis-probe",
