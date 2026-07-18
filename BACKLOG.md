@@ -65,10 +65,18 @@ the whole company). Recurrence-proofing is part of the bar.
   clipboard←Clipboard Health, odyssey/maze/amber/fathom←Therapeutics,
   drip←Drip Capital, bunkerhill←Bunkerhill Health (the dedup-miss pair),
   prometheus $6.2B = "Project Prometheus" (same-entity dedup case).
-- NEXT: the ingest-time guard (cheap signals → LLM adjudication for
-  suspect/weak attachments; new small DeepSeek call class ~cents/day),
-  then the retroactive LLM audit over the 213 + lowercase/weak cohorts,
-  then re-apply the recurred purges.
+- ~~ingest-time guard~~ — SHIPPED (#235; validated live: 35 adjudications
+  / 30 wrong-entity drops / 0 errors across the first three guarded runs,
+  incl. all five food-Wonder GN re-ingests).
+- ~~per-company retroactive purge lever~~ — SHIPPED (#237 + #238
+  force-adjudicate default): the guard's decision over every STORED
+  article of one company (extract-funding re-mines rounds from pre-guard
+  articles — wonder re-spawned twice before this existed). Applied:
+  wonder 11 articles + $650M round; terrafirma 9 + $100M round.
+- NEXT: golden set for article_subject_match (eval-record live), then the
+  retroactive audit — dispatch purge-wrong-entity-articles-dry-run per
+  probe suspect (213 list, run 29642507263; built/blue/magic first),
+  review verdicts, apply. prometheus $6.2B routes to dedup widening.
 
 ### P0 — dedup signal gaps the sweep proved [M]
 prometheus $10B/$12B: 16% gap dodges ±15%, but same valuation + same
