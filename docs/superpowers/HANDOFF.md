@@ -1,11 +1,93 @@
-# Handoff — state of the world as of 2026-07-17 (end of day)
+# Handoff — state of the world as of 2026-07-18 (midday)
 
 Written for the next agent (any model) picking this project up cold. Read
 this, then root `CLAUDE.md` (conventions), then the worklog
 (`docs/superpowers/fable5-worklog.md` — one entry per merged PR, the
 authoritative history), then `BACKLOG.md` (annotated with what shipped; its
-**"2026-07-16 fresh customer-perspective QA"** section is the current work
-queue). The plan docs under `docs/superpowers/plans/` are historical context.
+**"2026-07-17 post-surgery QA sweep"** section is the active work queue).
+The plan docs under `docs/superpowers/plans/` are historical context.
+
+## LATEST UPDATE — entity-resolution arc SHIPPED end-to-end (2026-07-18, PRs #231–#236)
+
+The 2026-07-17 P0 ("name-collision entity resolution at round ingestion") is
+now **structurally complete**: scalpel (#230/#231 + the standalone
+clear-company-facts lever #236) + measured probe (#232–#234, calibrated on
+THREE live prod dispatches) + the ingest-time guard (#235, **validated live**:
+its first prod run adjudicated 2 articles and correctly dropped both —
+keyword garbage for the dictionary-word company "keep"). The recurred
+purges were RE-APPLIED behind the guard same-day (wonder round+total+status;
+terrafirma round; wave status via #236). Suite 1863 green; no migrations
+(head stays **0044**).
+
+**Morning verification (do first next session too):** all 13 of the
+2026-07-17-night ops applies ran green; /trends biggest-rounds clean;
+impulse/sambanova/callsign/genesis-therapeutics healed; uala gone.
+**BUT the recurrence prediction came true immediately** — wonder's $650M
+and terrafirma's $115M rounds were re-ingested by the 3h cron within hours
+(dry-run dispatches confirmed both back in the DB). That made the guard the
+critical path; deletions of recent-news rounds were whack-a-mole until it
+landed.
+
+- **#231 delete-round --clear-total/--clear-status** — for poison sourced
+  from URLs OUTSIDE the purge set (bespoke-labs' syndicated $1B total;
+  wave's phantom status). A status/total clear kills its ✓ rows (folded
+  fix: status-kind verifications now purge too); the dry-run previews the
+  doomed values.
+- **#232 audit-round-entities** ($0 probe, ops.yml command, `min_amount`
+  input) + **#233/#234 calibration**: dispatch → triage the itemized
+  suspect list → fix the FP class → re-dispatch. 706 → 247 → **213
+  suspects of 1112 checked** (143 no-text; 950 headline-only texts). The
+  signal machinery lives in `nous/util/entity_corroboration.py`
+  (lowercase-only gated on context; consistently-extended entity phrases
+  with an own-formal-name squash check — impulsespace.com owns "Impulse
+  Space"; neutral verb/descriptor/possessive/outlet-dash handling).
+- **Run-3 findings (the retroactive-audit candidate set, amount-sorted):**
+  built←"Built In" $30B (Anthropic's round via the OUTLET name!), blue←Blue
+  Origin $10B, magic←Magic Leap $500M + Magic Eden $130M + Magic Spoon
+  $85M, odyssey/maze/amber/fathom/aardvark←*Therapeutics*, drip←Drip
+  Capital ×3, bright←Bright Machines ×2, adaptive←Adaptive Security ×2,
+  clipboard←Clipboard Health, pomelo←Pomelo Care, genius←Cover Genius,
+  bunkerhill←"Bunkerhill Health (9x)" (the dedup-miss pair), prometheus
+  $6.2B = "Project Prometheus" (SAME-entity dedup case, not wrong-entity).
+  Full JSON in the run-3 ops step summary (run 29642507263).
+- **#235 the ingest-time entity guard** — `pipeline/entity_guard.py`:
+  cheap calibrated signals first (STRONG corroboration attaches free;
+  no-profile husk attaches — the audit owns that cohort), LLM adjudication
+  (`article_subject_match`, PROMPT_VERSION 2026-07-18.1, discriminative +
+  conservative: attach only on is_subject && confidence != low) for the
+  suspect/weak middle. Wired into BOTH paths (per-company GN + broad-feed
+  existing-company matches). LLM error → skip WITHOUT storing (URL
+  re-selects next sweep); 429 opens a per-run circuit breaker
+  (`summary.guard_rate_limited`). Transport faults (DNS/conn-refused) now
+  wrap as LLMError in `client._call` — an unattended sweep can no longer
+  die on a raw httpx exception. New DeepSeek call class: adjudication for
+  non-strong attachments ≈ cents/day (flagged per CLAUDE.md).
+
+**NEXT QUEUE (in order):**
+1. **Verify the re-heal + watch the guard** — /c/wonder.md, /c/terrafirma.md,
+   /c/wave.md after ISR (~6h; applies ran ~12:00 UTC 07-18): wonder should
+   show NO $650M round/total and active status; terrafirma no $115M
+   anywhere (its stated total was already null — the page's $115M was the
+   computed round sum); wave active. Watch the guard counters in the next
+   few 3h-cron step summaries (`articles_adjudicated` /
+   `articles_skipped_wrong_entity` / `articles_skipped_guard_error`;
+   failure alerting #227 opens an issue on stage errors). If a food-Wonder
+   article slips PAST the guard (LLM misjudges), that's a golden-set
+   fixture, not a re-purge-only event.
+2. **Golden set for article_subject_match** — register in
+   `nous/evals/prompts.py`, author fixtures from the probe's real cases
+   (food-Wonder, Primary Wave, IM8-bespoke, TerraFirma-Inc, plus
+   correct-attachment negatives), dispatch eval-record.yml to record live,
+   review deltas, commit. Until then the guard's prompt is unit-tested
+   with mocked LLM but unmeasured against real DeepSeek.
+3. **Retroactive audit + purge**: LLM-adjudicate the probe's 213 suspects
+   (start min_amount≈$50M for the marquee tail) → batch delete-round
+   applies for confirmed wrongs (serialize dispatches; concurrency
+   displacement). built/$30B, blue/$10B, magic ×3 are the headliners.
+   prometheus $6.2B routes to dedup-signal widening instead (same event).
+4. **Then the P0 dedup-signal widening + P1 tail** (unchanged in BACKLOG).
+
+Owner calls still parked: badge-gating on entity-audit state; Sentry DSN.
 
 ## LATEST UPDATE — delete-round lever SHIPPED; marquee cleanup IN FLIGHT (2026-07-17 night)
 
