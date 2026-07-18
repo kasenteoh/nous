@@ -29,6 +29,7 @@ on:
           - repair-misattributed-news-apply
           - delete-round-dry-run
           - delete-round-apply
+          - audit-round-entities
       slug:
         description: "Company slug to operate on (required for company-scoped commands; ignored by repair-misattributed-news-*)."
         required: false
@@ -69,6 +70,10 @@ on:
         required: false
         type: boolean
         default: false
+      min_amount:
+        description: "audit-round-entities only: only audit rounds with amount_raised >= this, whole USD."
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -116,6 +121,7 @@ jobs:
           OP_ROUND_ID: ${{ inputs.round_id }}
           OP_CLEAR_TOTAL: ${{ inputs.clear_total }}
           OP_CLEAR_STATUS: ${{ inputs.clear_status }}
+          OP_MIN_AMOUNT: ${{ inputs.min_amount }}
         # Inputs pass through env vars (never string-interpolated into the
         # script) and the command itself is a choice allowlist. pipefail so a
         # failing `uv run` surfaces as a failed step instead of being masked by
@@ -140,6 +146,12 @@ jobs:
             if [ "$OP_CLEAR_STATUS" = "true" ]; then ARGS+=(--clear-status); fi
             if [ "$OP_COMMAND" = "delete-round-apply" ]; then ARGS+=(--apply); fi
             uv run nous delete-round "${ARGS[@]}" \
+              | { echo '```json'; cat; echo '```'; } | tee "$GITHUB_STEP_SUMMARY"
+          elif [ "$OP_COMMAND" = "audit-round-entities" ]; then
+            # Catalog-wide $0 entity-corroboration probe: read-only report.
+            ARGS=()
+            if [ -n "$OP_MIN_AMOUNT" ]; then ARGS+=(--min-amount "$OP_MIN_AMOUNT"); fi
+            uv run nous audit-round-entities "${ARGS[@]}" \
               | { echo '```json'; cat; echo '```'; } | tee "$GITHUB_STEP_SUMMARY"
           elif [ "$OP_COMMAND" = "repair-misattributed-news-dry-run" ]; then
             # Catalog-wide $0 probe: counts + examples, writes nothing.
