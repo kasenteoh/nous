@@ -43,6 +43,20 @@ For each company:
    Anchoring is greedy from the best-ranked row, so tolerance never chains
    ($100M~$115M~$130M collapses only what is near the anchor itself).
 
+   2026-07-18 widening: the band opens to WIDE_AMOUNT_TOLERANCE when the two
+   rows share >= WIDE_SHARED_INVESTORS_MIN linked investors (prometheus:
+   "$12B raised" vs the "$10B" variant — 16% gap, same backer trio). Without
+   that evidence the strict ±15% band is unchanged.
+
+2d. Equal-valuation cross-amount collapse (2026-07-18; sambanova: a garbled
+   "$100M" row and the real $1B Series F both carrying $11B post-money). An
+   exact shared post-money valuation is the strongest same-event signal we
+   store — outlets garble raise amounts far more often than the headline
+   valuation, and a REAL flat round (same post-money twice) is months apart,
+   which the date window rejects. Same guards as 2b (compatible types,
+   compatible dates, never both-undated); the anchor keeps its own
+   amount+source.
+
 2c. Contradicting-type fold, publication-date gated (sambanova: Series D/E/F
    all $1B for one event — outlets disagreed on the letter). Within one
    EXACT-amount group whose non-null types contradict, when exactly ONE row
@@ -110,8 +124,11 @@ class RepairDuplicateRoundsSummary(BaseModel):
     companies_repaired: int = 0
     empty_rows_deleted: int = 0
     duplicate_rows_merged: int = 0
-    # Pass 2b: near-amount (±NEAR_AMOUNT_TOLERANCE) rows folded into the anchor.
+    # Pass 2b: near-amount (±NEAR_AMOUNT_TOLERANCE, widened to
+    # WIDE_AMOUNT_TOLERANCE on shared-investor evidence) rows folded in.
     near_amount_rows_merged: int = 0
+    # Pass 2d: cross-amount rows sharing an exact post-money valuation.
+    equal_valuation_rows_merged: int = 0
     # Pass 2c: contradicting-type same-amount rows folded on pub-date evidence.
     type_conflict_rows_merged: int = 0
     # Pass 3: valuation-only phantom shells folded into a matching sibling.
@@ -124,6 +141,16 @@ class RepairDuplicateRoundsSummary(BaseModel):
 # $1B not). Shared with the data-quality census so the probe and the repair
 # always measure the same thing.
 NEAR_AMOUNT_TOLERANCE: float = 0.15
+# The widened tolerance available ONLY with shared-investor evidence (pass 2b):
+# outlets reporting one event can diverge past ±15% ("raises $12B" vs "seeks
+# $10B" = 16.7% — prometheus, 2026-07-17 QA), but a bare 16% gap could also be
+# two real rounds. Two rounds sharing >= WIDE_SHARED_INVESTORS_MIN linked
+# investors within the date window are the same event; a genuinely new round
+# re-links its investors as new rows only after its own extraction, so shared
+# links this dense across two close-dated compatible-type rows are
+# re-reports.
+WIDE_AMOUNT_TOLERANCE: float = 0.5
+WIDE_SHARED_INVESTORS_MIN: int = 2
 # Two dates farther apart than this window never describe the same event.
 NEAR_DATE_WINDOW_DAYS: int = 14
 
@@ -139,6 +166,18 @@ def _amounts_near(a: Decimal, b: Decimal) -> bool:
     if hi <= 0:
         return False
     return float((hi - lo) / hi) <= NEAR_AMOUNT_TOLERANCE
+
+
+def _amounts_wide_near(a: Decimal, b: Decimal) -> bool:
+    """The widened band (>NEAR, <=WIDE) reachable only with shared-investor
+    evidence — see WIDE_AMOUNT_TOLERANCE."""
+    if a == b:
+        return False
+    hi, lo = (a, b) if a > b else (b, a)
+    if hi <= 0:
+        return False
+    gap = float((hi - lo) / hi)
+    return NEAR_AMOUNT_TOLERANCE < gap <= WIDE_AMOUNT_TOLERANCE
 
 
 def _dates_compatible(a: date | None, b: date | None) -> bool:
@@ -265,6 +304,29 @@ async def _merge_cluster(
         await session.delete(loser)
 
 
+async def _investor_ids_by_round(
+    session: AsyncSession, round_ids: list[UUID]
+) -> dict[UUID, set[UUID]]:
+    """investor_id sets per round — the shared-investor evidence for the
+    widened near-amount band. Identity-split investor rows ("Bezos" vs "Jeff
+    Bezos") count as different ids here, which only makes the signal MORE
+    conservative (fewer shared ids than reality)."""
+    if not round_ids:
+        return {}
+    links = (
+        await session.execute(
+            select(
+                FundingRoundInvestor.funding_round_id,
+                FundingRoundInvestor.investor_id,
+            ).where(FundingRoundInvestor.funding_round_id.in_(round_ids))
+        )
+    ).all()
+    out: dict[UUID, set[UUID]] = {}
+    for round_id, investor_id in links:
+        out.setdefault(round_id, set()).add(investor_id)
+    return out
+
+
 async def _collapse_near_amounts(
     session: AsyncSession,
     *,
@@ -293,6 +355,10 @@ async def _collapse_near_amounts(
     amounted = sorted(
         (r for r in rows if r.amount_raised is not None), key=_survivor_sort_key
     )
+    # Shared-investor evidence for the widened band, loaded once per company.
+    investors_by_round = await _investor_ids_by_round(
+        session, [r.id for r in amounted]
+    )
     claimed: set[UUID] = set()
     merged = 0
     for i, anchor in enumerate(amounted):
@@ -305,7 +371,17 @@ async def _collapse_near_amounts(
             assert anchor.amount_raised is not None  # filtered above
             assert other.amount_raised is not None
             if not _amounts_near(anchor.amount_raised, other.amount_raised):
-                continue
+                # The widened band opens ONLY on shared-investor evidence
+                # (prometheus: "$12B raised" vs the "$10B" variant, same
+                # backer trio — 16% dodges ±15%).
+                shared = investors_by_round.get(anchor.id, set()) & (
+                    investors_by_round.get(other.id, set())
+                )
+                if not (
+                    _amounts_wide_near(anchor.amount_raised, other.amount_raised)
+                    and len(shared) >= WIDE_SHARED_INVESTORS_MIN
+                ):
+                    continue
             anchor_type = _normalized_type(anchor.round_type)
             other_type = _normalized_type(other.round_type)
             if not (
@@ -340,6 +416,80 @@ async def _collapse_near_amounts(
         await _merge_cluster(session, survivor=anchor, losers=losers, dry_run=dry_run)
         # Prune the Python list in BOTH modes: dry-run must count each row at
         # most once across passes (2c would otherwise recount a 2b loser).
+        loser_ids = {loser.id for loser in losers}
+        rows[:] = [r for r in rows if r.id not in loser_ids]
+    return merged
+
+
+async def _collapse_equal_valuations(
+    session: AsyncSession,
+    *,
+    company_id: UUID,
+    rows: list[FundingRound],
+    dry_run: bool,
+) -> int:
+    """Pass 2d — collapse cross-amount duplicates that share an EXACT
+    post-money valuation (sambanova: the garbled "$100M" row and the real $1B
+    Series F both carried $11B post — one event, two figures, a gap no amount
+    tolerance should bridge).
+
+    A valuation is the strongest same-event signal we store: outlets garble
+    the raise amount far more often than the headline valuation, and two
+    REAL consecutive rounds at the same post-money (a flat round) are months
+    apart — the date window rejects them. Guards mirror Pass 2b: compatible
+    types, compatible dates, never both-undated, greedy from the best-ranked
+    anchor (which keeps its own amount+source; the loser's divergent figure
+    is dropped, not blended).
+    """
+    valued = sorted(
+        (
+            r
+            for r in rows
+            if r.amount_raised is not None and r.valuation_post_money is not None
+        ),
+        key=_survivor_sort_key,
+    )
+    claimed: set[UUID] = set()
+    merged = 0
+    for i, anchor in enumerate(valued):
+        if anchor.id in claimed:
+            continue
+        losers: list[FundingRound] = []
+        for other in valued[i + 1 :]:
+            if other.id in claimed:
+                continue
+            if other.valuation_post_money != anchor.valuation_post_money:
+                continue
+            anchor_type = _normalized_type(anchor.round_type)
+            other_type = _normalized_type(other.round_type)
+            if not (
+                anchor_type is None or other_type is None or anchor_type == other_type
+            ):
+                continue
+            if not _dates_compatible(anchor.announced_date, other.announced_date):
+                continue
+            if anchor.announced_date is None and other.announced_date is None:
+                # Same both-undated caution as Pass 2b: never merge without
+                # at least one date anchoring the event.
+                continue
+            losers.append(other)
+            claimed.add(other.id)
+        if not losers:
+            continue
+        logger.info(
+            "repair-duplicate-rounds: company=%s equal-valuation ($%s post) "
+            "collapsing %d rows (%s) into anchor=%s ($%s, type=%r, date=%s)",
+            company_id,
+            anchor.valuation_post_money,
+            len(losers),
+            [str(loser.amount_raised) for loser in losers],
+            anchor.id,
+            anchor.amount_raised,
+            anchor.round_type,
+            anchor.announced_date,
+        )
+        merged += len(losers)
+        await _merge_cluster(session, survivor=anchor, losers=losers, dry_run=dry_run)
         loser_ids = {loser.id for loser in losers}
         rows[:] = [r for r in rows if r.id not in loser_ids]
     return merged
@@ -730,6 +880,14 @@ async def run_repair_duplicate_rounds(
             dry_run=dry_run,
         )
 
+        # ── Pass 2d: equal-valuation cross-amount collapse (sambanova) ──────
+        valuation_merged = await _collapse_equal_valuations(
+            session,
+            company_id=company_id,
+            rows=survivors_pool,
+            dry_run=dry_run,
+        )
+
         # ── Pass 2c: contradicting-type fold on pub-date evidence ───────────
         # (sambanova Series D/E vs the dated Series F, all $1B). Runs AFTER 2b
         # so the exact-amount groups it inspects are already consolidated.
@@ -753,13 +911,14 @@ async def run_repair_duplicate_rounds(
             dry_run=dry_run,
         )
 
-        if empty_deleted or merged_here or near_merged or conflict_merged or (
-            phantom_merged
+        if empty_deleted or merged_here or near_merged or valuation_merged or (
+            conflict_merged or phantom_merged
         ):
             summary.companies_repaired += 1
             summary.empty_rows_deleted += empty_deleted
             summary.duplicate_rows_merged += merged_here
             summary.near_amount_rows_merged += near_merged
+            summary.equal_valuation_rows_merged += valuation_merged
             summary.type_conflict_rows_merged += conflict_merged
             summary.phantom_valuation_rows_merged += phantom_merged
             if not dry_run:

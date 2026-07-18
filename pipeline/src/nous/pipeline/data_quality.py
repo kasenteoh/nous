@@ -426,7 +426,10 @@ async def _suspect_duplicate_rounds(
 
         # Near-amount pairs (the proposed gate): compatible types, compatible
         # dates, non-equal amounts within tolerance. O(n²) per company over a
-        # handful of rounds.
+        # handful of rounds. Counts the STRICT ±15% band only — the repair's
+        # widened band (shared-investor evidence) and equal-valuation pass
+        # (2026-07-18) report their own merges in the repair summary, so this
+        # census deliberately undercounts what the repair can now reach.
         amounted = [
             (t, a, d) for t, a, d in rounds if a is not None
         ]

@@ -6,6 +6,7 @@ for committing.
 
 from __future__ import annotations
 
+import re
 from datetime import timedelta
 from decimal import Decimal
 from uuid import UUID
@@ -360,13 +361,28 @@ PLACEHOLDER_ROUND_TYPES: frozenset[str] = frozenset(
 )
 
 
+# Trailing qualifiers that mark a CONTINUATION of the same round, not a new
+# one: "Series E extension" / "Series B second close" / "seed top-up" all name
+# the round they extend. Stripping them for identity checks lets the exact-dup
+# and compatibility rules see "Series E" == "Series E extension" (uala's $66M
+# double-count, 2026-07-17 QA). A standalone "Extension" (no base type left
+# after the strip) normalizes to None — it carries no round identity of its
+# own. Display casing is untouched (clean_round_type persists the original).
+_CONTINUATION_SUFFIX_RE = re.compile(
+    r"[\s\-–—(]*(?:extension|extended|second close|first close|final close|"
+    r"top[\s-]?up|follow[\s-]?on)\)?\s*$"
+)
+
+
 def normalized_round_type(round_type: str | None) -> str | None:
-    """Lowercased/stripped round_type for identity checks, or None when blank
+    """Lowercased/stripped round_type for identity checks — continuation
+    suffixes ("… extension", "… second close") stripped — or None when blank
     or a placeholder that names no actual round (see PLACEHOLDER_ROUND_TYPES).
     """
     if round_type is None:
         return None
     stripped = round_type.strip().lower()
+    stripped = _CONTINUATION_SUFFIX_RE.sub("", stripped).strip()
     if not stripped or stripped in PLACEHOLDER_ROUND_TYPES:
         return None
     return stripped
