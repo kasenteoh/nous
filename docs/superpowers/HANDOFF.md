@@ -7,7 +7,7 @@ authoritative history), then `BACKLOG.md` (annotated with what shipped; its
 **"2026-07-17 post-surgery QA sweep"** section is the active work queue).
 The plan docs under `docs/superpowers/plans/` are historical context.
 
-## LATEST UPDATE — entity-resolution arc SHIPPED end-to-end (2026-07-18, PRs #231–#236)
+## LATEST UPDATE — entity-resolution arc SHIPPED end-to-end (2026-07-18, PRs #231–#238)
 
 The 2026-07-17 P0 ("name-collision entity resolution at round ingestion") is
 now **structurally complete**: scalpel (#230/#231 + the standalone
@@ -63,17 +63,32 @@ landed.
   die on a raw httpx exception. New DeepSeek call class: adjudication for
   non-strong attachments ≈ cents/day (flagged per CLAUDE.md).
 
+**EVENING ADDENDUM (#237/#238 — the reservoir):** the midday re-heal
+re-spawned AGAIN within hours: extract-funding re-mines rounds from
+already-STORED pre-guard articles (wonder held ELEVEN food-Wonder
+articles; delete-round only reaches round-LINKED ones). Shipped
+**purge-wrong-entity-articles** (#237): the guard's decision over every
+stored article of one company — purges articles + rounds sourced from
+them + ✓s + total/status from purged URLs; fail-KEEP on LLM error;
+surviving-link rounds are spared and repointed. #238 (same day): the
+lever adjudicates EVERYTHING by default (--no-force-adjudicate opts out)
+after the first prod dry-run kept the exact re-spawn source article via
+cheap strong-corroboration. **Applied on prod:** wonder 11/11 articles +
+the $650M round; terrafirma 9/9 + the $100M round (operator note: the
+terrafirma verdicts looked self-destructive until the live site settled
+it — catalog-terrafirma is a sensing-DRONE company, the $115M belongs to
+a SpaceX-alumni heavy-equipment TerraFirma; three same-named entities in
+one slug's history). The two live guard crons so far: 35 adjudications,
+30 wrong-entity drops (all five wonder GN re-ingests among them), 0
+errors. Possible false drop to eyeball: reo-dev "Reo.Dev Raises $11.3M"
+(aggregator source) — a golden-set fixture candidate.
+
 **NEXT QUEUE (in order):**
-1. **Verify the re-heal + watch the guard** — /c/wonder.md, /c/terrafirma.md,
-   /c/wave.md after ISR (~6h; applies ran ~12:00 UTC 07-18): wonder should
-   show NO $650M round/total and active status; terrafirma no $115M
-   anywhere (its stated total was already null — the page's $115M was the
-   computed round sum); wave active. Watch the guard counters in the next
-   few 3h-cron step summaries (`articles_adjudicated` /
-   `articles_skipped_wrong_entity` / `articles_skipped_guard_error`;
-   failure alerting #227 opens an issue on stage errors). If a food-Wonder
-   article slips PAST the guard (LLM misjudges), that's a golden-set
-   fixture, not a re-purge-only event.
+1. **Verify pages after ISR** — /c/wonder.md (no $650M anywhere, active
+   status, empty timeline is CORRECT — the edtech has no real coverage),
+   /c/terrafirma.md (no $115M/$100M), /c/wave.md (active). Watch guard
+   counters in cron step summaries; a wrong article slipping PAST the
+   guard is a golden-set fixture, not a re-purge-only event.
 2. **Golden set for article_subject_match** — register in
    `nous/evals/prompts.py`, author fixtures from the probe's real cases
    (food-Wonder, Primary Wave, IM8-bespoke, TerraFirma-Inc, plus
