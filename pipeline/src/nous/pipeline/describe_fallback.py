@@ -131,6 +131,7 @@ class DescribeFallbackSummary(BaseModel):
     # Apply-mode counters (0 in dry-run).
     persisted: int = 0  # description_short written (grounded, non-low, claim-checked)
     skipped_already_described: int = 0  # re-check found description_short already set
+    stale_cleared: int = 0  # fallback rows cleared on a distrust-class null re-adjudication
     # Non-US side-finding: slugs whose produced description reads non-US (a dumb
     # country-adjective/city regex, no LLM) — persisted normally, surfaced for
     # the ops exclusion flow.
@@ -393,6 +394,8 @@ async def _persist_company(
     to_persist: str | None,
     long_to_persist: str | None,
     summary: DescribeFallbackSummary,
+    *,
+    clear_stale: bool = False,
 ) -> None:
     """Apply-mode write for one company: optional description + version stamp; commit.
 
@@ -442,6 +445,31 @@ async def _persist_company(
             summary.persisted += 1
         else:
             summary.skipped_already_described += 1
+    elif clear_stale:
+        # A fallback row re-adjudicated to a DISTRUST-class null (entity
+        # ambiguity, or content the current gates can't verify): the standing
+        # description is text this version won't stand behind — clear it
+        # rather than display it (review catch). Availability-class nulls
+        # (insufficient/funding-only evidence) deliberately KEEP the old
+        # description: it was grounded when written and the evidence may be
+        # transiently thinner (e.g. a wikidata fetch failure this run).
+        cleared = (
+            await session.execute(
+                update(Company)
+                .where(
+                    Company.id == company.id,
+                    Company.description_source == "fallback",
+                )
+                .values(
+                    description_short=None,
+                    description_long=None,
+                    description_source=None,
+                )
+                .returning(Company.id)
+            )
+        ).scalar_one_or_none()
+        if cleared is not None:
+            summary.stale_cleared += 1
     company.describe_fallback_prompt_version = PROMPT_VERSION
     await session.commit()
 
@@ -546,7 +574,13 @@ async def run_describe_fallback(
             article_blocks = [_article_block(a) for a in survivors]
 
             evidence = _assemble_evidence(wiki_lines, article_blocks)
-            evidence_sources = (1 if wiki_lines else 0) + len(survivors)
+            # DISTINCT sources: wikidata plus distinct article HOSTS (two
+            # articles from one outlet are one source — the long-profile
+            # evidence bar must mean three independent voices; review catch).
+            survivor_hosts = {
+                h for a in survivors if (h := hostname(a.url)) is not None
+            }
+            evidence_sources = (1 if wiki_lines else 0) + len(survivor_hosts)
 
             if not evidence.strip():
                 # No wikidata hit AND no surviving article → nothing to ground a
@@ -612,8 +646,21 @@ async def run_describe_fallback(
             # a described outcome still stamps — richer evidence can only have
             # agreed). Persistent guard errors re-bill ~$0.0005/run — accepted.
             if not dry_run and not (to_persist is None and had_guard_error):
+                # Distrust-class nulls (possibly-wrong-entity or unverifiable
+                # content) clear a standing fallback description; availability-
+                # class nulls keep it (see _persist_company).
+                distrust_null = to_persist is None and sample.null_reason in (
+                    "entity_ambiguity",
+                    "descriptor_not_in_evidence",
+                    "claims_not_grounded",
+                )
                 await _persist_company(
-                    session, company, to_persist, long_to_persist, summary
+                    session,
+                    company,
+                    to_persist,
+                    long_to_persist,
+                    summary,
+                    clear_stale=distrust_null,
                 )
 
     logger.info(

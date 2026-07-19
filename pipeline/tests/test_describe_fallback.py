@@ -233,6 +233,30 @@ def test_adjudicate_discards_ungrounded_descriptor_echo() -> None:
     assert to_persist is None
 
 
+def test_long_dies_with_stage_level_short_rejection() -> None:
+    """KEY TRAP (review catch): a result carrying BOTH a short and a long must
+    lose the long too when the SHORT fails a stage-level check (descriptor not
+    in evidence) — the validator never saw the failure, so the stage must
+    drop both."""
+    summary = DescribeFallbackSummary(dry_run=True, prompt_version="t")
+    result = DescribeFallbackResult(
+        description_short="Acme makes quantum widgets.",
+        grounding_descriptor="quantum widget maker",  # NOT in the evidence
+        confidence="high",
+        null_reason=None,
+        description_long=(
+            "Acme is a quantum widget maker. It sells widgets to labs."
+        ),
+    )
+    evidence = "Wikidata description: an aerospace company (source: url)"
+    _sample, to_persist, long_to_persist = _adjudicate_result(
+        "Acme", "acme", result, evidence, 3, summary
+    )
+    assert to_persist is None
+    assert long_to_persist is None
+    assert summary.long_written == 0
+
+
 def test_adjudicate_discards_ungrounded_claim_m1() -> None:
     """M1: descriptor grounds but the sentence as a whole drifts past evidence."""
     summary = DescribeFallbackSummary(dry_run=True, prompt_version="t")
@@ -964,6 +988,109 @@ async def test_apply_refreshes_own_fallback_stopgap(
     )
     assert co.description_source == "fallback"
     assert co.describe_fallback_prompt_version == PROMPT_VERSION
+
+
+@pytestmark_db
+async def test_distrust_null_clears_stale_fallback(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Review catch: a fallback row re-adjudicated to a DISTRUST-class null
+    (entity_ambiguity here) loses its stale description — text the current
+    version won't stand behind must not keep rendering."""
+    co = _co(
+        "Ambiguoco",
+        description_short="Stale fallback tagline.",
+        description_long="Stale fallback prose.",
+        description_source="fallback",
+        describe_fallback_prompt_version="2026-01-01.1",
+    )
+    db.add(co)
+    await db.commit()
+
+    monkeypatch.setattr(
+        df,
+        "WikidataClient",
+        _fake_wikidata(
+            {"Ambiguoco": _facts("Ambiguoco", "American software company")}
+        ),
+    )
+    monkeypatch.setattr(
+        df,
+        "complete_json",
+        AsyncMock(
+            return_value=DescribeFallbackResult(
+                description_short=None,
+                grounding_descriptor=None,
+                confidence="low",
+                null_reason="entity_ambiguity",
+            )
+        ),
+    )
+
+    summary = await run_describe_fallback(db, user_agent=_UA, limit=20, dry_run=False)
+
+    assert summary.stale_cleared == 1
+    await db.refresh(co)
+    assert co.description_short is None
+    assert co.description_long is None
+    assert co.description_source is None
+    assert co.describe_fallback_prompt_version == PROMPT_VERSION
+
+
+@pytestmark_db
+async def test_availability_null_keeps_stale_fallback(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The retention half (intentional): an AVAILABILITY-class null
+    (insufficient_evidence — e.g. a transient wikidata miss thinned the
+    evidence) keeps the previously-grounded description; only the stamp
+    advances."""
+    co = _co(
+        "Keepco",
+        description_short="Previously grounded tagline.",
+        description_source="fallback",
+        describe_fallback_prompt_version="2026-01-01.1",
+    )
+    db.add(co)
+    await db.flush()
+    db.add(
+        NewsArticle(
+            company_id=co.id,
+            url="https://news.example/keepco",
+            title="Keepco raises a round",
+            source="news.example",
+            raw_content="Keepco announced a financing round today.",
+        )
+    )
+    await db.commit()
+
+    monkeypatch.setattr(df, "WikidataClient", _fake_wikidata({}))
+    monkeypatch.setattr(
+        df,
+        "check_article_entity",
+        AsyncMock(return_value=GuardDecision(attach=True, reason="ok")),
+    )
+    monkeypatch.setattr(
+        df,
+        "complete_json",
+        AsyncMock(
+            return_value=DescribeFallbackResult(
+                description_short=None,
+                grounding_descriptor=None,
+                confidence="low",
+                null_reason="insufficient_evidence",
+            )
+        ),
+    )
+
+    summary = await run_describe_fallback(db, user_agent=_UA, limit=20, dry_run=False)
+
+    assert summary.stale_cleared == 0
+    await db.refresh(co)
+    assert co.description_short == "Previously grounded tagline."
+    assert co.description_source == "fallback"
+    assert co.describe_fallback_prompt_version == PROMPT_VERSION
+
 
 
 @pytestmark_db

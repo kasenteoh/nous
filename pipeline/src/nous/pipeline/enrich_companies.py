@@ -448,7 +448,13 @@ async def run_enrich_companies(
         # the own-site description would inherit stale third-party provenance —
         # wrongly gated out of meta/JSON-LD and falsely attributed on-page.
         # The blue-origin trajectory: fallback-described first, own-site
-        # description supersedes once the scrape lands.
+        # description supersedes once the scrape lands. A fallback-written
+        # LONG must go too (review catch): the describe call below only
+        # writes description_long on success, so leaving the old one would
+        # let third-party prose survive under the own-site "Summary written
+        # by nous from the company's website" attribution — a false claim.
+        if company.description_source == "fallback":
+            company.description_long = None
         company.description_source = None
         company.primary_category = description.primary_category
         company.tags = normalized_tags
