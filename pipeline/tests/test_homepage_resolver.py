@@ -188,13 +188,22 @@ def test_aggregator_hosts_contains_news_publishers() -> None:
         "nytimes.com",
         "cnbc.com",
         "cnn.com",
+        "ft.com",
         "marketwatch.com",
+        "barrons.com",
+        "fool.com",
         "msn.com",
+        "aol.com",
         "yahoo.com",
         "news.google.com",
         "theverge.com",
         "venturebeat.com",
         "geekwire.com",
+        "theglobeandmail.com",
+        "washingtonpost.com",
+        "latimes.com",
+        "theguardian.com",
+        "apnews.com",
     }
     missing = required - AGGREGATOR_HOSTS
     assert not missing, f"Missing from AGGREGATOR_HOSTS: {missing}"
@@ -209,7 +218,10 @@ def test_is_article_url_rejects_dated_paths_on_any_host() -> None:
     )
     # Unlisted long-tail outlet: caught by path shape alone.
     assert is_article_url("https://techcentral.ie/2025/3/blue-origin-seeks-10bn/")
+    # /YYYY/M with no trailing segment is INTENTIONALLY matched — a dated
+    # archive index is still never a homepage (review-documented edge).
     assert is_article_url("https://example.com/2024/12")
+    assert is_article_url("https://example.com/2024/4")
 
 
 def test_is_article_url_accepts_real_homepages_and_normal_paths() -> None:
@@ -221,6 +233,10 @@ def test_is_article_url_accepts_real_homepages_and_normal_paths() -> None:
     assert not is_article_url("https://acme.com/2026/annual-report")
     # Product paths with big numeric segments don't false-match.
     assert not is_article_url("https://acme.com/model/2088")
+    # Invalid months (0, 13+) are NOT dates — numeric non-date schemes pass.
+    assert not is_article_url("https://acme.com/2026/0/x")
+    assert not is_article_url("https://acme.com/2026/13/x")
+    assert not is_article_url("https://acme.com/2026/99")
 
 
 # ---------------------------------------------------------------------------

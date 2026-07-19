@@ -147,7 +147,13 @@ _INFRA_PATH_COMPILED: re.Pattern[str] = re.compile(r"^/cdn-cgi(/|$)")
 # sources look like. is_article_url must only ever gate HOMEPAGE-candidate
 # surfaces (resolver, fallback re-mining, article outbound links, wrong-website
 # repair selection).
-_ARTICLE_PATH_COMPILED: re.Pattern[str] = re.compile(r"^/20\d{2}/\d{1,2}(/|$)")
+# Month restricted to 1-12 (with or without a leading zero) so a numeric
+# non-date path like /2026/99/... never false-matches; /YYYY/M with no
+# trailing segment still matches deliberately — that's an archive/article
+# index, not a homepage.
+_ARTICLE_PATH_COMPILED: re.Pattern[str] = re.compile(
+    r"^/20\d{2}/(0?[1-9]|1[0-2])(/|$)"
+)
 
 
 def is_aggregator_host(host: str) -> bool:
