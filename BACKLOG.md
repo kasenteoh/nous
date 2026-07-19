@@ -818,11 +818,21 @@ description-less, in order:
 - **Website-less residue [blocked on data]**: the re-mining pool is
   EXHAUSTED (2026-07-19 backfill dispatch: seen=0) — no Wikidata P856, no
   minable article link. Re-measure as scrape/discovery coverage grows.
-- **Structured-describe fallback ("A") [product call — owner]**: the ONLY
-  description path for the two unscrapable cohorts. Previously dropped
-  (2026-07-12, marginal + off-page description_short compliance gap). If
-  the "no missing data" mandate extends to these pages, re-open husk-style
-  with the three required fixes from the worklog.
+- ~~**Structured-describe fallback ("A")**~~ — **SHIPPED end-to-end
+  (#243 probe / #244 apply+0045 / #245 live goldens / #246 web gating /
+  #247 supersede path) and BACKFILLED 2026-07-19**: 246 descriptions
+  persisted across 4 batches (1,079-cohort drained; 0 errors; ~$0.35
+  total). Remaining description-less ≈ 830 rows are the evidence-less
+  residue (no Wikidata entity, no corroborated coverage) — honest empties;
+  re-measure as coverage grows.
+- **Non-US suspects from the fallback descriptions [S, ops queue]**: the
+  backfill's dumb-regex flag surfaced shown companies whose own grounded
+  descriptions read non-US — verify each, then ops exclude-company
+  (reason non_us): zepto, clio, personio, oyo, groww, pine-labs,
+  craftsvilla, net-a-porter, netlog, onefinestay, altair-semiconductor,
+  axonius, bitstrips, bold-security, buddybuild, crew, jive, linear(?),
+  manifest-law, outright, samples(?) — the (?) ones look like
+  false-positive regex hits; eyeball before excluding anything.
 
 ### Deliberately deferred — with reasons
 - **Accounts/auth** — localStorage watchlists cover the consumer need; auth adds
