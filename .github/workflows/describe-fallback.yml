@@ -1,0 +1,94 @@
+name: describe-fallback
+
+# Manual lever for the describe-fallback PROBE, against the production DB. This
+# is a PAID (DeepSeek) stage — hence DEEPSEEK_API_KEY in env — that writes a
+# third-party-grounded description_short ONLY for the unscrapable/website-less
+# residue, gated hard to Wikidata + entity-guard-corroborated news evidence.
+# It also needs SEC_USER_AGENT: the Wikidata client sends the contact-email
+# User-Agent on every call. No local environment holds DATABASE_URL or the
+# DeepSeek key, so Actions is the only place this runs against real companies.
+#
+# TODAY only the DRY-RUN path exists: it runs the whole pipeline (cohort →
+# evidence → LLM → post-validation) and prints a yield table (grounded-describe
+# rate, confidence mix, funding-only-null leakage, descriptor-in-evidence
+# holding, and the $ spend) WITHOUT writing anything — the evidence gate before
+# the persisting apply path (a later PR with its own migration) is built.
+# Dispatching with dry_run=false is REFUSED loudly here; it never reaches the
+# CLI.
+#
+# Example (25-company dry run — the default):
+#   gh workflow run describe-fallback.yml -f dry_run=true -f limit=25
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Dry run: probe + print the yield table without writing (only supported mode today)."
+        required: false
+        type: boolean
+        default: true
+      limit:
+        description: "Max unscrapable-residue companies to probe."
+        required: false
+        type: string
+        default: "25"
+
+permissions:
+  contents: read
+
+# The apply path will mutate companies.description_short — serialize with every
+# other DB-touching workflow (the cron, discovery, ops) even though the dry run
+# only reads, so it never contends for the free-tier connection pool.
+concurrency:
+  group: nous-pipeline-db
+  cancel-in-progress: false
+
+jobs:
+  describe-fallback:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: pipeline
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      # The PAID line: the describe call hits DeepSeek per company with evidence.
+      # The key lives only in Actions secrets (never locally), like enrichment.
+      DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+      # The Wikidata client sends this contact-email User-Agent on every request.
+      SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39 # v3
+
+      - name: Install dependencies
+        run: uv sync
+
+      - name: Apply migrations
+        # Keeps prod at head before the run. Safe: only migrations already merged
+        # to the default branch exist in this checkout.
+        run: uv run alembic upgrade head
+
+      - name: Run describe-fallback
+        env:
+          OP_DRY_RUN: ${{ inputs.dry_run }}
+          OP_LIMIT: ${{ inputs.limit }}
+        # Inputs pass through env vars (never string-interpolated into the
+        # script). dry_run=false is refused HERE (apply path not built) rather
+        # than passed to the CLI. The stage writes its markdown yield table +
+        # LLM-usage block to $GITHUB_STEP_SUMMARY itself; the JSON summary lands
+        # in the run log. pipefail so a failing `uv run` surfaces as a failed step.
+        run: |
+          set -o pipefail
+          if [ "$OP_DRY_RUN" != "true" ]; then
+            echo "::error::apply path not built — probe only. Re-run with dry_run=true." >&2
+            exit 1
+          fi
+          ARGS=(--limit "${OP_LIMIT:-25}" --dry-run)
+          uv run nous describe-fallback "${ARGS[@]}"
