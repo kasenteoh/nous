@@ -23,7 +23,7 @@ from selectolax.parser import HTMLParser
 from nous.sources._http import DomainThrottle, ThrottledHTTPClient
 from nous.sources.duckduckgo import DuckDuckGoSearch, is_aggregator
 from nous.sources.parked import looks_parked
-from nous.sources.reject_hosts import is_aggregator_url
+from nous.sources.reject_hosts import is_aggregator_url, is_article_url
 from nous.sources.robots import RobotsBlockedError, RobotsCache
 from nous.util.ssrf import (
     BlockedAddressError,
@@ -393,8 +393,9 @@ async def resolve_homepage(
 
         # Reject known startup-directory and aggregator hosts (e.g. a TLD
         # guess that accidentally hits tracxn.com or theorg.com).  Also
-        # rejects any URL whose path looks like a directory listing.
-        if is_aggregator_url(result.url):
+        # rejects any URL whose path looks like a directory listing, and
+        # dated-article paths on ANY host (never a homepage).
+        if is_aggregator_url(result.url) or is_article_url(result.url):
             continue
 
         # Require the company name to appear in a *strong* position — the page
@@ -421,9 +422,13 @@ async def resolve_homepage(
         candidates = []
 
     for candidate_url in candidates:
-        # Reject known aggregator hosts and directory-path patterns BEFORE
-        # fetching — saves a round-trip for the common case.
-        if is_aggregator(candidate_url) or is_aggregator_url(candidate_url):
+        # Reject known aggregator hosts, directory-path patterns, and
+        # dated-article paths BEFORE fetching — saves a round-trip.
+        if (
+            is_aggregator(candidate_url)
+            or is_aggregator_url(candidate_url)
+            or is_article_url(candidate_url)
+        ):
             continue
         if canonical_domain(candidate_url) in rejected_domains:
             continue
@@ -438,8 +443,8 @@ async def resolve_homepage(
             continue
         if looks_parked(result.content):
             continue
-        # Post-fetch: also reject aggregator URLs returned by redirects.
-        if is_aggregator_url(result.url):
+        # Post-fetch: also reject aggregator/article URLs returned by redirects.
+        if is_aggregator_url(result.url) or is_article_url(result.url):
             continue
         # Require strong-position match (title or h1) — same criterion as
         # Phase 1; body-only mentions are not sufficient.

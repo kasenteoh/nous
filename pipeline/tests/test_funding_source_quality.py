@@ -55,6 +55,17 @@ def test_aggregator_hosts_are_rejected(url: str) -> None:
     assert _is_junk_source_url(url), f"Expected {url!r} to be rejected as aggregator"
 
 
+def test_dated_article_path_alone_is_NOT_junk_for_funding_sources() -> None:
+    """Load-bearing seam: is_article_url (dated /YYYY/MM/ paths) gates ONLY
+    homepage-candidate surfaces. The funding-source junk gate must keep
+    accepting dated article URLs on unlisted outlets — they are the legitimate
+    shape of most round sources. If this starts failing, someone wired
+    is_article_url into is_aggregator_url / _is_junk_source_url."""
+    assert not _is_junk_source_url(
+        "https://smalloutlet.example/2026/07/08/acme-raises-40m/"
+    )
+
+
 # ---------------------------------------------------------------------------
 # Company own-sites — must NOT be rejected
 # ---------------------------------------------------------------------------

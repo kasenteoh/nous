@@ -46,7 +46,7 @@ from sqlalchemy.orm.exc import StaleDataError
 from nous.db.models import Company, NewsArticle
 from nous.sources.article_links import extract_outbound_links, select_company_link
 from nous.sources.news import NewsClient, RobotsBlockedError
-from nous.sources.reject_hosts import is_aggregator_url
+from nous.sources.reject_hosts import is_aggregator_url, is_article_url
 from nous.sources.wikidata import WikidataClient
 from nous.util.ssrf import BlockedAddressError
 from nous.util.url import canonical_domain, hostname, is_storable_website
@@ -157,7 +157,7 @@ def _accept(candidate: _Candidate, rejected_domains: frozenset[str]) -> bool:
     """Shared final gates applied to any source's candidate (defense in depth)."""
     if not is_storable_website(candidate.website):
         return False
-    if is_aggregator_url(candidate.website):
+    if is_aggregator_url(candidate.website) or is_article_url(candidate.website):
         return False
     domain = canonical_domain(candidate.website)
     return domain is not None and domain not in rejected_domains
