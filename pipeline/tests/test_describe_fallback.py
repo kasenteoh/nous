@@ -699,6 +699,59 @@ async def test_guard_rejected_article_excluded_from_evidence(
 
 
 @pytestmark_db
+async def test_suspect_article_adjudicated_not_dropped(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The .3-run catch: a TITLE-CASE headline ("Blue Origin Secures …") reads
+    as an extended-entity phrase to the body-calibrated cheap heuristic. Such
+    a suspect must be ADJUDICATED (force_adjudicate=True so the no-profile
+    fast path can't auto-attach), not silently dropped — a vindicated article
+    survives into evidence."""
+    co = _co("Blue Origin")
+    db.add(co)
+    await db.flush()
+    db.add(
+        NewsArticle(
+            company_id=co.id,
+            url="https://news.google.com/rss/articles/blue-origin-raise",
+            title="Blue Origin Secures Ten Billion In Outside Funding",
+            source="Reuters",
+            raw_content="",
+        )
+    )
+    await db.commit()
+
+    seen_kwargs: dict[str, object] = {}
+
+    async def fake_guard(company, **kwargs):  # type: ignore[no-untyped-def]
+        seen_kwargs.update(kwargs)
+        return GuardDecision(attach=True, adjudicated=True, reason="llm-match")
+
+    monkeypatch.setattr(df, "WikidataClient", _fake_wikidata({}))
+    monkeypatch.setattr(df, "check_article_entity", fake_guard)
+    monkeypatch.setattr(
+        df,
+        "complete_json",
+        AsyncMock(
+            return_value=DescribeFallbackResult(
+                description_short=None,
+                grounding_descriptor=None,
+                confidence="low",
+                null_reason="insufficient_evidence",
+            )
+        ),
+    )
+
+    summary = await run_describe_fallback(db, user_agent=_UA, limit=20, dry_run=True)
+
+    assert summary.suspects_adjudicated == 1
+    assert seen_kwargs.get("force_adjudicate") is True
+    # The vindicated article became evidence: the describe LLM was called.
+    assert summary.llm_calls == 1
+    assert summary.guard_dropped == 0
+
+
+@pytestmark_db
 async def test_guard_error_never_stamps(
     db: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:

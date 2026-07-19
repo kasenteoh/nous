@@ -132,6 +132,7 @@ class DescribeFallbackSummary(BaseModel):
     persisted: int = 0  # description_short written (grounded, non-low, claim-checked)
     skipped_already_described: int = 0  # re-check found description_short already set
     stale_cleared: int = 0  # fallback rows cleared on a distrust-class null re-adjudication
+    suspects_adjudicated: int = 0  # cheap-suspect articles escalated to LLM adjudication
     # Non-US side-finding: slugs whose produced description reads non-US (a dumb
     # country-adjective/city regex, no LLM) — persisted normally, surfaced for
     # the ops exclusion flow.
@@ -353,25 +354,42 @@ async def _surviving_articles(
         cheap = best_corroboration(
             company.name, None, combined, own_context=own_context or None
         )
+        force_adjudicate = False
         if not cheap.suspect:
             summary.articles_corroborated += 1
         else:
-            # A wrong-entity shape the cheap layer is confident about — drop it
-            # without spending an LLM call.
-            summary.guard_dropped += 1
+            # A suspect shape is ADJUDICATED, never silently dropped (the
+            # guard's own philosophy — .3-run catch: TITLE-CASE headlines
+            # ("Blue Origin Secures $10B First External Raise") read as
+            # extended-entity phrases to the body-calibrated heuristic and
+            # dropped blue-origin's OWN coverage, starving the evidence).
+            # force_adjudicate bypasses the guard's no-profile auto-attach so
+            # the LLM actually decides; a wrong-entity article still dies,
+            # a title-case false-suspect survives. ~$0.0005/article.
+            force_adjudicate = True
+            summary.suspects_adjudicated += 1
             logger.info(
-                "describe-fallback: corroboration dropped article for %s: %s",
+                "describe-fallback: corroboration suspect — adjudicating "
+                "article for %s: %s",
                 company.slug,
                 title[:90],
             )
-            continue
 
-        # Layer 2: the entity guard (belt-and-suspenders; mostly no-profile attach).
+        # Layer 2: the entity guard. Non-suspect articles take the cheap
+        # no-profile attach; cheap-suspect articles are FORCE-adjudicated by
+        # the LLM (see above). A tripped rate-limit circuit means a suspect
+        # CANNOT be adjudicated this run — that's an error-class skip (the
+        # company must not stamp; the article is neither vindicated nor
+        # condemned), not a drop.
+        if force_adjudicate and summary.guard_rate_limited:
+            summary.guard_errors += 1
+            continue
         decision = await check_article_entity(
             company,
             title=title,
             text=body,
             allow_llm=not summary.guard_rate_limited,
+            force_adjudicate=force_adjudicate,
         )
         if decision.rate_limited:
             summary.guard_rate_limited = True
