@@ -7,6 +7,34 @@ authoritative history), then `BACKLOG.md` (annotated with what shipped; its
 **"2026-07-17 post-surgery QA sweep"** section is the active work queue).
 The plan docs under `docs/superpowers/plans/` are historical context.
 
+## LATEST UPDATE — describe-fallback probe CLEARED on prod (2026-07-19, PR #243 + run 29700550554)
+
+Owner approved re-opening the structured-describe fallback (full: Wikidata +
+guarded news). #243 shipped the dry-run probe; the prod run (25 marquee
+description-less companies) came back: **18/25 described (72%), 0 errors,
+$0.013 total (~$0.0005/company → full 1,079-cohort backfill ≈ $0.60)**.
+Every gate fired correctly in the wild: 2 ungrounded descriptor echoes
+caught by post-validation (hinge-health, helion → null), lime nulled as
+entity_ambiguity (the dictionary-word class), digital-asset/cdata nulled
+no_nonfunding_descriptor (funding-only evidence). Sample quality high
+(perplexity/fivetran/clio/cockroach-labs accurate + neutral).
+**GO for the apply slice** — next session build order:
+1. Migration (head 0044→0045): description provenance stamp
+   (`description_source` 'website'|'fallback' + `describe_fallback_prompt_version`
+   stamp column per the career-history idempotency pattern).
+2. Apply path in the stage (persist described+non-low-confidence only) +
+   golden set for the prompt (probe samples are fixture candidates).
+3. Web PR — fix #1: attribution line variant ("written by nous from
+   Wikidata / press coverage") + gate fallback descriptions OUT of
+   meta/OG/FAQ-JSON-LD/.md-lead/cards (leak map: #243 worklog entry
+   + the scout report in BACKLOG's residue section).
+4. Backfill dispatch batched (~$0.60 total), then re-check data-quality
+   description completeness (baseline 66.5%).
+**Side-finding:** the probe surfaces NON-US companies hiding in the shown
+cohort (zepto "Indian quick-commerce… Bengaluru", clio "Canadian") — feed
+these to the exclusion ops flow rather than describing them; consider a
+probe-summary flag in the apply PR.
+
 ## LATEST UPDATE — missing-data sweep: news-article-as-website healing (2026-07-19, PR #242 + ops)
 
 Owner mandate: "we can't have missing data." Findings + actions:
