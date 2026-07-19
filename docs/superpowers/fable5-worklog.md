@@ -2451,3 +2451,45 @@ Owner: "let's do it" (the QA P0s). Both adversarially reviewed (APPROVE).
   with the description they clear (review parity).
 - Review APPROVE; test pins the full trajectory (fallback row + pages →
   enrich → own-site description, provenance NULL). Suite 1249 green.
+
+## PR #248 — feat: evidence-proportional LONG fallback profiles (prompt 2026-07-19.2)
+
+- describe-fallback gains an OPTIONAL, evidence-proportional description_long
+  (1–2 grounded paragraphs) beside the tagline. PROMPT_VERSION bumped
+  2026-07-19.1 → 2026-07-19.2 (re-selects the stamped cohort).
+  DescribeFallbackResult.description_long defaults None so #245's committed
+  recordings (no such key) still parse; a live re-record via eval-record.yml
+  follows post-merge (golden scorer/recordings untouched here beyond parsing).
+- Validator gates: a long is nulled without a tagline to ride on; over its
+  own cap (new MAX_LONG_CHARS=1400) it nulls the LONG ONLY (short kept).
+- Evidence budget raised for profiles: article excerpt 400→800,
+  MAX_EVIDENCE_CHARS 6000→9000 (names unchanged, adjusted in place).
+- RICH-EVIDENCE BAR (code, not prose): a long is accepted only with ≥ 3
+  distinct evidence_sources (wikidata counts as one) → else dropped
+  (long_below_evidence_bar), short unaffected. M1 claim-grounding
+  (_claim_is_grounded, same floor) also applied to the long; failure drops
+  the LONG only (long_claims_not_grounded). Long only considered on the
+  persist path (a grounded, non-low tagline).
+- Persist: the atomic UPDATE also sets description_long, and its WHERE widens
+  `description_short IS NULL` → `(description_short IS NULL OR
+  description_source='fallback')` so fallback may refresh its OWN stopgap on a
+  version re-run; an own-site description (source NULL + short present) stays
+  untouchable (pinned by the never-overwrite test). Selection widened the same
+  way (keeps shown + no-readable-own-page + version gate — an own-site
+  description_long implies scraped pages, so it can't enter the cohort).
+- Summary gains long_written / long_below_evidence_bar /
+  long_claims_not_grounded; samples gain a (truncated) description_long and a
+  Profile column in the yield table.
+- Web (same PR — attribution must deploy before any long profile exists):
+  /c/[slug] About attribution reads "Profile written by nous from Wikidata and
+  press coverage" for a fallback long (own-site "Summary…" line unchanged); the
+  .md About section appends an inline "*Profile written by nous from Wikidata
+  and press coverage.*" for a fallback long (own-site unchanged). #246's
+  FAQ/meta/OG/short-blockquote gating untouched; the tagline rider stays
+  unconditional on the fallback path.
+- Verify green: pipeline ruff/mypy clean, pytest 1257 passed / 680 skipped
+  (DB-gated); web lint clean, vitest 465 passed, build compiles. DB-gated
+  persist/refresh/never-overwrite tests run in CI Postgres.
+- NEXT: live golden re-record (eval-record.yml) to replace #245's recordings
+  with description_long populated, and gate M1 in the scorer at that re-record;
+  then a batched apply run to backfill long profiles on rich-evidence residue.

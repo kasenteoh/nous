@@ -76,12 +76,18 @@ _MIN_RAW_PAGE_CHARS = 200
 # every survivor costs an entity-guard adjudication.
 _MAX_ARTICLES_PER_COMPANY = 6
 
-# Per-article excerpt length in the evidence block. Descriptors live in the
-# headline + lede; a few hundred chars carry them without burning the budget.
-_ARTICLE_EXCERPT_CHARS = 400
+# Per-article excerpt length in the evidence block. Raised 400→800 for the
+# optional LONG profile (2026-07-19.2): a grounded multi-paragraph profile
+# needs more than the headline + lede a tagline lives on. The combined block is
+# still capped by MAX_EVIDENCE_CHARS.
+_ARTICLE_EXCERPT_CHARS = 800
 
 # Safety cap on the per-company sample list when --limit is unbounded.
 _MAX_SAMPLES = 50
+
+# How much of an accepted LONG profile to echo into the yield-table sample —
+# enough to eyeball its register/grounding without bloating the summary jsonb.
+_SAMPLE_LONG_CHARS = 200
 
 
 class CompanySample(BaseModel):
@@ -91,6 +97,7 @@ class CompanySample(BaseModel):
     evidence_sources: int = 0  # distinct citations fed to the LLM (wikidata + articles)
     wikidata: bool = False  # a Wikidata facts hit contributed evidence
     description_short: str | None = None
+    description_long: str | None = None  # accepted LONG profile, truncated for the table
     grounding_descriptor: str | None = None
     confidence: str | None = None
     null_reason: str | None = None  # why no (persistable) description, when so
@@ -111,6 +118,9 @@ class DescribeFallbackSummary(BaseModel):
     skipped_no_evidence: int = 0  # no wikidata hit AND no surviving article → no call
     llm_calls: int = 0
     described: int = 0  # produced a grounded (descriptor-checked) description
+    long_written: int = 0  # accepted an evidence-proportional LONG profile
+    long_below_evidence_bar: int = 0  # long dropped: < 3 distinct evidence sources
+    long_claims_not_grounded: int = 0  # M1: long content words absent from evidence
     null_no_descriptor: int = 0  # model returned null: no non-funding descriptor
     null_insufficient: int = 0  # model returned null: insufficient evidence
     null_ambiguity: int = 0  # model returned null: entity ambiguity
@@ -381,6 +391,7 @@ async def _persist_company(
     session: AsyncSession,
     company: Company,
     to_persist: str | None,
+    long_to_persist: str | None,
     summary: DescribeFallbackSummary,
 ) -> None:
     """Apply-mode write for one company: optional description + version stamp; commit.
@@ -388,22 +399,36 @@ async def _persist_company(
     Stamps ``describe_fallback_prompt_version`` (the caller only reaches here
     for a COMPLETED adjudication or a clean skipped-no-evidence, both of which
     must not re-select next run). When ``to_persist`` is a description, the
-    write is a single conditional ``UPDATE … WHERE description_short IS NULL``
-    — atomic check-and-set, so even a concurrent enrich write between selection
-    and persist cannot be overwritten (review catch: the prior select-then-set
-    left a TOCTOU window; the Actions concurrency group masks it today, but the
-    guard shouldn't depend on deployment topology). One commit per company (the
-    enrich_companies pattern), so a mid-run crash leaves earlier companies
+    write is a single conditional ``UPDATE … WHERE (description_short IS NULL OR
+    description_source = 'fallback')`` — atomic check-and-set. The WHERE is
+    widened from the original ``description_short IS NULL`` so the stage may
+    REFRESH its OWN stopgap on a prompt re-run (a fallback row), while an
+    own-site description (``description_source`` NULL with a non-null
+    ``description_short``) can never match and stays untouchable — the moat rule
+    that own-website content is never overwritten by third-party-grounded text.
+    ``description_long`` is set alongside (to the accepted profile or NULL, so a
+    refreshed fallback row never keeps a stale long). One commit per company
+    (the enrich_companies pattern), so a mid-run crash leaves earlier companies
     durably stamped/written.
     """
     if to_persist is not None:
-        # Never overwrite, atomically: the row qualifies only while
-        # description_short is still NULL at UPDATE time.
+        # Atomic check-and-set: refresh a fresh (NULL) or own-fallback row;
+        # never an own-site description (source NULL + short present).
         written = (
             await session.execute(
                 update(Company)
-                .where(Company.id == company.id, Company.description_short.is_(None))
-                .values(description_short=to_persist, description_source="fallback")
+                .where(
+                    Company.id == company.id,
+                    or_(
+                        Company.description_short.is_(None),
+                        Company.description_source == "fallback",
+                    ),
+                )
+                .values(
+                    description_short=to_persist,
+                    description_long=long_to_persist,
+                    description_source="fallback",
+                )
                 .returning(Company.id)
             )
         ).scalar_one_or_none()
@@ -424,9 +449,12 @@ async def run_describe_fallback(
 ) -> DescribeFallbackSummary:
     """Third-party-grounded descriptions for the unscrapable residue.
 
-    Cohort: shown companies (``exclusion_reason IS NULL``) with NO description
-    (``description_short`` and ``description_long`` both NULL), NO readable own
-    page (no ``raw_pages`` row with >= ``_MIN_RAW_PAGE_CHARS`` of content), AND
+    Cohort: shown companies (``exclusion_reason IS NULL``) that are either
+    description-less (``description_short IS NULL``) OR carry this stage's own
+    fallback stopgap (``description_source = 'fallback'``, refreshable on a
+    prompt re-run), NO readable own page (no ``raw_pages`` row with >=
+    ``_MIN_RAW_PAGE_CHARS`` of content — so an own-site ``description_long``,
+    which implies scraped pages, is never in-cohort), AND
     whose ``describe_fallback_prompt_version`` is NULL or below the current
     ``PROMPT_VERSION`` (version-gated idempotency — a prompt bump re-selects
     everyone, stamped rows never re-bill). Prominence-ordered so a bounded
@@ -456,8 +484,16 @@ async def run_describe_fallback(
         select(Company)
         .where(
             Company.exclusion_reason.is_(None),
-            Company.description_short.is_(None),
-            Company.description_long.is_(None),
+            # Fresh residue (no description) OR a fallback row eligible to
+            # refresh its own stopgap on a prompt re-run. An own-site
+            # description (source NULL + short present) is excluded here and,
+            # belt-and-suspenders, by the persist WHERE. The no-readable-own-
+            # page clause below means an own-site description_long (which
+            # implies scraped pages) can never enter the cohort either.
+            or_(
+                Company.description_short.is_(None),
+                Company.description_source == "fallback",
+            ),
             not_(
                 exists().where(
                     RawPage.company_id == Company.id,
@@ -520,7 +556,7 @@ async def run_describe_fallback(
                 # so it isn't re-billed; a prompt bump re-selects it anyway. A
                 # skip caused by a guard LLM error does NOT stamp (re-eligible).
                 if not dry_run and not had_guard_error:
-                    await _persist_company(session, company, None, summary)
+                    await _persist_company(session, company, None, None, summary)
                 continue
 
             prompt = build_prompt(company_name=company.name, evidence=evidence)
@@ -544,8 +580,13 @@ async def run_describe_fallback(
                 continue
             summary.llm_calls += 1
 
-            sample, to_persist = _adjudicate_result(
-                company.name, company.slug, result, evidence, summary
+            sample, to_persist, long_to_persist = _adjudicate_result(
+                company.name,
+                company.slug,
+                result,
+                evidence,
+                evidence_sources,
+                summary,
             )
             sample.evidence_sources = evidence_sources
             sample.wikidata = bool(wiki_lines)
@@ -562,11 +603,14 @@ async def run_describe_fallback(
             # a described outcome still stamps — richer evidence can only have
             # agreed). Persistent guard errors re-bill ~$0.0005/run — accepted.
             if not dry_run and not (to_persist is None and had_guard_error):
-                await _persist_company(session, company, to_persist, summary)
+                await _persist_company(
+                    session, company, to_persist, long_to_persist, summary
+                )
 
     logger.info(
         "describe-fallback: cohort=%d wikidata_hits=%d articles_seen=%d "
         "corroborated=%d guard_dropped=%d llm_calls=%d described=%d "
+        "long_written=%d long_below_bar=%d long_not_grounded=%d "
         "descriptor_not_in_evidence=%d claims_not_grounded=%d low_conf=%d "
         "skipped_no_evidence=%d persisted=%d skipped_already_described=%d "
         "non_us_suspects=%d errors=%d dry_run=%s",
@@ -577,6 +621,9 @@ async def run_describe_fallback(
         summary.guard_dropped,
         summary.llm_calls,
         summary.described,
+        summary.long_written,
+        summary.long_below_evidence_bar,
+        summary.long_claims_not_grounded,
         summary.descriptor_not_in_evidence,
         summary.claims_not_grounded,
         summary.low_confidence,
@@ -590,14 +637,47 @@ async def run_describe_fallback(
     return summary
 
 
+def _adjudicate_long(
+    company_name: str,
+    description_long: str,
+    evidence: str,
+    evidence_sources: int,
+    sample: CompanySample,
+    summary: DescribeFallbackSummary,
+) -> str | None:
+    """Post-validate an optional LONG profile into the profile-to-persist.
+
+    Reached ONLY on the persist path (a grounded, non-low-confidence tagline),
+    so a profile is only ever considered when it will actually be written. Two
+    evidence-proportional gates, both dropping the LONG ONLY (the short stands):
+
+    1. **rich-evidence bar** — a multi-paragraph profile is licensed only by
+       genuinely rich evidence: at least THREE distinct sources (Wikidata counts
+       as one). Below the bar → ``long_below_evidence_bar``.
+    2. **token-level claim check (M1)** — the same ``_claim_is_grounded`` floor
+       the short passes, applied to the whole profile so a fluent paraphrase
+       that drifts past the evidence is caught → ``long_claims_not_grounded``.
+    """
+    if evidence_sources < 3:
+        summary.long_below_evidence_bar += 1
+        return None
+    if not _claim_is_grounded(description_long, company_name, evidence):
+        summary.long_claims_not_grounded += 1
+        return None
+    summary.long_written += 1
+    sample.description_long = truncate_to_chars(description_long, _SAMPLE_LONG_CHARS)
+    return description_long
+
+
 def _adjudicate_result(
     company_name: str,
     slug: str,
     result: DescribeFallbackResult,
     evidence: str,
+    evidence_sources: int,
     summary: DescribeFallbackSummary,
-) -> tuple[CompanySample, str | None]:
-    """Post-validate one LLM result into (sample, description-to-persist).
+) -> tuple[CompanySample, str | None, str | None]:
+    """Post-validate one LLM result into (sample, short-to-persist, long-to-persist).
 
     The prompt's own validator already dropped a description missing its
     descriptor / over length. Here two MOAT checks back it, both against the
@@ -610,11 +690,13 @@ def _adjudicate_result(
        descriptor but invents the rest of the clause is caught
        (``claims_not_grounded`` otherwise).
 
-    The returned string is the description to PERSIST — non-None only for a
-    grounded, claim-checked, non-low-confidence description. ``low`` confidence
-    is tallied and surfaced but never persisted. A produced description that
-    reads non-US is flagged in ``non_us_suspects`` (persisted normally — the flag
-    is for the ops exclusion flow, it does not block the write).
+    The first returned string is the SHORT description to PERSIST — non-None only
+    for a grounded, claim-checked, non-low-confidence description. The second is
+    the optional LONG profile to persist (see ``_adjudicate_long``), considered
+    only on the persist path. ``low`` confidence is tallied and surfaced but
+    never persisted (neither short nor long). A produced description that reads
+    non-US is flagged in ``non_us_suspects`` (persisted normally — the flag is
+    for the ops exclusion flow, it does not block the write).
     """
     sample = CompanySample(slug=slug)
     if result.description_short is not None:
@@ -622,13 +704,13 @@ def _adjudicate_result(
             # The echo is not grounded in the evidence — discard it.
             summary.descriptor_not_in_evidence += 1
             sample.null_reason = "descriptor_not_in_evidence"
-            return sample, None
+            return sample, None, None
         if not _claim_is_grounded(result.description_short, company_name, evidence):
             # The descriptor grounds but the sentence as a whole drifts past the
             # evidence — discard it (M1).
             summary.claims_not_grounded += 1
             sample.null_reason = "claims_not_grounded"
-            return sample, None
+            return sample, None, None
         summary.described += 1
         sample.description_short = result.description_short
         sample.grounding_descriptor = result.grounding_descriptor
@@ -637,8 +719,21 @@ def _adjudicate_result(
             summary.non_us_suspects.append(slug)
         if result.confidence == "low":
             summary.low_confidence += 1
-            return sample, None  # described but never persisted
-        return sample, result.description_short
+            return sample, None, None  # described but never persisted (nor its long)
+        # Only a persistable (non-low) tagline gets an optional LONG profile.
+        long_to_persist = (
+            _adjudicate_long(
+                company_name,
+                result.description_long,
+                evidence,
+                evidence_sources,
+                sample,
+                summary,
+            )
+            if result.description_long is not None
+            else None
+        )
+        return sample, result.description_short, long_to_persist
 
     # The model returned an explicit null — record its reason.
     reason = result.null_reason or "insufficient_evidence"
@@ -649,7 +744,7 @@ def _adjudicate_result(
         summary.null_ambiguity += 1
     else:
         summary.null_insufficient += 1
-    return sample, None
+    return sample, None, None
 
 
 def render_yield_table(summary: DescribeFallbackSummary) -> str:
@@ -679,6 +774,13 @@ def render_yield_table(summary: DescribeFallbackSummary) -> str:
     lines.append(f"- **LLM calls:** {summary.llm_calls}")
     lines.append(
         f"- **Described (grounded):** {summary.described} ({described_pct:.0f}% of cohort)"
+    )
+    lines.append(
+        f"- **Long profiles written (evidence-proportional):** {summary.long_written}"
+    )
+    lines.append(
+        f"- **Long dropped — below evidence bar / claims not grounded:** "
+        f"{summary.long_below_evidence_bar} / {summary.long_claims_not_grounded}"
     )
     lines.append(
         f"- **Low-confidence (would NOT persist):** {summary.low_confidence}"
@@ -714,17 +816,20 @@ def render_yield_table(summary: DescribeFallbackSummary) -> str:
     lines.append("- **Cost:** see the LLM-usage block below (DeepSeek, paid).")
     lines.append("")
     lines.append("### Per-company detail")
-    lines.append("| Company | Sources | WD | Description | Descriptor | Conf | Null |")
-    lines.append("|---|--:|:--:|---|---|:--:|---|")
+    lines.append(
+        "| Company | Sources | WD | Description | Profile | Descriptor | Conf | Null |"
+    )
+    lines.append("|---|--:|:--:|---|---|---|:--:|---|")
     for s in summary.samples:
         wd = "✓" if s.wikidata else ""
         desc = (s.description_short or "—").replace("|", "\\|")
+        profile = (s.description_long or "—").replace("|", "\\|").replace("\n", " ")
         descriptor = (s.grounding_descriptor or "—").replace("|", "\\|")
         conf = s.confidence or "—"
         null = s.null_reason or ""
         lines.append(
             f"| {s.slug} | {s.evidence_sources} | {wd} | {desc} "
-            f"| {descriptor} | {conf} | {null} |"
+            f"| {profile} | {descriptor} | {conf} | {null} |"
         )
     if summary.dry_run:
         lines.append("")

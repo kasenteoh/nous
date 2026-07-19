@@ -652,10 +652,11 @@ export default async function CompanyPage({ params }: Props) {
         {/* Attribution rider for a describe-fallback description (migration
             0045): the tagline was written by nous from third-party evidence,
             not the company's own site, so it carries an honest source line —
-            mirroring the About section's attribution style. Fallback rows have
-            no description_long, so the About attribution line never renders for
-            them; this rider is their ONLY attribution surface and must not be
-            dropped. */}
+            mirroring the About section's attribution style. This rider attributes
+            the TAGLINE specifically; a fallback row that also has a description_long
+            gets a parallel "Profile written by nous…" line in the About section
+            (2026-07-19.2), but the tagline still needs its own attribution here,
+            so this rider is unconditional on the fallback path. */}
         {company.description_short && isFallbackDescription(company) && (
           <p className="mt-1 font-mono text-xs text-ink-muted">
             Description written by nous from Wikidata and press coverage
@@ -760,14 +761,20 @@ export default async function CompanyPage({ params }: Props) {
         <section className="mb-12">
           <h2 className="text-lg font-semibold text-ink mb-4">About</h2>
           <Markdown>{company.description_long}</Markdown>
-          {/* Honest attribution for the LLM-drafted summary. It's written by
-              nous from several scraped pages of the company's own site, so we
-              don't attribute it to a single source hostname (that would
-              misrepresent a multi-page synthesis as one citation). The
-              enrichment date is appended when known. Genuine per-fact source
-              links (funding / news / people) live in the Sources section. */}
+          {/* Honest attribution for the LLM-drafted summary. An own-website
+              profile is synthesized from several scraped pages of the company's
+              own site, so it isn't attributed to a single source hostname (that
+              would misrepresent a multi-page synthesis as one citation). A
+              describe-fallback profile (description_source === 'fallback',
+              migration 0045) is instead grounded in third-party evidence
+              (Wikidata + press coverage), so it carries THAT attribution — the
+              same honest-provenance rule, different source. The enrichment date
+              is appended when known. Genuine per-fact source links (funding /
+              news / people) live in the Sources section. */}
           <p className="mt-4 font-mono text-xs text-ink-muted">
-            Summary written by nous from the company&apos;s website
+            {isFallbackDescription(company)
+              ? "Profile written by nous from Wikidata and press coverage"
+              : "Summary written by nous from the company’s website"}
             {company.last_enriched_at &&
               ` · ${formatDate(company.last_enriched_at)}`}
           </p>

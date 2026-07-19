@@ -50,16 +50,24 @@ from pydantic import BaseModel, Field, model_validator
 # Stamped into the run summary now and, once the apply path lands, into the
 # provenance stamp column. Scheme "<date>.<same-day-counter>"; bump on ANY
 # semantic change to the template or schema.
-PROMPT_VERSION: str = "2026-07-19.1"
+PROMPT_VERSION: str = "2026-07-19.2"
 
 # Cap on the combined evidence block (wikidata facts + article excerpts).
 # Descriptors live in headlines/ledes; more text costs tokens without adding
-# identity signal, and long inputs invite paraphrase drift.
-MAX_EVIDENCE_CHARS: int = 6000
+# identity signal, and long inputs invite paraphrase drift. Raised from 6000
+# to 9000 for the optional evidence-proportional LONG profile (2026-07-19.2):
+# a grounded 1–2 paragraph profile needs more of the corroborated coverage in
+# front of the model than a tagline does.
+MAX_EVIDENCE_CHARS: int = 9000
 
 # Hard cap enforced by the validator, mirroring the site's existing
 # description_short lengths (tagline-sized, card-safe).
 MAX_DESCRIPTION_CHARS: int = 260
+
+# Hard cap on the optional LONG profile (2026-07-19.2), validator-enforced like
+# MAX_DESCRIPTION_CHARS. Sized for 1–2 grounded paragraphs; a longer body is
+# padding by construction, so over-cap nulls the long (never the short).
+MAX_LONG_CHARS: int = 1400
 
 
 class DescribeFallbackResult(BaseModel):
@@ -72,6 +80,21 @@ class DescribeFallbackResult(BaseModel):
             "and does, supported ONLY by the evidence shown. Null when the "
             "evidence lacks a non-funding product/business descriptor, is "
             "too thin, or may describe a different same-named entity."
+        ),
+    )
+    # OPTIONAL evidence-proportional profile (2026-07-19.2). DEFAULT None so the
+    # #245 live recordings — committed before this field existed — still parse
+    # (they carry no ``description_long`` key); a live re-record via
+    # eval-record.yml follows after merge.
+    description_long: str | None = Field(
+        default=None,
+        description=(
+            "OPTIONAL. One or two present-tense, neutral-register paragraphs "
+            "expanding on what the company IS and does, supported ONLY by the "
+            "evidence shown. EVERY claim must be traceable to the evidence. No "
+            "funding amounts, valuations, or investor names. Null (the default) "
+            "whenever the evidence cannot support multiple grounded paragraphs "
+            "— a padded profile is worse than none."
         ),
     )
     grounding_descriptor: str | None = Field(
@@ -112,24 +135,39 @@ class DescribeFallbackResult(BaseModel):
     def _enforce_gates(self) -> DescribeFallbackResult:
         """Code-level enforcement of the prompt's own rules (never trust
         prose alone): a description requires its grounding descriptor; a
-        null requires its reason; length is card-safe."""
+        null requires its reason; length is card-safe. The optional LONG
+        profile is nulled when it has no tagline to ride on, or when it
+        exceeds its own cap (the short is kept in the over-cap case)."""
         if self.description_short is not None:
             if not (self.grounding_descriptor or "").strip():
                 # No descriptor evidence echoed -> the non-funding bar was
                 # not met; drop to an honest null rather than keep a
-                # possibly-ungrounded description.
+                # possibly-ungrounded description. A long profile is invalid
+                # without its tagline, so it goes too.
                 self.description_short = None
                 self.grounding_descriptor = None
+                self.description_long = None
                 self.null_reason = "no_nonfunding_descriptor"
                 return self
             if len(self.description_short) > MAX_DESCRIPTION_CHARS:
                 self.description_short = None
                 self.grounding_descriptor = None
+                self.description_long = None
                 self.null_reason = "insufficient_evidence"
                 return self
             self.null_reason = None
-        elif self.null_reason is None:
-            self.null_reason = "insufficient_evidence"
+            # The LONG profile is a valid rider ONLY on a valid tagline (true
+            # here). Over-cap nulls the LONG ONLY — the short tagline stands.
+            if (
+                self.description_long is not None
+                and len(self.description_long) > MAX_LONG_CHARS
+            ):
+                self.description_long = None
+        else:
+            # A profile without a tagline is invalid: null the long.
+            self.description_long = None
+            if self.null_reason is None:
+                self.null_reason = "insufficient_evidence"
         return self
 
 
@@ -170,6 +208,13 @@ DIFFERENT company with the same or a similar name (different field, \
 different location than the profile suggests, a fuller different name), \
 return null with null_reason "entity_ambiguity".
 6. Better no description than a guessed one. Null is a correct answer.
+7. OPTIONAL "description_long": ONLY when the evidence is rich enough to \
+support one or two present-tense, neutral paragraphs where EVERY claim is \
+traceable to the evidence above. Same bans as the short: no funding amounts, \
+valuations, or investor names. Max {max_long_chars} characters. This profile \
+is optional — return null for it (the default) whenever the evidence cannot \
+support multiple grounded paragraphs. A padded or guessed profile is worse \
+than none. The rules for description_short are UNCHANGED by this option.
 
 Return JSON matching the schema."""
 
@@ -185,4 +230,5 @@ def build_prompt(*, company_name: str, evidence: str) -> str:
         company_name=company_name,
         evidence=evidence,
         max_chars=MAX_DESCRIPTION_CHARS,
+        max_long_chars=MAX_LONG_CHARS,
     )

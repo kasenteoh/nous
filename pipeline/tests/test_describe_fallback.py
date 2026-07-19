@@ -22,12 +22,15 @@ from nous.db.models import Company, NewsArticle, RawPage
 from nous.llm.client import LLMError
 from nous.llm.prompts.describe_fallback import (
     MAX_EVIDENCE_CHARS,
+    MAX_LONG_CHARS,
     PROMPT_VERSION,
     DescribeFallbackResult,
 )
 from nous.pipeline import describe_fallback as df
 from nous.pipeline.describe_fallback import (
+    CompanySample,
     DescribeFallbackSummary,
+    _adjudicate_long,
     _adjudicate_result,
     _assemble_evidence,
     _claim_is_grounded,
@@ -140,6 +143,53 @@ def test_model_validator_nulls_overlong_description() -> None:
     assert result.null_reason == "insufficient_evidence"
 
 
+# ── pure: LONG-profile validator gates (2026-07-19.2) ────────────────────────
+
+
+def test_validator_nulls_long_without_short() -> None:
+    """A profile without a tagline is invalid: the descriptor gate nulls the
+    short, and the long must go with it (a long can never ride alone)."""
+    result = DescribeFallbackResult(
+        description_short=None,  # no tagline
+        description_long="A grounded two-paragraph profile.",
+        grounding_descriptor=None,
+        confidence="high",
+        null_reason=None,
+    )
+    assert result.description_short is None
+    assert result.description_long is None
+    assert result.null_reason == "insufficient_evidence"
+
+
+def test_validator_nulls_overlong_long_keeps_short() -> None:
+    """Over-cap nulls the LONG ONLY — the short tagline stands."""
+    result = DescribeFallbackResult(
+        description_short="Acme builds rockets.",
+        description_long="A" * (MAX_LONG_CHARS + 1),
+        grounding_descriptor="spaceflight company",
+        confidence="high",
+        null_reason=None,
+    )
+    assert result.description_short == "Acme builds rockets."
+    assert result.description_long is None
+    assert result.null_reason is None
+
+
+def test_recordings_compat_without_description_long_key() -> None:
+    """#245's live recordings predate description_long and carry no such key;
+    the field DEFAULTS to None so they still parse."""
+    result = DescribeFallbackResult(
+        description_short="Anthropic is an AI safety and research company.",
+        grounding_descriptor="AI safety and research company",
+        confidence="high",
+        null_reason=None,
+    )
+    assert result.description_long is None
+    assert result.description_short == (
+        "Anthropic is an AI safety and research company."
+    )
+
+
 def test_adjudicate_described_when_descriptor_grounded() -> None:
     summary = DescribeFallbackSummary(dry_run=True, prompt_version="t")
     result = DescribeFallbackResult(
@@ -152,7 +202,9 @@ def test_adjudicate_described_when_descriptor_grounded() -> None:
         "Wikidata description: American aerospace manufacturer that designs, "
         "launches, and builds rockets (source: url)"
     )
-    sample, to_persist = _adjudicate_result("SpaceX", "spacex", result, evidence, summary)
+    sample, to_persist, _long = _adjudicate_result(
+        "SpaceX", "spacex", result, evidence, 3, summary
+    )
     assert summary.described == 1
     assert summary.descriptor_not_in_evidence == 0
     assert sample.description_short == "SpaceX designs and launches aerospace rockets."
@@ -171,7 +223,9 @@ def test_adjudicate_discards_ungrounded_descriptor_echo() -> None:
         null_reason=None,
     )
     evidence = "Wikidata description: an aerospace company (source: url)"
-    sample, to_persist = _adjudicate_result("Acme", "acme", result, evidence, summary)
+    sample, to_persist, _long = _adjudicate_result(
+        "Acme", "acme", result, evidence, 3, summary
+    )
     assert summary.described == 0
     assert summary.descriptor_not_in_evidence == 1
     assert sample.description_short is None
@@ -194,7 +248,9 @@ def test_adjudicate_discards_ungrounded_claim_m1() -> None:
         null_reason=None,
     )
     evidence = "Wikidata description: American aerospace manufacturer (source: url)"
-    sample, to_persist = _adjudicate_result("Acme", "acme", result, evidence, summary)
+    sample, to_persist, _long = _adjudicate_result(
+        "Acme", "acme", result, evidence, 3, summary
+    )
     assert summary.described == 0
     assert summary.claims_not_grounded == 1
     assert sample.null_reason == "claims_not_grounded"
@@ -210,7 +266,9 @@ def test_adjudicate_low_confidence_not_persisted() -> None:
         null_reason=None,
     )
     evidence = "Wikidata description: maker of aerospace parts (source: url)"
-    sample, to_persist = _adjudicate_result("Acme", "acme", result, evidence, summary)
+    sample, to_persist, _long = _adjudicate_result(
+        "Acme", "acme", result, evidence, 3, summary
+    )
     assert summary.described == 1
     assert summary.low_confidence == 1
     assert sample.confidence == "low"
@@ -230,11 +288,113 @@ def test_adjudicate_flags_non_us_suspect_but_still_persists() -> None:
         "Wikidata description: Indian fintech lending platform for consumers "
         "(source: url)"
     )
-    sample, to_persist = _adjudicate_result("Acme", "acme-in", result, evidence, summary)
+    sample, to_persist, _long = _adjudicate_result(
+        "Acme", "acme-in", result, evidence, 3, summary
+    )
     assert summary.described == 1
     assert summary.non_us_suspects == ["acme-in"]
     # Flagged but still returned to persist normally.
     assert to_persist == "Acme is an Indian fintech lending platform."
+
+
+# ── pure: LONG-profile evidence-proportional gates (2026-07-19.2) ────────────
+
+_LONG_EVIDENCE = (
+    "Wikidata description: American aerospace manufacturer that designs, "
+    "launches, and builds rockets (source: url)"
+)
+_GROUNDED_SHORT = "Acme is an American aerospace manufacturer."
+_GROUNDED_LONG = (
+    "Acme is an American aerospace manufacturer. It designs, launches, and "
+    "builds rockets."
+)
+
+
+def _grounded_result_with_long(long: str | None) -> DescribeFallbackResult:
+    return DescribeFallbackResult(
+        description_short=_GROUNDED_SHORT,
+        description_long=long,
+        grounding_descriptor="aerospace manufacturer",
+        confidence="high",
+        null_reason=None,
+    )
+
+
+def test_long_below_evidence_bar_dropped_two_sources() -> None:
+    """The rich-evidence bar: < 3 distinct sources drops the LONG, keeps the short."""
+    summary = DescribeFallbackSummary(dry_run=True, prompt_version="t")
+    sample, to_persist, long_to_persist = _adjudicate_result(
+        "Acme", "acme", _grounded_result_with_long(_GROUNDED_LONG),
+        _LONG_EVIDENCE, 2, summary,
+    )
+    assert to_persist == _GROUNDED_SHORT  # short survives
+    assert long_to_persist is None  # long dropped below the bar
+    assert summary.long_below_evidence_bar == 1
+    assert summary.long_written == 0
+    assert sample.description_long is None
+
+
+def test_long_accepted_at_three_sources() -> None:
+    """At the bar (3 sources) a grounded LONG profile is accepted and persisted."""
+    summary = DescribeFallbackSummary(dry_run=True, prompt_version="t")
+    sample, to_persist, long_to_persist = _adjudicate_result(
+        "Acme", "acme", _grounded_result_with_long(_GROUNDED_LONG),
+        _LONG_EVIDENCE, 3, summary,
+    )
+    assert to_persist == _GROUNDED_SHORT
+    assert long_to_persist == _GROUNDED_LONG
+    assert summary.long_written == 1
+    assert summary.long_below_evidence_bar == 0
+    assert sample.description_long == _GROUNDED_LONG  # short enough not to truncate
+
+
+def test_long_claim_grounding_drop_keeps_short() -> None:
+    """M1 on the long: a profile drifting past the evidence drops the LONG only."""
+    summary = DescribeFallbackSummary(dry_run=True, prompt_version="t")
+    drifting = (
+        "Acme operates deep-sea mining vessels and pharmaceutical laboratories "
+        "across three continents."
+    )
+    sample, to_persist, long_to_persist = _adjudicate_result(
+        "Acme", "acme", _grounded_result_with_long(drifting),
+        _LONG_EVIDENCE, 3, summary,
+    )
+    assert to_persist == _GROUNDED_SHORT  # short unaffected
+    assert long_to_persist is None
+    assert summary.long_claims_not_grounded == 1
+    assert summary.long_written == 0
+
+
+def test_long_not_evaluated_for_low_confidence() -> None:
+    """A low-confidence tagline never persists, so its long is not even considered."""
+    summary = DescribeFallbackSummary(dry_run=True, prompt_version="t")
+    result = DescribeFallbackResult(
+        description_short=_GROUNDED_SHORT,
+        description_long=_GROUNDED_LONG,
+        grounding_descriptor="aerospace manufacturer",
+        confidence="low",
+        null_reason=None,
+    )
+    sample, to_persist, long_to_persist = _adjudicate_result(
+        "Acme", "acme", result, _LONG_EVIDENCE, 5, summary
+    )
+    assert to_persist is None
+    assert long_to_persist is None
+    assert summary.long_written == 0
+    assert summary.long_below_evidence_bar == 0
+
+
+def test_adjudicate_long_truncates_sample() -> None:
+    """The accepted long is echoed into the sample truncated (yield-table budget)."""
+    summary = DescribeFallbackSummary(dry_run=True, prompt_version="t")
+    sample = CompanySample(slug="acme")
+    # A long, fully-grounded profile: every content word is a repeat of an
+    # evidence token, so M1 passes regardless of length.
+    long = ("aerospace manufacturer rockets " * 40).strip()
+    kept = _adjudicate_long("Acme", long, _LONG_EVIDENCE, 3, sample, summary)
+    assert kept == long  # the FULL text is persisted
+    assert sample.description_long is not None
+    assert len(sample.description_long) <= 205  # truncated for the sample only
 
 
 def test_adjudicate_maps_null_reasons() -> None:
@@ -250,7 +410,9 @@ def test_adjudicate_maps_null_reasons() -> None:
             confidence="low",
             null_reason=reason,  # type: ignore[arg-type]
         )
-        sample, to_persist = _adjudicate_result("X", "x", result, "evidence", summary)
+        sample, to_persist, _long = _adjudicate_result(
+            "X", "x", result, "evidence", 3, summary
+        )
         assert getattr(summary, attr) == 1
         assert sample.null_reason == reason
         assert to_persist is None
@@ -678,6 +840,132 @@ async def test_apply_persists_description_source_and_stamp(
     assert co.describe_fallback_prompt_version == PROMPT_VERSION
 
 
+def _grounded_aerospace_llm_with_long() -> object:
+    """Like ``_grounded_aerospace_llm`` but also returns a grounded LONG profile
+    (every content word lives in the aerospace evidence)."""
+
+    async def fake(
+        prompt: str, model: type[DescribeFallbackResult]
+    ) -> DescribeFallbackResult:
+        if "aerospace" in prompt.lower():
+            return DescribeFallbackResult(
+                description_short=(
+                    "Rocketwerks is an American aerospace manufacturer of "
+                    "launch vehicles."
+                ),
+                description_long=(
+                    "Rocketwerks is an American aerospace manufacturer of "
+                    "launch vehicles. It designs and builds rockets."
+                ),
+                grounding_descriptor="aerospace manufacturer",
+                confidence="high",
+                null_reason=None,
+            )
+        return DescribeFallbackResult(
+            description_short=None,
+            grounding_descriptor=None,
+            confidence="low",
+            null_reason="insufficient_evidence",
+        )
+
+    return fake
+
+
+@pytestmark_db
+async def test_apply_persists_long_profile_on_rich_evidence(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """>= 3 distinct evidence sources (wikidata + two surviving articles) → the
+    grounded LONG profile is written alongside the short + provenance."""
+    co = _co("Rocketwerks")
+    db.add(co)
+    await db.flush()
+    for n in range(2):
+        db.add(
+            NewsArticle(
+                company_id=co.id,
+                url=f"https://news.example/rocketwerks-{n}",
+                title="Rocketwerks builds rockets",
+                source="news.example",
+                raw_content=(
+                    "Rocketwerks, the aerospace manufacturer, designs and "
+                    "builds launch vehicles and rockets."
+                ),
+            )
+        )
+    await db.commit()
+
+    monkeypatch.setattr(
+        df,
+        "WikidataClient",
+        _fake_wikidata(
+            {
+                "Rocketwerks": _facts(
+                    "Rocketwerks",
+                    "American aerospace manufacturer of launch vehicles",
+                )
+            }
+        ),
+    )
+    monkeypatch.setattr(df, "complete_json", _grounded_aerospace_llm_with_long())
+
+    summary = await run_describe_fallback(db, user_agent=_UA, limit=20, dry_run=False)
+
+    assert summary.persisted == 1
+    assert summary.long_written == 1
+    await db.refresh(co)
+    assert co.description_short == (
+        "Rocketwerks is an American aerospace manufacturer of launch vehicles."
+    )
+    assert co.description_long == (
+        "Rocketwerks is an American aerospace manufacturer of launch "
+        "vehicles. It designs and builds rockets."
+    )
+    assert co.description_source == "fallback"
+
+
+@pytestmark_db
+async def test_apply_refreshes_own_fallback_stopgap(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A row carrying THIS stage's own fallback stopgap at an OLDER prompt
+    version re-selects and its description is refreshed (the widened
+    WHERE (description_short IS NULL OR description_source='fallback'))."""
+    co = _co(
+        "Rocketwerks",
+        description_short="Stale fallback tagline.",
+        description_source="fallback",
+        describe_fallback_prompt_version="2026-01-01.1",
+    )
+    db.add(co)
+    await db.commit()
+
+    monkeypatch.setattr(
+        df,
+        "WikidataClient",
+        _fake_wikidata(
+            {
+                "Rocketwerks": _facts(
+                    "Rocketwerks",
+                    "American aerospace manufacturer of launch vehicles",
+                )
+            }
+        ),
+    )
+    monkeypatch.setattr(df, "complete_json", _grounded_aerospace_llm())
+
+    summary = await run_describe_fallback(db, user_agent=_UA, limit=20, dry_run=False)
+
+    assert summary.cohort_selected == 1
+    assert summary.persisted == 1  # refreshed, not skipped
+    await db.refresh(co)
+    assert co.description_short == (
+        "Rocketwerks is an American aerospace manufacturer of launch vehicles."
+    )
+    assert co.description_source == "fallback"
+    assert co.describe_fallback_prompt_version == PROMPT_VERSION
+
+
 @pytestmark_db
 async def test_apply_is_idempotent_second_run_selects_nothing(
     db: AsyncSession, monkeypatch: pytest.MonkeyPatch
@@ -823,7 +1111,9 @@ async def test_persist_company_never_overwrites_existing_description(
     await db.commit()
 
     summary = DescribeFallbackSummary(dry_run=False, prompt_version=PROMPT_VERSION)
-    await _persist_company(db, co, "A fallback description that must NOT win.", summary)
+    await _persist_company(
+        db, co, "A fallback description that must NOT win.", None, summary
+    )
 
     assert summary.persisted == 0
     assert summary.skipped_already_described == 1
