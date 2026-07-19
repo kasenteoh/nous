@@ -1,9 +1,10 @@
 {
   "provenance": "deepseek",
   "model": "deepseek-chat",
-  "recorded_at": "2026-07-19T20:08:28+00:00",
+  "recorded_at": "2026-07-19T21:53:23+00:00",
   "response": {
     "description_short": "Wiz is a cloud security platform that scans cloud environments for misconfigurations and vulnerabilities.",
+    "description_long": null,
     "grounding_descriptor": "cloud security platform",
     "confidence": "high",
     "null_reason": null
