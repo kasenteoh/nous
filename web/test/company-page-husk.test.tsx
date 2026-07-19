@@ -123,9 +123,9 @@ describe("company page husk placeholder", () => {
     expect(
       screen.queryByText(/built a full profile yet/),
     ).not.toBeInTheDocument();
-    // The timeline (funding rounds + news) renders instead.
+    // The funding rail renders instead.
     expect(
-      screen.getByRole("heading", { name: "Timeline" }),
+      screen.getByRole("heading", { name: "Funding" }),
     ).toBeInTheDocument();
   });
 
@@ -141,6 +141,101 @@ describe("company page husk placeholder", () => {
       screen.queryByText(/built a full profile yet/),
     ).not.toBeInTheDocument();
     expect(screen.getByText("Builds robots.")).toBeInTheDocument();
+  });
+});
+
+// ─── Funding / news split (2026-07-18 design) ────────────────────────────────
+// The page calls buildTimeline once, splits by kind, and owns the both-empty
+// line; each section omits itself when empty.
+
+describe("company page funding/news split", () => {
+  const seriesA = {
+    id: "r1",
+    company_id: "c-husk",
+    round_type: "Series A",
+    amount_raised: 10_000_000,
+    valuation_post_money: null,
+    valuation_source: null,
+    announced_date: "2026-01-15",
+    primary_news_url: null,
+    extraction_confidence: null,
+    created_at: "2026-01-16T00:00:00Z",
+    updated_at: "2026-01-16T00:00:00Z",
+    leadInvestors: [],
+    otherInvestors: [],
+  };
+  // Far outside the Series A's ±14d window → a standalone story.
+  const standaloneStory = {
+    id: "n1",
+    url: "https://reuters.com/ipo-chatter",
+    title: "Acme mulls IPO",
+    source: "reuters.com",
+    published_date: "2026-06-01",
+    funding_round_id: null,
+  };
+
+  it("renders Funding then In the news, in that order", async () => {
+    vi.mocked(getCompanyBySlug).mockResolvedValue(
+      detail({ fundingRounds: [seriesA], news: [standaloneStory] }),
+    );
+    await renderCompanyPage();
+
+    const headings = screen
+      .getAllByRole("heading")
+      .map((h) => h.textContent ?? "");
+    expect(headings.indexOf("Funding")).toBeGreaterThanOrEqual(0);
+    expect(headings.indexOf("In the news")).toBeGreaterThan(
+      headings.indexOf("Funding"),
+    );
+    expect(
+      screen.queryByText("No funding rounds or news recorded yet."),
+    ).not.toBeInTheDocument();
+  });
+
+  it("omits In the news when every article is round coverage or absent", async () => {
+    vi.mocked(getCompanyBySlug).mockResolvedValue(
+      detail({ fundingRounds: [seriesA] }),
+    );
+    await renderCompanyPage();
+
+    expect(
+      screen.getByRole("heading", { name: "Funding" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("heading", { name: "In the news" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("omits Funding and renders news alone when there are no rounds", async () => {
+    vi.mocked(getCompanyBySlug).mockResolvedValue(
+      detail({ news: [standaloneStory] }),
+    );
+    await renderCompanyPage();
+
+    expect(
+      screen.queryByRole("heading", { name: "Funding" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: "In the news" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("link", { name: "Acme mulls IPO" }),
+    ).toBeInTheDocument();
+  });
+
+  it("shows the single both-empty line when there are no rounds and no news", async () => {
+    vi.mocked(getCompanyBySlug).mockResolvedValue(detail());
+    await renderCompanyPage();
+
+    expect(
+      screen.getByText("No funding rounds or news recorded yet."),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("heading", { name: "Funding" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("heading", { name: "In the news" }),
+    ).not.toBeInTheDocument();
   });
 });
 

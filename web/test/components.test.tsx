@@ -2,7 +2,9 @@ import { render, screen, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { CompanyCard } from "@/components/CompanyCard";
 import { Competitors } from "@/components/Competitors";
-import { EventTimeline } from "@/components/EventTimeline";
+import { FundingTimeline, type FundingItem } from "@/components/FundingTimeline";
+import { NewsSection, type NewsItem } from "@/components/NewsSection";
+import { buildTimeline } from "@/lib/timeline";
 import { Investors } from "@/components/Investors";
 import {
   MOMENTUM_BADGE_THRESHOLD,
@@ -183,7 +185,7 @@ describe("Competitors", () => {
   });
 });
 
-// ─── EventTimeline ────────────────────────────────────────────────────────────
+// ─── FundingTimeline + NewsSection (the 2026-07-18 split) ─────────────────────
 
 function newsArticle(
   overrides: Partial<NewsArticleRow> = {},
@@ -200,22 +202,30 @@ function newsArticle(
   };
 }
 
-describe("EventTimeline", () => {
-  it("renders the empty state when there are no rounds or news", () => {
-    render(<EventTimeline rounds={[]} news={[]} />);
-    expect(
-      screen.getByText("No funding rounds or news recorded yet."),
-    ).toBeInTheDocument();
-  });
+/** The page's split: buildTimeline once, then by kind. */
+function splitTimeline(rounds: FundingRoundWithInvestors[], news: NewsArticleRow[]) {
+  const items = buildTimeline(rounds, news);
+  return {
+    funding: items.filter(
+      (item): item is FundingItem => item.kind === "funding",
+    ),
+    news: items.filter((item): item is NewsItem => item.kind === "news"),
+  };
+}
 
+describe("FundingTimeline", () => {
   it("marks only low-confidence rounds with the warning pill", () => {
     render(
-      <EventTimeline
-        rounds={[
-          round({ round_type: "Seed", extraction_confidence: "low" }),
-          round({ round_type: "Series B", extraction_confidence: "high" }),
-        ]}
-        news={[]}
+      <FundingTimeline
+        items={
+          splitTimeline(
+            [
+              round({ round_type: "Seed", extraction_confidence: "low" }),
+              round({ round_type: "Series B", extraction_confidence: "high" }),
+            ],
+            [],
+          ).funding
+        }
       />,
     );
     const pills = screen.getAllByText("low confidence");
@@ -230,9 +240,8 @@ describe("EventTimeline", () => {
 
   it("shows the rounded amount with the exact dollars in the title attribute", () => {
     render(
-      <EventTimeline
-        rounds={[round({ amount_raised: 15_100_000 })]}
-        news={[]}
+      <FundingTimeline
+        items={splitTimeline([round({ amount_raised: 15_100_000 })], []).funding}
       />,
     );
     const amount = screen.getByText("$15.1M");
@@ -241,9 +250,11 @@ describe("EventTimeline", () => {
 
   it("shows the post-money valuation with its exact-dollar title", () => {
     render(
-      <EventTimeline
-        rounds={[round({ valuation_post_money: 1_500_000_000 })]}
-        news={[]}
+      <FundingTimeline
+        items={
+          splitTimeline([round({ valuation_post_money: 1_500_000_000 })], [])
+            .funding
+        }
       />,
     );
     const valuation = screen.getByText("$1.5B");
@@ -252,13 +263,17 @@ describe("EventTimeline", () => {
 
   it("truncates long other-investor lists to three names and a count", () => {
     render(
-      <EventTimeline
-        rounds={[
-          round({
-            otherInvestors: ["Alpha", "Beta", "Gamma", "Delta", "Epsilon"],
-          }),
-        ]}
-        news={[]}
+      <FundingTimeline
+        items={
+          splitTimeline(
+            [
+              round({
+                otherInvestors: ["Alpha", "Beta", "Gamma", "Delta", "Epsilon"],
+              }),
+            ],
+            [],
+          ).funding
+        }
       />,
     );
     expect(
@@ -266,11 +281,56 @@ describe("EventTimeline", () => {
     ).toBeInTheDocument();
   });
 
-  it("links news entries out to the source article", () => {
+  it("floats undated rounds above dated ones, dated newest-first", () => {
     render(
-      <EventTimeline
-        rounds={[]}
-        news={[newsArticle({ title: "Big raise coverage", url: "https://news.test/x" })]}
+      <FundingTimeline
+        items={
+          splitTimeline(
+            [
+              round({ round_type: "Series A", announced_date: "2026-01-10" }),
+              round({ round_type: "Series H", announced_date: null }),
+              round({ round_type: "Series B", announced_date: "2026-03-10" }),
+            ],
+            [],
+          ).funding
+        }
+      />,
+    );
+    const items = screen.getAllByRole("listitem");
+    expect(items).toHaveLength(3);
+    // Undated funding leads (the structured spine), then dated newest-first.
+    expect(items[0]).toHaveTextContent("Series H");
+    expect(items[1]).toHaveTextContent("Series B");
+    expect(items[2]).toHaveTextContent("Series A");
+  });
+
+  it("omits the 'Led by' clause when only non-lead investors are present", () => {
+    render(
+      <FundingTimeline
+        items={
+          splitTimeline(
+            [round({ leadInvestors: [], otherInvestors: ["Alpha", "Beta"] })],
+            [],
+          ).funding
+        }
+      />,
+    );
+    // No bare "Led by —"; the other investors still show.
+    expect(screen.queryByText(/Led by/)).not.toBeInTheDocument();
+    expect(screen.getByText(/Alpha, Beta/)).toBeInTheDocument();
+  });
+});
+
+describe("NewsSection (in components context)", () => {
+  it("links story rows out to the source article", () => {
+    render(
+      <NewsSection
+        items={
+          splitTimeline(
+            [],
+            [newsArticle({ title: "Big raise coverage", url: "https://news.test/x" })],
+          ).news
+        }
       />,
     );
     const link = screen.getByRole("link", { name: "Big raise coverage" });
@@ -278,54 +338,26 @@ describe("EventTimeline", () => {
     expect(link).toHaveAttribute("target", "_blank");
   });
 
-  it("interleaves funding + news newest-first by date", () => {
+  it("orders stories newest-first with undated stories trailing", () => {
     render(
-      <EventTimeline
-        rounds={[round({ round_type: "Series A", announced_date: "2026-03-10" })]}
-        news={[
-          newsArticle({ title: "Older news", published_date: "2026-01-05" }),
-          newsArticle({ title: "Newest news", published_date: "2026-05-20" }),
-        ]}
+      <NewsSection
+        items={
+          splitTimeline(
+            [],
+            [
+              newsArticle({ title: "Older distinct topic alpha", published_date: "2026-01-05" }),
+              newsArticle({ title: "Undated distinct topic gamma", published_date: null }),
+              newsArticle({ title: "Newest distinct topic beta", published_date: "2026-05-20" }),
+            ],
+          ).news
+        }
       />,
     );
     const items = screen.getAllByRole("listitem");
     expect(items).toHaveLength(3);
-    // Order: Newest news (May) → Series A (Mar) → Older news (Jan).
-    expect(items[0]).toHaveTextContent("Newest news");
-    expect(items[1]).toHaveTextContent("Series A");
-    expect(items[2]).toHaveTextContent("Older news");
-  });
-
-  it("floats an undated funding round to the top and sinks undated news to the bottom", () => {
-    render(
-      <EventTimeline
-        rounds={[round({ round_type: "Series H", announced_date: null })]}
-        news={[
-          newsArticle({ title: "Dated news", published_date: "2026-05-20" }),
-          newsArticle({ title: "Undated news", published_date: null }),
-        ]}
-      />,
-    );
-    const items = screen.getAllByRole("listitem");
-    expect(items).toHaveLength(3);
-    // Undated funding leads, dated news middle, undated news trails.
-    expect(items[0]).toHaveTextContent("Series H");
-    expect(items[1]).toHaveTextContent("Dated news");
-    expect(items[2]).toHaveTextContent("Undated news");
-  });
-
-  it("omits the 'Led by' clause when only non-lead investors are present", () => {
-    render(
-      <EventTimeline
-        rounds={[
-          round({ leadInvestors: [], otherInvestors: ["Alpha", "Beta"] }),
-        ]}
-        news={[]}
-      />,
-    );
-    // No bare "Led by —"; the other investors still show.
-    expect(screen.queryByText(/Led by/)).not.toBeInTheDocument();
-    expect(screen.getByText(/Alpha, Beta/)).toBeInTheDocument();
+    expect(items[0]).toHaveTextContent("Newest distinct topic beta");
+    expect(items[1]).toHaveTextContent("Older distinct topic alpha");
+    expect(items[2]).toHaveTextContent("Undated distinct topic gamma");
   });
 });
 

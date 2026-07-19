@@ -15,7 +15,8 @@
 // becomes a positive "widely covered" signal.
 //
 // Pure + side-effect-free (no DB, no React) so it is unit-testable and the
-// EventTimeline component stays pure presentation.
+// consuming components (FundingTimeline / NewsSection — the page splits one
+// buildTimeline result by kind) stay pure presentation.
 
 import type { FundingRoundWithInvestors, NewsArticleRow } from "@/lib/types";
 import { httpHost } from "@/lib/url";
