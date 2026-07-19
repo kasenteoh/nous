@@ -577,10 +577,17 @@ async def run_describe_fallback(
             # DISTINCT sources: wikidata plus distinct article HOSTS (two
             # articles from one outlet are one source — the long-profile
             # evidence bar must mean three independent voices; review catch).
-            survivor_hosts = {
-                h for a in survivors if (h := hostname(a.url)) is not None
+            # Count by the stored OUTLET name first, URL host as fallback:
+            # Google News-syndicated coverage stores news.google.com URLs for
+            # EVERY outlet (the first profile run collapsed blue-origin's
+            # multi-outlet coverage to one "host" and wrote ZERO longs), while
+            # article.source carries the real publication.
+            survivor_outlets = {
+                key
+                for a in survivors
+                if (key := ((a.source or "").strip().lower() or hostname(a.url)))
             }
-            evidence_sources = (1 if wiki_lines else 0) + len(survivor_hosts)
+            evidence_sources = (1 if wiki_lines else 0) + len(survivor_outlets)
 
             if not evidence.strip():
                 # No wikidata hit AND no surviving article → nothing to ground a

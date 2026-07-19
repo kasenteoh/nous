@@ -50,7 +50,11 @@ from pydantic import BaseModel, Field, model_validator
 # Stamped into the run summary now and, once the apply path lands, into the
 # provenance stamp column. Scheme "<date>.<same-day-counter>"; bump on ANY
 # semantic change to the template or schema.
-PROMPT_VERSION: str = "2026-07-19.2"
+# .3: no template change — the bump re-selects the cohort after the stage's
+# long-profile evidence bar was corrected to count distinct OUTLETS (GN
+# syndication had collapsed every outlet to news.google.com and zero longs
+# were written under .2).
+PROMPT_VERSION: str = "2026-07-19.3"
 
 # Cap on the combined evidence block (wikidata facts + article excerpts).
 # Descriptors live in headlines/ledes; more text costs tokens without adding
