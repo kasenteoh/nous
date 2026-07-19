@@ -204,6 +204,37 @@ describe("renderCompanyMarkdown", () => {
     expect(md).toContain("> Acme builds robots.");
   });
 
+  it("appends an inline attribution to a describe-fallback About profile", () => {
+    // A fallback description_long (migration 0045 / prompt 2026-07-19.2) is
+    // grounded in third-party evidence. Unlike the gated short blockquote lead,
+    // the About section has room for an inline attribution line, so the profile
+    // is syndicated WITH its provenance.
+    const md = renderCompanyMarkdown(
+      detail({
+        company: company({
+          description_long: "Two grounded paragraphs about Acme.",
+          description_source: "fallback",
+        }),
+      }),
+      ORIGIN,
+    );
+    expect(md).toContain("## About");
+    expect(md).toContain("Two grounded paragraphs about Acme.");
+    expect(md).toContain(
+      "*Profile written by nous from Wikidata and press coverage.*",
+    );
+  });
+
+  it("omits the attribution line for an own-website About profile", () => {
+    // Own-website long (description_source absent/null) is unchanged: no rider.
+    const md = renderCompanyMarkdown(detail(), ORIGIN);
+    expect(md).toContain("## About");
+    expect(md).toContain("Longer prose about Acme.");
+    expect(md).not.toContain(
+      "*Profile written by nous from Wikidata and press coverage.*",
+    );
+  });
+
   it("annotates a non-active status with its source", () => {
     const md = renderCompanyMarkdown(
       detail({

@@ -144,6 +144,59 @@ describe("company page husk placeholder", () => {
   });
 });
 
+// ─── About-section attribution variant (describe-fallback, 2026-07-19.2) ─────
+// The About attribution line is keyed on description_source: an own-website
+// long is attributed to the company's site; a fallback long is attributed to
+// Wikidata + press coverage. Both surfaces are visible (unlike the meta/OG
+// gating), each with honest provenance.
+
+describe("company page About attribution", () => {
+  it("attributes an own-website profile to the company's site", async () => {
+    vi.mocked(getCompanyBySlug).mockResolvedValue(
+      detail({
+        company: huskCompany({
+          description_short: "Builds robots.",
+          description_long: "A long own-website profile of Acme Robotics.",
+          description_source: null,
+        }),
+      }),
+    );
+    await renderCompanyPage();
+
+    expect(
+      screen.getByText(/Summary written by nous from the company/),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText(/Profile written by nous from Wikidata/),
+    ).not.toBeInTheDocument();
+  });
+
+  it("attributes a describe-fallback profile to Wikidata + press coverage", async () => {
+    vi.mocked(getCompanyBySlug).mockResolvedValue(
+      detail({
+        company: huskCompany({
+          description_short: "Builds robots.",
+          description_long: "A third-party-grounded profile of Acme Robotics.",
+          description_source: "fallback",
+        }),
+      }),
+    );
+    await renderCompanyPage();
+
+    // The About attribution reads the fallback variant…
+    expect(
+      screen.getByText(/Profile written by nous from Wikidata and press coverage/),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText(/Summary written by nous from the company/),
+    ).not.toBeInTheDocument();
+    // …and the tagline rider (its own attribution surface) still renders too.
+    expect(
+      screen.getByText(/Description written by nous from Wikidata and press coverage/),
+    ).toBeInTheDocument();
+  });
+});
+
 // ─── Funding / news split (2026-07-18 design) ────────────────────────────────
 // The page calls buildTimeline once, splits by kind, and owns the both-empty
 // line; each section omits itself when empty.

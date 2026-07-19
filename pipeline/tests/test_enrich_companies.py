@@ -151,6 +151,7 @@ async def test_enrich_supersedes_fallback_description_provenance(
     text would inherit stale third-party gating/attribution."""
     company = _make_company(slug="enrich-fallback-handoff")
     company.description_short = "Acme is an American aerospace manufacturer."
+    company.description_long = "Stale fallback prose that must not survive."
     company.description_source = "fallback"
     db.add(company)
     await db.flush()
@@ -167,6 +168,10 @@ async def test_enrich_supersedes_fallback_description_provenance(
     await db.refresh(company)
     assert company.description_short == _CANNED_JUDGE.description_short
     assert company.description_source is None  # own-website provenance
+    # The fallback-written LONG was cleared before the own-site describe ran
+    # (review catch): whatever stands now is own-site text or nothing — never
+    # the stale third-party prose under the own-site attribution.
+    assert company.description_long != "Stale fallback prose that must not survive."
 
 
 async def test_enrich_populates_company_fields(

@@ -194,6 +194,17 @@ export function renderCompanyMarkdown(
     lines.push("");
     lines.push(company.description_long);
     lines.push("");
+    // A describe-fallback profile (description_source === "fallback", migration
+    // 0045 / prompt 2026-07-19.2) is written from third-party evidence, not the
+    // company's own site. Unlike the short blockquote lead — which this
+    // machine-consumed surface GATES out entirely, having no attribution slot
+    // for a bare one-liner — the About section is a document with room for an
+    // inline attribution line, so a fallback long profile is syndicated WITH its
+    // provenance rather than withheld. An own-website long is unchanged.
+    if (company.description_source === "fallback") {
+      lines.push("*Profile written by nous from Wikidata and press coverage.*");
+      lines.push("");
+    }
   }
 
   if (news.length > 0) {
