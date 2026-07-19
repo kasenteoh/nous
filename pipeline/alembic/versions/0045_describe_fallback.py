@@ -49,11 +49,11 @@ depends_on: str | Sequence[str] | None = None
 def upgrade() -> None:
     op.add_column(
         "companies",
-        sa.Column("description_source", sa.String(), nullable=True),
+        sa.Column("description_source", sa.Text(), nullable=True),
     )
     op.add_column(
         "companies",
-        sa.Column("describe_fallback_prompt_version", sa.String(), nullable=True),
+        sa.Column("describe_fallback_prompt_version", sa.Text(), nullable=True),
     )
 
 

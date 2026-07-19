@@ -512,6 +512,79 @@ async def test_guard_rejected_article_excluded_from_evidence(
     llm.assert_not_awaited()
 
 
+@pytestmark_db
+async def test_guard_error_never_stamps(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Review catch: a guard LLM ERROR leaves the row un-stamped (re-eligible)
+    on BOTH paths — the no-evidence skip AND a null adjudication on partial
+    evidence (the dropped article might have described the company)."""
+    no_ev = _co("Errored Co")
+    partial = _co("Partial Co")
+    for c in (no_ev, partial):
+        db.add(c)
+    await db.flush()
+    for c in (no_ev, partial):
+        db.add(
+            NewsArticle(
+                company_id=c.id,
+                url=f"https://news.example/{c.slug}",
+                title=f"{c.name} in the news",
+                source="news.example",
+                raw_content="A story the guard errors on.",
+            )
+        )
+    await db.commit()
+
+    # Partial Co gets a wikidata hit (partial evidence survives the guard
+    # error); Errored Co gets nothing.
+    monkeypatch.setattr(
+        df,
+        "WikidataClient",
+        _fake_wikidata(
+            {"Partial Co": _facts("Partial Co", "American software company")}
+        ),
+    )
+    monkeypatch.setattr(
+        df,
+        "check_article_entity",
+        AsyncMock(
+            return_value=GuardDecision(
+                attach=False, llm_error=True, reason="llm-error"
+            )
+        ),
+    )
+    # The LLM nulls the partial-evidence company.
+    monkeypatch.setattr(
+        df,
+        "complete_json",
+        AsyncMock(
+            return_value=DescribeFallbackResult(
+                description_short=None,
+                grounding_descriptor=None,
+                confidence="low",
+                null_reason="insufficient_evidence",
+            )
+        ),
+    )
+
+    summary = await run_describe_fallback(db, user_agent=_UA, limit=20, dry_run=False)
+
+    assert summary.guard_errors == 2
+    for c in (no_ev, partial):
+        await db.refresh(c)
+        assert c.describe_fallback_prompt_version is None  # re-eligible
+        assert c.description_short is None
+    # Run again with a healthy guard: both rows re-select (nothing stamped).
+    monkeypatch.setattr(
+        df,
+        "check_article_entity",
+        AsyncMock(return_value=GuardDecision(attach=True, reason="ok")),
+    )
+    summary2 = await run_describe_fallback(db, user_agent=_UA, limit=20, dry_run=False)
+    assert summary2.cohort_selected == 2
+
+
 # ── DB-gated: migration 0045 column shape ───────────────────────────────────
 
 

@@ -47,7 +47,7 @@ import logging
 import re
 
 from pydantic import BaseModel, Field
-from sqlalchemy import exists, func, not_, or_, select
+from sqlalchemy import exists, func, not_, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from nous.db.models import Company, NewsArticle, RawPage
@@ -385,26 +385,29 @@ async def _persist_company(
 ) -> None:
     """Apply-mode write for one company: optional description + version stamp; commit.
 
-    Stamps ``describe_fallback_prompt_version`` unconditionally (the caller only
-    reaches here for a COMPLETED adjudication or a clean skipped-no-evidence, both
-    of which must not re-select next run). When ``to_persist`` is a description,
-    it is written ONLY if a FRESH read still finds ``description_short IS NULL`` —
-    a concurrent enrich cron may have described the row mid-run, and describe-
-    fallback never overwrites an own-website description. One commit per company
-    (the enrich_companies pattern), so a mid-run crash leaves earlier companies
+    Stamps ``describe_fallback_prompt_version`` (the caller only reaches here
+    for a COMPLETED adjudication or a clean skipped-no-evidence, both of which
+    must not re-select next run). When ``to_persist`` is a description, the
+    write is a single conditional ``UPDATE … WHERE description_short IS NULL``
+    — atomic check-and-set, so even a concurrent enrich write between selection
+    and persist cannot be overwritten (review catch: the prior select-then-set
+    left a TOCTOU window; the Actions concurrency group masks it today, but the
+    guard shouldn't depend on deployment topology). One commit per company (the
+    enrich_companies pattern), so a mid-run crash leaves earlier companies
     durably stamped/written.
     """
     if to_persist is not None:
-        # Never overwrite: re-check against the live DB right before writing (the
-        # selection saw NULL, but the cron may have enriched the row since).
-        current = (
+        # Never overwrite, atomically: the row qualifies only while
+        # description_short is still NULL at UPDATE time.
+        written = (
             await session.execute(
-                select(Company.description_short).where(Company.id == company.id)
+                update(Company)
+                .where(Company.id == company.id, Company.description_short.is_(None))
+                .values(description_short=to_persist, description_source="fallback")
+                .returning(Company.id)
             )
-        ).scalar_one()
-        if current is None:
-            company.description_short = to_persist
-            company.description_source = "fallback"
+        ).scalar_one_or_none()
+        if written is not None:
             summary.persisted += 1
         else:
             summary.skipped_already_described += 1
@@ -552,7 +555,13 @@ async def run_describe_fallback(
             # Every completed adjudication stamps (described, deliberate null,
             # descriptor/claim rejection alike) so it isn't re-billed; only a
             # grounded, non-low, claim-checked description also writes text.
-            if not dry_run:
+            # EXCEPT: a NULL outcome adjudicated on PARTIAL evidence (a guard
+            # LLM error dropped articles this run) does not stamp — the missing
+            # articles may describe the company, so the row stays re-eligible
+            # rather than being deferred to the next prompt bump (review catch;
+            # a described outcome still stamps — richer evidence can only have
+            # agreed). Persistent guard errors re-bill ~$0.0005/run — accepted.
+            if not dry_run and not (to_persist is None and had_guard_error):
                 await _persist_company(session, company, to_persist, summary)
 
     logger.info(

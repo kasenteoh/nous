@@ -92,7 +92,7 @@ class Company(Base):
     # existing cohort is left untouched. Un-indexed (read per-company, never a
     # WHERE key on a hot path). See describe_fallback_prompt_version below for
     # the paired idempotency stamp.
-    description_source: Mapped[str | None] = mapped_column(String, nullable=True)
+    description_source: Mapped[str | None] = mapped_column(Text, nullable=True)
     website: Mapped[str | None]
     # Website provenance (sibling-column convention, cf. status_source_url /
     # total_raised_source_url). website_source is a short source-type tag
@@ -354,7 +354,7 @@ class Company(Base):
     # residue cohort it filters is a small bounded backlog drain, not a hot
     # path (contrast career's, a selection WHERE key at ~2,600-company scale).
     describe_fallback_prompt_version: Mapped[str | None] = mapped_column(
-        String, nullable=True
+        Text, nullable=True
     )
 
     # Description embedding (migration 0033): 384-dim bge-small-en-v1.5 vector
