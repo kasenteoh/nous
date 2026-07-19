@@ -13,7 +13,7 @@ no-stamp-on-LLM-error (skipped without DATABASE_URL).
 from __future__ import annotations
 
 import os
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -729,6 +729,12 @@ async def test_suspect_article_adjudicated_not_dropped(
 
     monkeypatch.setattr(df, "WikidataClient", _fake_wikidata({}))
     monkeypatch.setattr(df, "check_article_entity", fake_guard)
+    # Force the cheap layer's verdict rather than reverse-engineering its
+    # heuristics (CI catch: the synthetic title didn't trip the real signal —
+    # what we're pinning is the suspect→ADJUDICATE handoff, not the heuristic).
+    monkeypatch.setattr(
+        df, "best_corroboration", lambda *a, **k: Mock(suspect=True)
+    )
     monkeypatch.setattr(
         df,
         "complete_json",
