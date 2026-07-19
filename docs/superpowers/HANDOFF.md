@@ -7,6 +7,30 @@ authoritative history), then `BACKLOG.md` (annotated with what shipped; its
 **"2026-07-17 post-surgery QA sweep"** section is the active work queue).
 The plan docs under `docs/superpowers/plans/` are historical context.
 
+## LATEST UPDATE — describe-fallback SHIPPED + BACKFILLED (2026-07-19 evening, PRs #243–#247)
+
+The full arc landed same-day: probe (#243) → apply+migration **0045** (#244)
+→ live golden recordings, all 1.0 (#245) → web provenance gating +
+attribution riders (#246; deployed BEFORE any apply run — fix #1 honored)
+→ the supersede-path fix (#247: enrich resets description_source AND
+re-selects fallback rows once raw_pages exist; CI caught the dead-code
+half). **Backfill complete: 4 batches, 1,079-cohort drained, 246
+descriptions persisted, 0 errors, ~$0.35.** The gates blocked ~30
+fabrication attempts (descriptor-echo + claim-drift) and withheld
+low-confidence drafts. Description completeness: 66.5% → ~74% of 3,223
+shown; the remaining ~830 are evidence-less residue (honest empties).
+**Next session's queue:**
+1. Verify the non-US suspects list (BACKLOG "Non-US suspects" — zepto,
+   clio, personio, oyo, groww, pine-labs, net-a-porter, …) → ops
+   exclude-company per confirmed non-US row (dry-run/eyeball first; a few
+   look like regex false positives).
+2. Watch the blue-origin supersede: once blueorigin.com scrapes, enrich
+   should replace the fallback one-liner with a full profile and NULL the
+   provenance (the #247 test's trajectory, live).
+3. Batch the scorer-gates-M1 improvement with the next eval re-record.
+4. Standing: healed-14 re-enrichment, aggregator_url_reset ~0, data-quality
+   description % in the next cron report.
+
 ## LATEST UPDATE — describe-fallback probe CLEARED on prod (2026-07-19, PR #243 + run 29700550554)
 
 Owner approved re-opening the structured-describe fallback (full: Wikidata +
