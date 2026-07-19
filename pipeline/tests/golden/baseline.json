@@ -29,6 +29,12 @@
     "parse_rate": 1.0,
     "structure_pass_rate": 0.785
   },
+  "describe_fallback": {
+    "described_accuracy": 0.8,
+    "descriptor_grounding_min": 1.0,
+    "null_accuracy": 0.8,
+    "parse_rate": 1.0
+  },
   "funding_extraction": {
     "announcement_accuracy": 0.95,
     "fields_f1": 0.895,

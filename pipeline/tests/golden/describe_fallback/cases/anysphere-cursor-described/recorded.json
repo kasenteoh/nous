@@ -1,0 +1,9 @@
+{
+  "provenance": "simulated",
+  "response": {
+    "description_short": "Anysphere develops Cursor, an AI code editor for software engineers.",
+    "grounding_descriptor": "AI code editor",
+    "confidence": "medium",
+    "null_reason": null
+  }
+}

@@ -84,6 +84,15 @@ class Company(Base):
     # LLM-enriched fields (populated in M2+)
     description_short: Mapped[str | None]
     description_long: Mapped[str | None]
+    # Provenance of the CURRENT description_short (migration 0045). NULL means
+    # the own-website enrich path wrote it (or the row is undescribed);
+    # 'fallback' means describe-fallback wrote it from third-party evidence
+    # (Wikidata + entity-guard-corroborated news) for the unscrapable residue.
+    # No default/backfill: NULL is the meaningful "own-website" state, so the
+    # existing cohort is left untouched. Un-indexed (read per-company, never a
+    # WHERE key on a hot path). See describe_fallback_prompt_version below for
+    # the paired idempotency stamp.
+    description_source: Mapped[str | None] = mapped_column(String, nullable=True)
     website: Mapped[str | None]
     # Website provenance (sibling-column convention, cf. status_source_url /
     # total_raised_source_url). website_source is a short source-type tag
@@ -333,6 +342,19 @@ class Company(Base):
     # Indexed because it is the selection WHERE key (migration 0041).
     career_extracted_prompt_version: Mapped[str | None] = mapped_column(
         Text, nullable=True, index=True
+    )
+    # description_short written by describe-fallback from third-party evidence
+    # (migration 0045), NOT the own-website enrich path. The per-company
+    # idempotency stamp, mirroring career_extracted_prompt_version: stamped on
+    # every completed adjudication (a grounded description, a deliberate model
+    # null, or a descriptor/claim rejection) so a company that correctly yields
+    # no describe-fallback description is not re-billed every run. The stage
+    # version-gates selection on it (NULL OR < PROMPT_VERSION), so a prompt bump
+    # re-selects everyone while stamped rows never re-bill. Un-indexed: the
+    # residue cohort it filters is a small bounded backlog drain, not a hot
+    # path (contrast career's, a selection WHERE key at ~2,600-company scale).
+    describe_fallback_prompt_version: Mapped[str | None] = mapped_column(
+        String, nullable=True
     )
 
     # Description embedding (migration 0033): 384-dim bge-small-en-v1.5 vector

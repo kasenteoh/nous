@@ -13,6 +13,8 @@ Currently covered prompts (the highest-value ones; the harness is generic
 | `company_description_long` | 16    | `CompanyLongDescription`    |
 | `funding_extraction`       | 20    | `FundingExtraction`         |
 | `career_history`           | 16    | `CareerHistoryExtraction`   |
+| `source_verification`      | 10    | `SourceVerification`        |
+| `describe_fallback`        | 16    | `DescribeFallbackResult`    |
 
 `career_history` (the talent-flow founder-background rider) gates
 `empty_accuracy` (the empty-not-fabricate dial — most bios name no pedigree),
@@ -20,6 +22,24 @@ Currently covered prompts (the highest-value ones; the harness is generic
 edges, and the grounding proxy (every prior-company name must appear verbatim
 in the input). Its `case.json` carries a `roster` (the leadership allow-list the
 prompt attributes against).
+
+`describe_fallback` (the third-party-grounded description for the unscrapable
+residue — the site's only GENERATIVE-from-third-party path) gates
+`descriptor_grounding_min` (floor **1.0**, the no-fabrication tooth: every
+PRODUCED description's echoed `grounding_descriptor` must be a normalized
+substring of the evidence, checked with the runtime's own
+`_descriptor_in_evidence` — one ungrounded echo drives it to 0, exactly like
+`source_verification`'s `grounding_min`), plus `null_accuracy` (funding-only /
+entity-ambiguous / thin evidence → null is correct) and `described_accuracy`
+(a genuinely groundable description must be produced). Its `input.txt` is the
+caller-assembled EVIDENCE block (Wikidata facts first, then corroborated
+article title/excerpts, each with a `(source: url)` suffix) — i.e. exactly what
+the stage passes to `build_prompt`. Its recordings are **simulated
+PLACEHOLDERS** pending the first live re-record via `eval-record.yml` (the
+DeepSeek key exists only in Actions); the `null_accuracy` / `described_accuracy`
+floors are hand-set below the placeholder 1.0 (0.8) until live behavior anchors
+them, while `descriptor_grounding_min` stays at 1.0 because the gate is a hard
+no-fabrication invariant, not a quality dial that live recordings can lower.
 
 Since the W-F split, `company_description` is the *judge* (classification,
 people, HQ, `description_short`) and `company_description_long` is the

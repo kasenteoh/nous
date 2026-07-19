@@ -1,0 +1,2 @@
+Groq, the AI inference chip company, opens a new data center (source: https://news.example/groq)
+Groq designs AI inference chips and hosts a cloud service for running large language models.

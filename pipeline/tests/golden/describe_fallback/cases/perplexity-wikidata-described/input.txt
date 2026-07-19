@@ -1,0 +1,3 @@
+Wikidata description: American conversational search engine that answers questions with cited sources (source: https://www.wikidata.org/wiki/Q1)
+Industry: artificial intelligence, information retrieval (source: https://www.wikidata.org/wiki/Q1)
+Founded: 2022 (source: https://www.wikidata.org/wiki/Q1)

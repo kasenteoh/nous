@@ -1,0 +1,4 @@
+{
+  "company_name": "Obscure Labs",
+  "notes": "Ungrounded-echo: the descriptor a model might echo is absent from the evidence, so the correct answer is null (the descriptor_grounding gate verifies no fabricated descriptor slips through)."
+}

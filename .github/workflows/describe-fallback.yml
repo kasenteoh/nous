@@ -1,29 +1,34 @@
 name: describe-fallback
 
-# Manual lever for the describe-fallback PROBE, against the production DB. This
-# is a PAID (DeepSeek) stage — hence DEEPSEEK_API_KEY in env — that writes a
-# third-party-grounded description_short ONLY for the unscrapable/website-less
-# residue, gated hard to Wikidata + entity-guard-corroborated news evidence.
-# It also needs SEC_USER_AGENT: the Wikidata client sends the contact-email
-# User-Agent on every call. No local environment holds DATABASE_URL or the
-# DeepSeek key, so Actions is the only place this runs against real companies.
+# Manual lever for describe-fallback, against the production DB. This is a PAID
+# (DeepSeek) stage — hence DEEPSEEK_API_KEY in env — that writes a third-party-
+# grounded description_short ONLY for the unscrapable/website-less residue, gated
+# hard to Wikidata + entity-guard-corroborated news evidence. It also needs
+# SEC_USER_AGENT: the Wikidata client sends the contact-email User-Agent on
+# every call. No local environment holds DATABASE_URL or the DeepSeek key, so
+# Actions is the only place this runs against real companies.
 #
-# TODAY only the DRY-RUN path exists: it runs the whole pipeline (cohort →
-# evidence → LLM → post-validation) and prints a yield table (grounded-describe
-# rate, confidence mix, funding-only-null leakage, descriptor-in-evidence
-# holding, and the $ spend) WITHOUT writing anything — the evidence gate before
-# the persisting apply path (a later PR with its own migration) is built.
-# Dispatching with dry_run=false is REFUSED loudly here; it never reaches the
-# CLI.
+# Two modes:
+# - dry_run=true (default): runs the whole pipeline (cohort → evidence → LLM →
+#   post-validation) and prints a yield table (grounded-describe rate, confidence
+#   mix, funding-only-null leakage, descriptor-in-evidence holding, and the $
+#   spend) WITHOUT writing anything.
+# - dry_run=false (apply): additionally PERSISTS description_short +
+#   description_source='fallback' for grounded, non-low-confidence, claim-checked
+#   descriptions, and stamps describe_fallback_prompt_version on every completed
+#   adjudication (so stamped rows never re-bill; a prompt bump re-selects). The
+#   prod dry run (#243) cleared the quality gate (18/25 described, 0 fabrication
+#   escapes), so apply is enabled.
 #
-# Example (25-company dry run — the default):
-#   gh workflow run describe-fallback.yml -f dry_run=true -f limit=25
+# Examples:
+#   gh workflow run describe-fallback.yml -f dry_run=true  -f limit=25
+#   gh workflow run describe-fallback.yml -f dry_run=false -f limit=25
 
 on:
   workflow_dispatch:
     inputs:
       dry_run:
-        description: "Dry run: probe + print the yield table without writing (only supported mode today)."
+        description: "Dry run: probe + print the yield table without writing. false = persist grounded descriptions."
         required: false
         type: boolean
         default: true
@@ -36,7 +41,7 @@ on:
 permissions:
   contents: read
 
-# The apply path will mutate companies.description_short — serialize with every
+# The apply path mutates companies.description_short — serialize with every
 # other DB-touching workflow (the cron, discovery, ops) even though the dry run
 # only reads, so it never contends for the free-tier connection pool.
 concurrency:
@@ -80,15 +85,16 @@ jobs:
           OP_DRY_RUN: ${{ inputs.dry_run }}
           OP_LIMIT: ${{ inputs.limit }}
         # Inputs pass through env vars (never string-interpolated into the
-        # script). dry_run=false is refused HERE (apply path not built) rather
-        # than passed to the CLI. The stage writes its markdown yield table +
-        # LLM-usage block to $GITHUB_STEP_SUMMARY itself; the JSON summary lands
-        # in the run log. pipefail so a failing `uv run` surfaces as a failed step.
+        # script). dry_run=true → --dry-run (write-free probe); anything else →
+        # --apply (persists grounded descriptions + stamps). The stage writes its
+        # markdown yield table + LLM-usage block to $GITHUB_STEP_SUMMARY itself;
+        # the JSON summary lands in the run log. pipefail so a failing `uv run`
+        # surfaces as a failed step.
         run: |
           set -o pipefail
-          if [ "$OP_DRY_RUN" != "true" ]; then
-            echo "::error::apply path not built — probe only. Re-run with dry_run=true." >&2
-            exit 1
+          if [ "$OP_DRY_RUN" = "true" ]; then
+            MODE=--dry-run
+          else
+            MODE=--apply
           fi
-          ARGS=(--limit "${OP_LIMIT:-25}" --dry-run)
-          uv run nous describe-fallback "${ARGS[@]}"
+          uv run nous describe-fallback --limit "${OP_LIMIT:-25}" "$MODE"

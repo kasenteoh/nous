@@ -1,0 +1,2 @@
+Wikidata description: developer of Cursor, an AI code editor (source: https://www.wikidata.org/wiki/Q1)
+Anysphere's Cursor AI code editor gains enterprise traction (source: https://news.example/cursor)

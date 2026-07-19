@@ -1,0 +1,9 @@
+{
+  "provenance": "simulated",
+  "response": {
+    "description_short": "Groq designs AI inference chips and runs a cloud service for large language models.",
+    "grounding_descriptor": "AI inference chip",
+    "confidence": "medium",
+    "null_reason": null
+  }
+}

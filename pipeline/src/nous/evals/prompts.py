@@ -49,6 +49,15 @@ from nous.llm.prompts.company_description_long import (
 from nous.llm.prompts.company_description_long import (
     build_prompt as build_long_description_prompt,
 )
+from nous.llm.prompts.describe_fallback import (
+    MAX_EVIDENCE_CHARS as DESCRIBE_FALLBACK_MAX_EVIDENCE_CHARS,
+)
+from nous.llm.prompts.describe_fallback import (
+    DescribeFallbackResult,
+)
+from nous.llm.prompts.describe_fallback import (
+    build_prompt as build_describe_fallback_prompt,
+)
 from nous.llm.prompts.funding_extraction import (
     FundingExtraction,
 )
@@ -65,6 +74,11 @@ from nous.llm.prompts.source_verification import (
 from nous.llm.prompts.source_verification import (
     build_prompt as build_source_verification_prompt,
 )
+
+# The runtime moat check, reused verbatim so the golden set verifies the SAME
+# descriptor-in-evidence gate the stage applies (the source_verification golden
+# set reuses quote_is_grounded the same way).
+from nous.pipeline.describe_fallback import _descriptor_in_evidence
 from nous.util.industry import normalize_industry
 from nous.util.slugify import normalize_name
 from nous.util.text import truncate_to_chars
@@ -874,6 +888,117 @@ def score_source_verification(cases: Sequence[CaseEvaluation]) -> PromptReport:
 
 
 # ---------------------------------------------------------------------------
+# describe_fallback (third-party-grounded description for the unscrapable residue)
+# ---------------------------------------------------------------------------
+
+
+def _build_describe_fallback_prompt(case: CaseSpec, input_text: str) -> str:
+    # Mirror the describe-fallback stage: the caller-assembled evidence block
+    # (Wikidata facts + corroborated article title/excerpts) IS the input, and
+    # it is truncated to the prompt's evidence budget before building.
+    evidence = truncate_to_chars(input_text, DESCRIBE_FALLBACK_MAX_EVIDENCE_CHARS)
+    return build_describe_fallback_prompt(
+        company_name=case.company_name, evidence=evidence
+    )
+
+
+def score_describe_fallback(cases: Sequence[CaseEvaluation]) -> PromptReport:
+    """Score describe_fallback recordings against ground truth.
+
+    This is the site's only GENERATIVE-from-third-party path, so the gate is the
+    no-fabrication descriptor check, mirroring source_verification's grounding_min.
+
+    Gated metrics:
+    - parse_rate — recordings surviving runtime schema validation (incl. the
+      model validator that nulls a description missing its grounding descriptor).
+    - descriptor_grounding_min — the moat gate: every PRODUCED description's
+      echoed grounding_descriptor MUST appear in the evidence (the same
+      ``_descriptor_in_evidence`` check the stage applies). One ungrounded echo
+      drives this to 0, so the floor is 1.0 — the no-fabrication tooth.
+    - null_accuracy — over expected-null cases, the rate the model also returned
+      null (funding-only / ambiguous / thin evidence → null is the correct
+      answer; describing anyway is a fabrication).
+    - described_accuracy — over expected-described cases, the rate the model also
+      produced a description (missing a genuinely groundable description is a
+      recall miss).
+
+    Informational: descriptor_grounding_mean (the average, alongside the gated min).
+    """
+    issues: dict[str, list[str]] = {}
+    parse = Accuracy()
+    null_acc = Accuracy()
+    described_acc = Accuracy()
+    groundings: list[float] = []
+    provenance: dict[str, int] = {}
+
+    for case in cases:
+        expected = case.expected
+        assert isinstance(expected, DescribeFallbackResult)
+        parse.add(case.recorded is not None)
+        if case.recorded is None:
+            _issue(issues, case.case_id, "recorded response failed runtime schema validation")
+            continue
+        recorded = case.recorded
+        assert isinstance(recorded, DescribeFallbackResult)
+
+        exp_described = expected.description_short is not None
+        rec_described = recorded.description_short is not None
+
+        if exp_described:
+            described_acc.add(rec_described)
+            if not rec_described:
+                _issue(
+                    issues,
+                    case.case_id,
+                    "described: expected a grounded description, got null",
+                )
+        else:
+            null_acc.add(not rec_described)
+            if rec_described:
+                _issue(
+                    issues,
+                    case.case_id,
+                    "null: expected null (funding-only/ambiguous/thin), got a description",
+                )
+
+        # No-fabrication: a PRODUCED description's echoed descriptor must be a
+        # (normalized) substring of the evidence — the same runtime moat check.
+        if rec_described:
+            grounded = _descriptor_in_evidence(recorded.grounding_descriptor, case.input_text)
+            groundings.append(1.0 if grounded else 0.0)
+            if not grounded:
+                _issue(
+                    issues,
+                    case.case_id,
+                    "grounding: descriptor is not present in the evidence",
+                )
+        else:
+            groundings.append(1.0)  # nothing asserted → nothing to fabricate
+
+    metrics: dict[str, float] = {
+        "parse_rate": parse.value,
+        "null_accuracy": null_acc.value,
+        "described_accuracy": described_acc.value,
+        "descriptor_grounding_min": min(groundings) if groundings else 1.0,
+        # Informational (not gated): the average alongside the gated min.
+        "descriptor_grounding_mean": mean(groundings),
+    }
+    return PromptReport(
+        prompt="describe_fallback",
+        case_count=len(cases),
+        provenance_counts=provenance,
+        metrics=metrics,
+        gated=[
+            "parse_rate",
+            "null_accuracy",
+            "described_accuracy",
+            "descriptor_grounding_min",
+        ],
+        issues=issues,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Registry
 # ---------------------------------------------------------------------------
 
@@ -907,6 +1032,12 @@ PROMPT_SPECS: tuple[PromptSpec, ...] = (
         schema=SourceVerification,
         build_prompt=_build_source_verification_prompt,
         score=score_source_verification,
+    ),
+    PromptSpec(
+        name="describe_fallback",
+        schema=DescribeFallbackResult,
+        build_prompt=_build_describe_fallback_prompt,
+        score=score_describe_fallback,
     ),
 )
 

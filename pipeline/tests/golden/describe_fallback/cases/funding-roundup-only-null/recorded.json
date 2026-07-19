@@ -1,0 +1,9 @@
+{
+  "provenance": "simulated",
+  "response": {
+    "description_short": null,
+    "grounding_descriptor": null,
+    "confidence": "low",
+    "null_reason": "no_nonfunding_descriptor"
+  }
+}
