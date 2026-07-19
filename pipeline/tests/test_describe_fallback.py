@@ -93,6 +93,50 @@ def test_descriptor_in_evidence_present_and_absent() -> None:
     assert not _descriptor_in_evidence("   ", evidence)
 
 
+def test_descriptor_generic_or_short_never_grounds() -> None:
+    """Review M2: vacuous descriptors match everywhere but license nothing."""
+    evidence = "Wikidata description: German holding company (source: url)"
+    assert not _descriptor_in_evidence("company", evidence)
+    assert not _descriptor_in_evidence("Firm", evidence)
+    assert not _descriptor_in_evidence("AI", evidence)  # < 5 chars
+    # A real multi-word descriptor still grounds.
+    assert _descriptor_in_evidence("holding company", evidence)
+
+
+def test_descriptor_in_source_url_only_never_grounds() -> None:
+    """Review M4: a phrase living only inside a (source: …) URL is not
+    editorial evidence."""
+    evidence = (
+        "Headline about a funding round "
+        "(source: https://news.example/ai search engine raises 100m)"
+    )
+    assert not _descriptor_in_evidence("ai search engine", evidence)
+
+
+def test_model_validator_nulls_description_without_descriptor() -> None:
+    """Review M3: the first defense line, tested directly."""
+    result = DescribeFallbackResult(
+        description_short="Acme builds rockets.",
+        grounding_descriptor=None,
+        confidence="high",
+        null_reason=None,
+    )
+    assert result.description_short is None
+    assert result.grounding_descriptor is None
+    assert result.null_reason == "no_nonfunding_descriptor"
+
+
+def test_model_validator_nulls_overlong_description() -> None:
+    result = DescribeFallbackResult(
+        description_short="A" * 300,
+        grounding_descriptor="spaceflight company",
+        confidence="high",
+        null_reason=None,
+    )
+    assert result.description_short is None
+    assert result.null_reason == "insufficient_evidence"
+
+
 def test_adjudicate_described_when_descriptor_grounded() -> None:
     summary = DescribeFallbackSummary(dry_run=True, prompt_version="t")
     result = DescribeFallbackResult(

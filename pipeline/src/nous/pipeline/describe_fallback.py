@@ -32,6 +32,7 @@ otherwise); the exact spend lands in the ``emit_run_telemetry`` block.
 from __future__ import annotations
 
 import logging
+import re
 
 from pydantic import BaseModel, Field
 from sqlalchemy import exists, func, not_, select
@@ -150,16 +151,37 @@ def _assemble_evidence(
     return truncate_to_chars("\n\n".join(parts), MAX_EVIDENCE_CHARS)
 
 
+# Descriptors that carry no identity signal on their own — an echo of one of
+# these would pass the substring check vacuously (every Wikidata description
+# says "company"). Review catch (M2).
+_GENERIC_DESCRIPTORS: frozenset[str] = frozenset(
+    {"company", "business", "startup", "organization", "organisation", "firm"}
+)
+
+# Provenance suffixes inside evidence lines ("(source: https://…)"). Stripped
+# before the descriptor check so a phrase living only in a source URL can
+# never license a description (review catch, M4).
+_SOURCE_SUFFIX_RE = re.compile(r"\(source: [^)]*\)")
+
+
 def _descriptor_in_evidence(descriptor: str | None, evidence: str) -> bool:
     """Does ``descriptor`` appear in ``evidence`` case-insensitively after
     whitespace normalization? The moat-critical post-validation: the model's
     echoed grounding descriptor is verified against the shown evidence, never
     trusted on its word (the same grounded-quote discipline as source_verification).
+
+    Two review-hardened refinements: source-URL suffixes are stripped from the
+    evidence first (a phrase appearing only in a URL is not editorial
+    evidence), and trivially generic/short descriptors ("company", "AI") are
+    rejected — they match everywhere while licensing nothing.
     """
     if descriptor is None or not descriptor.strip():
         return False
     norm_desc = " ".join(descriptor.lower().split())
-    norm_evidence = " ".join(evidence.lower().split())
+    if len(norm_desc) < 5 or norm_desc in _GENERIC_DESCRIPTORS:
+        return False
+    stripped = _SOURCE_SUFFIX_RE.sub(" ", evidence)
+    norm_evidence = " ".join(stripped.lower().split())
     return norm_desc in norm_evidence
 
 
@@ -204,7 +226,8 @@ async def _surviving_articles(
         summary.articles_seen += 1
         title = article.title or ""
         body = article.raw_content or ""
-        combined = body if title.strip() and title in body else f"{title}. {body}"
+        # Same title-in-body dedup shape as the entity guard (review L1).
+        combined = body if title.strip() in body else f"{title}. {body}"
 
         # Layer 1: cheap corroboration (profile is empty for this cohort).
         cheap = best_corroboration(
