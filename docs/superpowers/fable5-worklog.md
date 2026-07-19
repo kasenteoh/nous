@@ -2350,3 +2350,41 @@ Owner: "let's do it" (the QA P0s). Both adversarially reviewed (APPROVE).
   description provenance stamp; persistence; golden set) + the web PR
   (attribution line + off-page description_short gating per fix #1; the
   scout's leak map is in this session's transcript and the BACKLOG entry).
+
+## PR #244 — feat(pipeline): describe-fallback apply path — migration 0045, persistence, golden set
+
+- The persisting half after #243's probe cleared. **Migration head is now
+  0045**: companies.description_source (Text nullable, NO backfill — NULL =
+  own-website path, 'fallback' = this stage) +
+  describe_fallback_prompt_version (Text, the career-pattern idempotency
+  stamp; stamped on every completed adjudication incl. deliberate nulls so
+  re-dispatch never re-bills; NOT stamped on LLM errors, rate-limit break,
+  or — review catch — null outcomes adjudicated on partial evidence after a
+  guard LLM error, so those retry instead of deferring to a prompt bump).
+- Persist gates (each pinned by a DB-gated test): described + confidence !=
+  low + descriptor-verified + M1 claim-grounded (content words ≥60% present
+  in URL-stripped evidence). **Never-overwrite is atomic** (review catch:
+  select-then-set had a TOCTOU window; now a single conditional
+  UPDATE … WHERE description_short IS NULL … RETURNING — correctness no
+  longer leans on the Actions concurrency group).
+- Non-US side-finding operationalized: dumb country/city regex lists
+  suspects in the yield table (zepto/clio class → ops exclusion flow);
+  never blocks persistence.
+- Golden set registered: score_describe_fallback with
+  descriptor_grounding_min floor 1.0 (the no-fabrication gate, reusing the
+  runtime check), null/described accuracy floors 0.8; 16 cases from the
+  probe's real shapes, recordings marked SIMULATED placeholders —
+  **live-record via eval-record.yml before trusting the floors** (the
+  scorer does not yet gate M1 — batch that with the re-record).
+- CI caught a real one: the pre-M1 dry-run e2e fixture ("builds launch
+  vehicles" vs "aerospace manufacturer" evidence) was claim-drift by the
+  new check's own standard — fixture grounded, drift case pinned in M1
+  unit tests instead.
+- Adversarial review APPROVE (0 blocker/high; the overwrite guard verified
+  a real DB query, not identity-map staleness); both MEDIUMs closed
+  pre-merge. Suite 1249 green; alembic single head 0045.
+- NEXT before any apply dispatch: the WEB slice (attribution line keyed on
+  description_source + off-page description_short gating — fix #1). Do NOT
+  dispatch describe-fallback.yml apply until it is merged (fallback text
+  must never reach meta/OG/JSON-LD/.md unattributed). Then batched
+  backfill (~$0.60 approved) + live golden re-record.
