@@ -908,7 +908,7 @@ async def test_apply_persists_long_profile_on_rich_evidence(
         db.add(
             NewsArticle(
                 company_id=co.id,
-                url=f"https://news.example/rocketwerks-{n}",
+                url=f"https://outlet-{n}.example/rocketwerks-{n}",
                 title="Rocketwerks builds rockets",
                 source="news.example",
                 raw_content=(
