@@ -104,7 +104,7 @@ from nous.db.models import (
 )
 from nous.db.upsert import refresh_funding_round_count
 from nous.sources.parked import page_is_for_sale_lander
-from nous.sources.reject_hosts import is_aggregator_url
+from nous.sources.reject_hosts import is_aggregator_url, is_article_url
 from nous.util.title_subject import (
     description_subject_mismatches,
     name_is_dominant_subject,
@@ -229,7 +229,12 @@ async def run_repair_wrong_websites(
     for company in aggregator_candidates:
         if not company.website:
             continue
-        if not is_aggregator_url(company.website):
+        # Aggregator/directory host, or a dated-article path on any host —
+        # either way the stored "website" is a news/listing URL, not a
+        # homepage (the blue-origin nypost.com case).
+        if not (
+            is_aggregator_url(company.website) or is_article_url(company.website)
+        ):
             continue
 
         logger.info(

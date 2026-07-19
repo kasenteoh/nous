@@ -29,7 +29,7 @@ from urllib.parse import urljoin, urlsplit
 
 from selectolax.parser import HTMLParser
 
-from nous.sources.reject_hosts import is_aggregator_url
+from nous.sources.reject_hosts import is_aggregator_url, is_article_url
 from nous.util.slugify import name_tokens, names_token_subset, normalize_name
 from nous.util.url import canonical_domain, hostname, is_storable_website
 
@@ -102,7 +102,11 @@ def select_company_link(
     anchor_hit: str | None = None
 
     for absolute, anchor in links:
-        if not is_storable_website(absolute) or is_aggregator_url(absolute):
+        if (
+            not is_storable_website(absolute)
+            or is_aggregator_url(absolute)
+            or is_article_url(absolute)
+        ):
             continue
         host = hostname(absolute)
         if not host or host == pub or host.endswith("." + pub):

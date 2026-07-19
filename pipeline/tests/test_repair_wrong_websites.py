@@ -1038,6 +1038,46 @@ async def test_aggregator_reset_never_deletes_news_sourced_rounds(
     assert survivor is not None
 
 
+async def test_dated_article_path_selected_on_unlisted_host(
+    db: AsyncSession,
+) -> None:
+    """The blue-origin long tail: a dated-article URL on an outlet NOT in
+    AGGREGATOR_HOSTS is still healed by pass (a) via the path shape, rounds
+    preserved (same no-purge rule as the aggregator-host reset)."""
+    co = _co(
+        "Orbit Widgets",
+        "orbit-rww-dated",
+        website="https://smallbizjournal.example/2026/07/08/orbit-widgets-raises-30m/",
+        description_short="Orbit Widgets is a satellite components startup.",
+    )
+    db.add(co)
+    await db.flush()
+    legit_round = FundingRound(
+        company_id=co.id,
+        round_type="Series A",
+        amount_raised=30_000_000,
+        primary_news_url="https://smallbizjournal.example/2026/07/08/orbit-widgets-raises-30m/",
+    )
+    db.add(legit_round)
+    await db.flush()
+    round_id = legit_round.id
+    await db.commit()
+
+    summary = await run_repair_wrong_websites(db)
+    assert summary.aggregator_url_reset == 1
+    assert summary.wrong_site_rounds_deleted == 0
+
+    await db.refresh(co)
+    assert co.website is None
+    assert co.rejected_urls and any(
+        "smallbizjournal" in u for u in co.rejected_urls
+    )
+    survivor = (
+        await db.execute(select(FundingRound).where(FundingRound.id == round_id))
+    ).scalar_one_or_none()
+    assert survivor is not None
+
+
 # ── Pass (f) + extended reset: enrichment residue (2026-07-17, helix/amiato) ─
 
 
