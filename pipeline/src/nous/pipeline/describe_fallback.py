@@ -412,15 +412,21 @@ async def _persist_company(
     durably stamped/written.
     """
     if to_persist is not None:
-        # Atomic check-and-set: refresh a fresh (NULL) or own-fallback row;
-        # never an own-site description (source NULL + short present).
+        # Atomic check-and-set: refresh a PRISTINE row (both descriptions
+        # NULL) or our own fallback stopgap; never any own-site text. The
+        # long-NULL clause matters: a row with an own-site description_long
+        # but no tagline (CI catch) must not gain a fallback tagline beside
+        # own-site prose — the About attribution would misstate its source.
         written = (
             await session.execute(
                 update(Company)
                 .where(
                     Company.id == company.id,
                     or_(
-                        Company.description_short.is_(None),
+                        (
+                            Company.description_short.is_(None)
+                            & Company.description_long.is_(None)
+                        ),
                         Company.description_source == "fallback",
                     ),
                 )
@@ -484,14 +490,17 @@ async def run_describe_fallback(
         select(Company)
         .where(
             Company.exclusion_reason.is_(None),
-            # Fresh residue (no description) OR a fallback row eligible to
-            # refresh its own stopgap on a prompt re-run. An own-site
-            # description (source NULL + short present) is excluded here and,
-            # belt-and-suspenders, by the persist WHERE. The no-readable-own-
-            # page clause below means an own-site description_long (which
-            # implies scraped pages) can never enter the cohort either.
+            # PRISTINE residue (no description of any kind) OR a fallback row
+            # eligible to refresh its own stopgap on a prompt re-run. Any
+            # own-site text — short, or a long without a tagline (CI catch:
+            # such a row must not gain a fallback tagline beside own-site
+            # prose) — is excluded here and, belt-and-suspenders, by the
+            # persist WHERE.
             or_(
-                Company.description_short.is_(None),
+                (
+                    Company.description_short.is_(None)
+                    & Company.description_long.is_(None)
+                ),
                 Company.description_source == "fallback",
             ),
             not_(
