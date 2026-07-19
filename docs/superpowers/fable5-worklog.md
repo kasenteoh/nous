@@ -2493,3 +2493,54 @@ Owner: "let's do it" (the QA P0s). Both adversarially reviewed (APPROVE).
 - NEXT: live golden re-record (eval-record.yml) to replace #245's recordings
   with description_long populated, and gate M1 in the scorer at that re-record;
   then a batched apply run to backfill long profiles on rich-evidence residue.
+
+## PR #248 — feat: evidence-proportional long profiles for describe-fallback
+
+- Owner call (via AskUserQuestion; "always match regular length" pushed
+  back on as padding-by-construction): fallback pages get real
+  About-length profiles WHERE EVIDENCE SUPPORTS ONE. description_long is
+  optional (default None — #245 recordings parse), 1400-char cap,
+  accepted only with >= 3 distinct evidence sources AND the M1
+  claim-grounding check; long requires a persistable tagline and dies
+  with every stage-level short rejection (the reviewer's KEY TRAP,
+  pinned).
+- Persist/selection widened to (both descriptions NULL) OR
+  description_source='fallback' — fallback refreshes its own stopgap on
+  version re-runs; own-site text untouchable (CI caught the first
+  predicate draft: a row with an own-site LONG but no tagline must not
+  gain a fallback tagline beside own-site prose).
+- Review APPROVE; both MEDIUMs closed in-PR: (1) enrich supersession now
+  clears a fallback-written LONG with the provenance reset (third-party
+  prose can never survive under the own-site attribution); (2)
+  stale-fallback lifecycle on null re-adjudication — DISTRUST-class nulls
+  (entity_ambiguity/descriptor/claims) CLEAR the standing description
+  (stale_cleared counter), AVAILABILITY-class nulls keep it; both pinned.
+- Web: About attribution variant ("Profile written by nous from Wikidata
+  and press coverage"); .md includes fallback longs WITH inline
+  attribution (documents have an attribution slot; the short blockquote
+  stays gated). Suites 1258/465 green.
+
+## PR #249 — test(golden): live recordings for describe_fallback 2026-07-19.2
+
+- Delta reviewed: all floors green, descriptor_grounding_min 1.0. ONE
+  case regressed (same-name-different-field-null now described): the
+  long-profile rules diluted the prompt's ambiguity instruction — a
+  softened LAST line of defense only (the entity guard filters
+  contaminated articles before evidence in prod). Queued: re-strengthen
+  the wording + make the scorer gate M1 at the next prompt bump.
+
+## PR #250 — fix(pipeline): evidence bar counts distinct outlets (GN syndication collapse)
+
+- Profile-run-1 (600 companies) wrote ZERO longs: Google News syndication
+  stores news.google.com URLs for EVERY outlet, so the distinct-HOST bar
+  saw one source where blue-origin has ten outlets. The bar now counts
+  the stored article.source outlet (lowercased; URL host fallback) —
+  prod counters were the detector, a GN-shaped DB test pins it.
+- PROMPT_VERSION → 2026-07-19.3 with NO template change: the bump is the
+  re-selection lever so the corrected bar re-adjudicates the cohort
+  (recordings replay unchanged). Review APPROVE (the cross-spelling
+  overcount edge accepted: bounded by the grounding checks and strictly
+  better than the guaranteed undercount).
+- Run economics so far: shorts backfill 4 batches = 246 persisted /
+  $0.35; .2 re-run wave = ~160 refreshed + 32 distrust-nulls cleared /
+  ~$0.22+. The .3 full-cohort run applies profiles (run 29706952642).
