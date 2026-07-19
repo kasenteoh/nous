@@ -2432,3 +2432,22 @@ Owner: "let's do it" (the QA P0s). Both adversarially reviewed (APPROVE).
 - NEXT: batched describe-fallback apply backfill (~$0.60 approved) once
   the prod deploy on b4321e4 is green — gating must be LIVE before any
   fallback description exists.
+
+## PR #247 — fix(pipeline): own-website enrich supersedes fallback description provenance
+
+- Owner asked why blue-origin's description is one line — the answer (a
+  fresh batch-1 fallback description; the About profile needs an own-site
+  scrape) exposed TWO bugs on the supersede path:
+  (1) enrich wrote description_short without resetting description_source
+  → an own-site description would inherit stale 'fallback' provenance
+  (mis-gated + mis-attributed);
+  (2) — caught by CI failing the new handoff test — the reset was DEAD
+  CODE: enrich's selection (description_short IS NULL) never re-selects a
+  fallback-described row at all. Selection now also admits
+  description_source='fallback', armed only when scraped pages exist
+  (fallback rows have none by construction) and self-terminating (the
+  judge write resets the source to NULL).
+- repair-wrong-websites + repair-catalog resets clear description_source
+  with the description they clear (review parity).
+- Review APPROVE; test pins the full trajectory (fallback row + pages →
+  enrich → own-site description, provenance NULL). Suite 1249 green.
