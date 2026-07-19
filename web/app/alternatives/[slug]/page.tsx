@@ -147,6 +147,15 @@ export default async function AlternativesPage({ params }: Props) {
             {company.description_short}
           </p>
         )}
+        {/* A third-party-grounded description carries its provenance wherever
+            it is readable — a visitor landing here directly must not need the
+            company page to learn what they're reading (review catch). */}
+        {company.description_short &&
+          company.description_source === "fallback" && (
+            <p className="mt-1 font-mono text-xs text-ink-muted">
+              Description written by nous from Wikidata and press coverage
+            </p>
+          )}
         {total > 0 && (
           <p className="mt-4 text-sm text-ink-muted">
             {total} {total === 1 ? "alternative" : "alternatives"} and competitors

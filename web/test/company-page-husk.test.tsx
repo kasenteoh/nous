@@ -321,6 +321,16 @@ describe("company page metadata gating", () => {
     const desc = await metaDescription(company);
     expect(desc).toBe("Builds humanoid robots.");
   });
+
+  it("treats description_source: null as own-website (post-migration NULL)", async () => {
+    const desc = await metaDescription(
+      huskCompany({
+        description_short: "Builds humanoid robots.",
+        description_source: null,
+      }),
+    );
+    expect(desc).toBe("Builds humanoid robots.");
+  });
 });
 
 describe("company page structured-data gating", () => {
