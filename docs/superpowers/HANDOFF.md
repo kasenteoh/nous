@@ -7,6 +7,32 @@ authoritative history), then `BACKLOG.md` (annotated with what shipped; its
 **"2026-07-17 post-surgery QA sweep"** section is the active work queue).
 The plan docs under `docs/superpowers/plans/` are historical context.
 
+## LATEST UPDATE — missing-data sweep: news-article-as-website healing (2026-07-19, PR #242 + ops)
+
+Owner mandate: "we can't have missing data." Findings + actions:
+- **blue-origin's website was a nypost.com ARTICLE URL** (wrong-website
+  class on an unlisted host) → healed via ops `reresolve-company
+  set_url=https://www.blueorigin.com/`; #242 makes the class self-healing:
+  ~20 news hosts added to AGGREGATOR_HOSTS + new `is_article_url()`
+  (dated-path, any host) wired into homepage surfaces + repair pass (a)
+  ONLY (the funding-source seam is pinned by test — never wire it into
+  the junk gate). Every 3h cron now heals such rows, rounds preserved;
+  watch `aggregator_url_reset` in the repair step summary for the census.
+- **The website-less re-mining pool is EXHAUSTED**: a 400-limit
+  resolve-website-fallback backfill dispatch returned seen=0 (cron drain
+  since #174 stamped the whole cohort). The remaining website-less rows
+  are the hard residue (no Wikidata P856, no minable article link).
+- **Description-less cohorts that remain**: (1) healed-website rows —
+  re-resolve + re-enrich over the next crons; (2) sites Cloudflare-403ing
+  Actions IPs (scrape impossible; "route around, don't evade" stands);
+  (3) the website-less residue. For (2)+(3) the only description path is
+  the DEFERRED structured-describe fallback ("A", from Wikidata/news
+  facts) — product call parked with the owner (it was dropped 2026-07-12;
+  re-opening needs the three required fixes + the off-page
+  description_short compliance gap addressed).
+- A one-off pipeline.yml dispatch (run 29697145893) applied the healing
+  same-day rather than waiting for the cron slot.
+
 ## LATEST UPDATE — funding/news timeline separation SHIPPED (2026-07-19, PR #241)
 
 The owner-approved split (spec
