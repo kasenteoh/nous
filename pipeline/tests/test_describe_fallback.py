@@ -910,7 +910,9 @@ async def test_apply_persists_long_profile_on_rich_evidence(
                 company_id=co.id,
                 url=f"https://outlet-{n}.example/rocketwerks-{n}",
                 title="Rocketwerks builds rockets",
-                source="news.example",
+                # Distinct OUTLET names — the bar counts these (URL host is
+                # the fallback), so three independent voices are three.
+                source=f"outlet-{n}.example",
                 raw_content=(
                     "Rocketwerks, the aerospace manufacturer, designs and "
                     "builds launch vehicles and rockets."
@@ -946,6 +948,49 @@ async def test_apply_persists_long_profile_on_rich_evidence(
         "vehicles. It designs and builds rockets."
     )
     assert co.description_source == "fallback"
+
+
+@pytestmark_db
+async def test_gn_syndicated_outlets_clear_the_evidence_bar(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The blue-origin shape (profile-run-1 catch): Google News syndication
+    stores news.google.com URLs for EVERY outlet, so host-based counting saw
+    one source and wrote zero longs. The bar counts the stored OUTLET name
+    first — three distinct outlets behind one syndication host are three
+    voices."""
+    co = _co("Rocketwerks")
+    db.add(co)
+    await db.flush()
+    for n, outlet in enumerate(["The Motley Fool", "Yahoo Finance", "Reuters"]):
+        db.add(
+            NewsArticle(
+                company_id=co.id,
+                url=f"https://news.google.com/rss/articles/rocketwerks-{n}",
+                title="Rocketwerks builds rockets",
+                source=outlet,
+                raw_content=(
+                    "Rocketwerks, the aerospace manufacturer, designs and "
+                    "builds launch vehicles and rockets."
+                ),
+            )
+        )
+    await db.commit()
+
+    monkeypatch.setattr(df, "WikidataClient", _fake_wikidata({}))
+    monkeypatch.setattr(
+        df,
+        "check_article_entity",
+        AsyncMock(return_value=GuardDecision(attach=True, reason="ok")),
+    )
+    monkeypatch.setattr(df, "complete_json", _grounded_aerospace_llm_with_long())
+
+    summary = await run_describe_fallback(db, user_agent=_UA, limit=20, dry_run=False)
+
+    assert summary.long_written == 1
+    assert summary.long_below_evidence_bar == 0
+    await db.refresh(co)
+    assert co.description_long is not None
 
 
 @pytestmark_db
