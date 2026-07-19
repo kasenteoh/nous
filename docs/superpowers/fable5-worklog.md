@@ -2265,3 +2265,52 @@ Owner: "let's do it" (the QA P0s). Both adversarially reviewed (APPROVE).
   (lint + test + build). Verify after ISR (~6h): /c/blue-origin and
   /c/kalshi show a "Funding" rail + separate "In the news" list, every
   article exactly once.
+
+## PR #242 — fix(pipeline): reject news-article URLs as company websites (blue-origin class)
+
+- Trigger: the owner asked why /c/blue-origin has no description. Root
+  cause: its `website` was a nypost.com ARTICLE URL (the #214/#215
+  wrong-website class on a host AGGREGATOR_HOSTS didn't name), so
+  enrichment could never scrape a real homepage and the no-fabrication
+  rule correctly left the description empty. The immediate row was healed
+  first via `ops.yml reresolve-company set_url=https://www.blueorigin.com/`
+  (previous→resolved confirmed in the run output).
+- The generic fix, two layers in `reject_hosts.py`: (1) ~20 major
+  business/tech press hosts join AGGREGATOR_HOSTS (nypost, wsj, nytimes,
+  cnbc, cnn, ft, marketwatch, barrons, fool, msn, aol, yahoo,
+  news.google.com — subdomain-level, so sites.google.com startup pages
+  survive — theverge, venturebeat, geekwire, theglobeandmail,
+  washingtonpost, latimes, theguardian, apnews); (2) new
+  `is_article_url()` — a dated `/YYYY/MM/…` path (months 1-12) is never a
+  homepage on ANY host, catching the outlet long tail generically.
+- **The load-bearing seam** (mapped across all 8 consumers before
+  writing): `is_aggregator_url` is shared with extract_funding's
+  funding-source junk gate, and dated publisher paths ARE the legitimate
+  shape of most round sources — so `is_article_url` is a SEPARATE helper
+  wired only into homepage-candidate surfaces (resolver ×3,
+  resolve-website-fallback `_accept`, article outbound-link mining,
+  repair-wrong-websites pass (a) selection). `ingest_news` and the
+  article-extraction path never consult the list. A funding-source
+  invariant test pins the seam ("if this fails, someone wired
+  is_article_url into the junk gate").
+- Effect: every 3h cron's repair-wrong-websites now heals ANY row whose
+  stored website is a news article — clears website/description residue,
+  appends to rejected_urls, re-queues resolution — with rounds PRESERVED
+  (purge still needs double-confirmed wrong-company evidence; pinned by
+  the existing techcrunch test + a new dated-path-on-unlisted-host test).
+  The repair step summary's `aggregator_url_reset` counter is the census.
+- **Adversarial review** APPROVE (0 blocker/high): month-validated regex
+  (0/13-99 never match), the /YYYY/M-no-slash match documented as
+  intentional, all 20 hosts pinned in the guard test. Reviewer confirmed
+  yahoo.com suffix-walk and news.google.com granularity are correct.
+- Also this session (ops, no code): the 400-husk
+  resolve-website-fallback backfill dispatch returned seen=0 — the
+  re-minable website-less cohort is EXHAUSTED (the cron's 25/run drain
+  since #174 stamped everyone); what remains website-less is the hard
+  residue where Wikidata + article-link mining both failed.
+- ruff/mypy/pytest 1219 green locally (no-DB baseline); DB-gated suite
+  green in CI. Verify next cron: `aggregator_url_reset` count in the
+  repair step summary, then healed slugs re-resolving/re-enriching over
+  subsequent crons; /c/blue-origin description after scrape+enrich+ISR
+  (blueorigin.com may 403 from Actions IPs — if so the row is at least
+  truthful: no false Website citation).
