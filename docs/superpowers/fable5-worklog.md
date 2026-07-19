@@ -2388,3 +2388,47 @@ Owner: "let's do it" (the QA P0s). Both adversarially reviewed (APPROVE).
   dispatch describe-fallback.yml apply until it is merged (fallback text
   must never reach meta/OG/JSON-LD/.md unattributed). Then batched
   backfill (~$0.60 approved) + live golden re-record.
+
+## PR #245 — test(pipeline): live DeepSeek recordings for the describe_fallback golden set
+
+- eval-record.yml dispatch (run 29701930498) replaced #244's simulated
+  placeholders with live recordings; delta table reviewed before merge:
+  parse_rate 1.0, null_accuracy 1.0 (+0.2 over floor), described_accuracy
+  1.0 (+0.2), **descriptor_grounding_min 1.0 — zero fabrication against
+  the real model**. Floors left conservative. Follow-up unchanged: gate M1
+  in the scorer at the next re-record.
+- **Ops lesson (self-inflicted):** reviewing this branch involved a
+  `git stash` + `git checkout` in the main tree WHILE an implementation
+  agent was editing it — the stash grabbed half the agent's uncommitted
+  work and the checkout flipped the branch under it. Recovered cleanly
+  (stash pop; no overlap with the agent's later edits; the agent detected
+  the flip and re-verified). RULE: never run branch/stash operations in
+  the shared tree while an agent is active; review remote branches via
+  `gh`/API instead.
+
+## PR #246 — feat(web): provenance-gate fallback descriptions + attribution rider (fix #1)
+
+- The compliance half of describe-fallback. Gated on description_source
+  === 'fallback' (absent/null → own-website, byte-identical): /c/[slug]
+  meta description (location/industry fallback instead), Organization
+  JSON-LD description, FAQ "What does X do?", the .md sibling's blockquote
+  lead, /alternatives metadata lead. Visible in-site UI deliberately
+  ungated (cards/related/spotlight/new) — reviewer's exhaustive surface
+  sweep confirmed none of those feed meta/OG/JSON-LD, and OG images /
+  feeds / export / sitemaps / vs / compare never carried description_short
+  at all.
+- Attribution riders: under the /c/[slug] tagline (fallback rows have no
+  description_long → no About line → this is their ONLY attribution) and
+  — review catch — on the /alternatives visible header too ("Description
+  written by nous from Wikidata and press coverage").
+- getAlternatives is the one NAMED-COLUMN projection touched (threads
+  description_source through both return paths); deploy order honored:
+  0045 was applied on prod (run 29702135482, "Running upgrade 0044 →
+  0045" in the log) BEFORE this merged, so the PostgREST unknown-column
+  400 class couldn't fire.
+- Adversarial review APPROVE (0 blocker/high); all 3 findings applied
+  pre-merge (alternatives metadata test, null-source baseline test, the
+  alternatives rider). Web suite 461 green.
+- NEXT: batched describe-fallback apply backfill (~$0.60 approved) once
+  the prod deploy on b4321e4 is green — gating must be LIVE before any
+  fallback description exists.
