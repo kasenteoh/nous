@@ -65,7 +65,14 @@ export function renderCompanyMarkdown(
 
   lines.push(`# ${company.name}`);
   lines.push("");
-  if (company.description_short) {
+  // The blockquote lead is the company's one-liner — but ONLY when it was
+  // written from the company's OWN website. A describe-fallback description
+  // (description_source === "fallback", migration 0045) is grounded in
+  // third-party evidence (Wikidata + press), and this .md sibling is a
+  // machine-consumed surface with no per-fact attribution slot, so a
+  // third-party-grounded one-liner must never lead it unattributed. Revisit
+  // with an inline attribution note as a follow-up.
+  if (company.description_short && company.description_source !== "fallback") {
     lines.push(`> ${company.description_short}`);
     lines.push("");
   }

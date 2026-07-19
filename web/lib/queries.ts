@@ -2083,7 +2083,9 @@ export async function getAlternatives(
   // 1. Subject company — only the fields the page header + metadata need.
   const { data: company, error: companyError } = await supabase
     .from("companies")
-    .select("id, slug, name, description_short, industry_group, exclusion_reason")
+    .select(
+      "id, slug, name, description_short, description_source, industry_group, exclusion_reason",
+    )
     .eq("slug", slug)
     .single();
 
@@ -2124,6 +2126,8 @@ export async function getAlternatives(
         slug: company.slug as string,
         name: company.name as string,
         description_short: (company.description_short as string | null) ?? null,
+        description_source:
+          (company.description_source as string | null | undefined) ?? null,
         industry_group: (company.industry_group as string | null) ?? null,
       },
       resolved: [],
@@ -2183,6 +2187,8 @@ export async function getAlternatives(
       slug: company.slug as string,
       name: company.name as string,
       description_short: (company.description_short as string | null) ?? null,
+      description_source:
+        (company.description_source as string | null | undefined) ?? null,
       industry_group: (company.industry_group as string | null) ?? null,
     },
     resolved,

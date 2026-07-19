@@ -53,6 +53,17 @@ import { Sources, hasRenderableCitations } from "@/components/Sources";
 // heuristic — rendered as quiet text, not a badge (see the header below).
 const INACTIVE_FAILURE_THRESHOLD = 3;
 
+// True when description_short was written by the describe-fallback stage from
+// THIRD-PARTY evidence (migration 0045's description_source = 'fallback'), not
+// from the company's own website. Such a description must never reach a
+// machine-syndicated surface that carries no attribution — page metadata, the
+// Organization / FAQ JSON-LD, the .md sibling — but stays visible in the on-site
+// UI with an honest attribution rider. undefined/null → own-website, so behavior
+// is byte-identical to today until 0045 lands (select("*") omits the column);
+// only the literal "fallback" gates.
+const isFallbackDescription = (c: CompanyRow) =>
+  c.description_source === "fallback";
+
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 type Props = {
@@ -72,9 +83,13 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
 
   const { company } = detail;
 
-  // Prefer the LLM-generated short description; fall back to a location/industry summary.
+  // Prefer the LLM-generated short description; fall back to a location/industry
+  // summary. A describe-fallback description (third-party-grounded, migration
+  // 0045) is held back HERE — <meta> is a machine-syndicated surface with no
+  // attribution slot — so it takes the location/industry path exactly as an
+  // absent description would; the visible page keeps it with an attribution rider.
   let description: string;
-  if (company.description_short) {
+  if (company.description_short && !isFallbackDescription(company)) {
     description = company.description_short;
   } else {
     const parts: string[] = [];
@@ -129,7 +144,12 @@ function companyJsonLd(company: CompanyRow): Record<string, unknown> {
   };
 
   if (company.website) org.url = company.website;
-  if (company.description_short) org.description = company.description_short;
+  // Omit a describe-fallback (third-party-grounded) description: this JSON-LD is
+  // machine-syndicated with no attribution slot (migration 0045). An own-website
+  // description flows as before.
+  if (company.description_short && !isFallbackDescription(company)) {
+    org.description = company.description_short;
+  }
 
   if (company.hq_city || company.hq_state) {
     const address: Record<string, unknown> = { "@type": "PostalAddress" };
@@ -186,7 +206,10 @@ function companyFaqJsonLd(
 ): Record<string, unknown> | null {
   const qa: { q: string; a: string }[] = [];
 
-  if (company.description_short) {
+  // A describe-fallback (third-party-grounded) description is withheld from this
+  // machine-syndicated FAQ markup (migration 0045, no attribution slot); an
+  // own-website description answers "What does X do?" as before.
+  if (company.description_short && !isFallbackDescription(company)) {
     qa.push({
       q: `What does ${company.name} do?`,
       a: company.description_short,
@@ -618,10 +641,24 @@ export default async function CompanyPage({ params }: Props) {
           </p>
         )}
 
-        {/* Tagline — description_short as a muted paragraph below the meta strip */}
+        {/* Tagline — description_short as a muted paragraph below the meta strip.
+            Stays visible for a describe-fallback (third-party-grounded)
+            description too; that row gets the attribution rider below. */}
         {company.description_short && (
           <p className="mt-5 text-base text-ink-soft leading-relaxed max-w-2xl">
             {company.description_short}
+          </p>
+        )}
+        {/* Attribution rider for a describe-fallback description (migration
+            0045): the tagline was written by nous from third-party evidence,
+            not the company's own site, so it carries an honest source line —
+            mirroring the About section's attribution style. Fallback rows have
+            no description_long, so the About attribution line never renders for
+            them; this rider is their ONLY attribution surface and must not be
+            dropped. */}
+        {company.description_short && isFallbackDescription(company) && (
+          <p className="mt-1 font-mono text-xs text-ink-muted">
+            Description written by nous from Wikidata and press coverage
           </p>
         )}
 

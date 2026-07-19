@@ -35,10 +35,15 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const count = data.resolved.length + data.named.length;
 
   // Description leans on the company's own one-liner when present, so the page
-  // reads as real content rather than a templated doorway.
-  const lead = company.description_short
-    ? `${company.name} — ${company.description_short}`
-    : `${company.name}`;
+  // reads as real content rather than a templated doorway. A describe-fallback
+  // one-liner (description_source === "fallback", migration 0045) is grounded in
+  // third-party evidence and carries no attribution slot in <meta>, so it is
+  // held back HERE while the visible page header keeps it — falling back to the
+  // bare name lead, exactly as an absent description would.
+  const lead =
+    company.description_short && company.description_source !== "fallback"
+      ? `${company.name} — ${company.description_short}`
+      : `${company.name}`;
   const description =
     count > 0
       ? `${count} alternatives and competitors to ${company.name}, with what each one does. ${lead}`

@@ -1,6 +1,6 @@
 import { render, screen, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import CompanyPage from "@/app/c/[slug]/page";
+import CompanyPage, { generateMetadata } from "@/app/c/[slug]/page";
 import {
   getAlsoBackedBy,
   getCareerMoves,
@@ -236,6 +236,150 @@ describe("company page funding/news split", () => {
     expect(
       screen.queryByRole("heading", { name: "In the news" }),
     ).not.toBeInTheDocument();
+  });
+});
+
+// ─── describe-fallback gating (migration 0045) ───────────────────────────────
+// A third-party-grounded description_short (description_source === "fallback")
+// stays VISIBLE on-site with an attribution rider, but must never reach a
+// machine-syndicated surface with no attribution: page <meta>, the Organization
+// / FAQ JSON-LD. undefined/null source → own-website → byte-identical to today.
+
+describe("company page describe-fallback visible attribution", () => {
+  it("shows the fallback tagline with its attribution rider", async () => {
+    vi.mocked(getCompanyBySlug).mockResolvedValue(
+      detail({
+        company: huskCompany({
+          description_short: "Builds humanoid robots.",
+          description_source: "fallback",
+        }),
+      }),
+    );
+    await renderCompanyPage();
+
+    expect(screen.getByText("Builds humanoid robots.")).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Description written by nous from Wikidata and press coverage",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("omits the attribution rider for an own-website description", async () => {
+    vi.mocked(getCompanyBySlug).mockResolvedValue(
+      detail({
+        // No description_source → own-website.
+        company: huskCompany({ description_short: "Builds humanoid robots." }),
+      }),
+    );
+    await renderCompanyPage();
+
+    expect(screen.getByText("Builds humanoid robots.")).toBeInTheDocument();
+    expect(
+      screen.queryByText(
+        "Description written by nous from Wikidata and press coverage",
+      ),
+    ).not.toBeInTheDocument();
+  });
+});
+
+describe("company page metadata gating", () => {
+  async function metaDescription(company: CompanyRow): Promise<string> {
+    vi.mocked(getCompanyBySlug).mockResolvedValue(detail({ company }));
+    const meta = await generateMetadata({
+      params: Promise.resolve({ slug: "acme-robotics" }),
+    });
+    return meta.description as string;
+  }
+
+  it("uses the location/industry fallback for a describe-fallback description", async () => {
+    const desc = await metaDescription(
+      huskCompany({
+        description_short: "Builds humanoid robots.",
+        description_source: "fallback",
+        industry_group: "Robotics",
+        hq_city: "Austin",
+        hq_state: "TX",
+      }),
+    );
+    expect(desc).not.toContain("Builds humanoid robots.");
+    expect(desc).toContain("Robotics");
+    expect(desc).toContain("Acme Robotics");
+  });
+
+  it("uses an own-website description verbatim in the meta description", async () => {
+    const desc = await metaDescription(
+      huskCompany({ description_short: "Builds humanoid robots." }),
+    );
+    expect(desc).toBe("Builds humanoid robots.");
+  });
+
+  it("treats an absent description_source as own-website (byte-identical)", async () => {
+    const company = huskCompany({ description_short: "Builds humanoid robots." });
+    // The field is genuinely absent (pre-migration prod row), not just null.
+    expect("description_source" in company).toBe(false);
+    const desc = await metaDescription(company);
+    expect(desc).toBe("Builds humanoid robots.");
+  });
+});
+
+describe("company page structured-data gating", () => {
+  function jsonLdBlocks(container: HTMLElement): Record<string, unknown>[] {
+    return Array.from(
+      container.querySelectorAll('script[type="application/ld+json"]'),
+    ).map((el) => JSON.parse(el.textContent ?? "{}") as Record<string, unknown>);
+  }
+
+  it("drops the description from Organization + FAQ JSON-LD for a fallback row", async () => {
+    vi.mocked(getCompanyBySlug).mockResolvedValue(
+      detail({
+        company: huskCompany({
+          description_short: "Builds humanoid robots.",
+          description_source: "fallback",
+          hq_city: "Austin",
+          hq_state: "TX",
+        }),
+      }),
+    );
+    const { container } = render(
+      await CompanyPage({ params: Promise.resolve({ slug: "acme-robotics" }) }),
+    );
+    const blocks = jsonLdBlocks(container);
+
+    const org = blocks.find((b) => b["@type"] === "Organization");
+    expect(org).toBeDefined();
+    expect("description" in org!).toBe(false);
+
+    // The FAQ block still renders (the location question is answerable) but must
+    // not carry the "What does X do?" Q&A sourced from the fallback description.
+    const faq = blocks.find((b) => b["@type"] === "FAQPage");
+    expect(faq).toBeDefined();
+    const questions = (faq!.mainEntity as { name: string }[]).map((q) => q.name);
+    expect(questions).not.toContain("What does Acme Robotics do?");
+    expect(questions).toContain("Where is Acme Robotics based?");
+  });
+
+  it("keeps the description in Organization + FAQ JSON-LD for an own-website row", async () => {
+    vi.mocked(getCompanyBySlug).mockResolvedValue(
+      detail({
+        company: huskCompany({
+          description_short: "Builds humanoid robots.",
+          hq_city: "Austin",
+          hq_state: "TX",
+        }),
+      }),
+    );
+    const { container } = render(
+      await CompanyPage({ params: Promise.resolve({ slug: "acme-robotics" }) }),
+    );
+    const blocks = jsonLdBlocks(container);
+
+    const org = blocks.find((b) => b["@type"] === "Organization");
+    expect(org!.description).toBe("Builds humanoid robots.");
+
+    const faq = blocks.find((b) => b["@type"] === "FAQPage");
+    const questions = (faq!.mainEntity as { name: string }[]).map((q) => q.name);
+    expect(questions).toContain("What does Acme Robotics do?");
   });
 });
 
