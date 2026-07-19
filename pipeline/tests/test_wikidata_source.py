@@ -10,9 +10,19 @@ from __future__ import annotations
 
 from typing import Any
 
+import pytest
+
 from nous.sources.wikidata import (
+    WikidataClient,
+    WikidataFacts,
     WikidataMatch,
+    _extract_entity_description,
+    _extract_inception_year,
+    _extract_labels,
+    _extract_qid_values,
     _origin,
+    _resolve_labels,
+    select_entity_facts,
     select_official_website,
 )
 
@@ -229,3 +239,223 @@ def test_origin_canonicalization() -> None:
     assert _origin("https://example.com") == "https://example.com/"
     assert _origin("ftp://example.com/x") is None
     assert _origin("not a url") is None
+
+
+# ── entity FACTS extractors + selection (describe-fallback source) ───────────
+
+
+def _facts_entity(
+    *,
+    label: str,
+    aliases: list[str] | None = None,
+    instance_of: list[str] | None = None,
+    description: str | None = None,
+    inception: str | None = None,
+    hq_qids: list[str] | None = None,
+    industry_qids: list[str] | None = None,
+    founder_qids: list[str] | None = None,
+    websites: list[str] | None = None,
+) -> dict[str, Any]:
+    entity = _entity(
+        label=label, aliases=aliases, instance_of=instance_of, websites=websites
+    )
+    if description is not None:
+        entity["descriptions"] = {"en": {"value": description}}
+    claims = entity["claims"]
+    if inception is not None:
+        claims["P571"] = [{"mainsnak": {"datavalue": {"value": {"time": inception}}}}]
+
+    def _qid_stmts(qids: list[str]) -> list[dict[str, Any]]:
+        return [
+            {"mainsnak": {"datavalue": {"value": {"id": q}}}} for q in qids
+        ]
+
+    if hq_qids is not None:
+        claims["P159"] = _qid_stmts(hq_qids)
+    if industry_qids is not None:
+        claims["P452"] = _qid_stmts(industry_qids)
+    if founder_qids is not None:
+        claims["P112"] = _qid_stmts(founder_qids)
+    return entity
+
+
+def test_extract_entity_description() -> None:
+    entity = _facts_entity(label="SpaceX", description="American aerospace manufacturer")
+    assert _extract_entity_description(entity) == "American aerospace manufacturer"
+    # Absent / blank → None.
+    assert _extract_entity_description(_facts_entity(label="X")) is None
+    blank = _facts_entity(label="X", description="   ")
+    assert _extract_entity_description(blank) is None
+
+
+def test_extract_inception_year() -> None:
+    claims = _facts_entity(label="X", inception="+2015-03-14T00:00:00Z")["claims"]
+    assert _extract_inception_year(claims) == 2015
+    # No P571 → None.
+    assert _extract_inception_year({}) is None
+    # Multiple statements → the earliest year wins.
+    claims_multi = {
+        "P571": [
+            {"mainsnak": {"datavalue": {"value": {"time": "+2020-00-00T00:00:00Z"}}}},
+            {"mainsnak": {"datavalue": {"value": {"time": "+2012-00-00T00:00:00Z"}}}},
+        ]
+    }
+    assert _extract_inception_year(claims_multi) == 2012
+
+
+def test_extract_qid_values_orders_and_dedupes() -> None:
+    claims = _facts_entity(
+        label="X", industry_qids=["Q1", "Q2", "Q1"]
+    )["claims"]
+    assert _extract_qid_values(claims, "P452") == ["Q1", "Q2"]
+    assert _extract_qid_values(claims, "P999") == []
+
+
+def test_extract_labels_and_resolve() -> None:
+    payload = {
+        "entities": {
+            "Q1": {"labels": {"en": {"value": "Aerospace"}}},
+            "Q2": {"missing": ""},
+            "Q3": {"labels": {"en": {"value": "Hawthorne"}}},
+        }
+    }
+    labels = _extract_labels(payload)
+    assert labels == {"Q1": "Aerospace", "Q3": "Hawthorne"}
+    # Unresolved QIDs are dropped (a bare QID is useless as evidence).
+    assert _resolve_labels(["Q1", "Q2", "Q3"], labels) == ["Aerospace", "Hawthorne"]
+
+
+def test_select_entity_facts_returns_qid_valued_facts() -> None:
+    entities = _payload(
+        {
+            "Q1": _facts_entity(
+                label="SpaceX",
+                instance_of=["Q4830453"],
+                description="American aerospace manufacturer",
+                inception="+2002-00-00T00:00:00Z",
+                hq_qids=["Q49255"],
+                industry_qids=["Q7411", "Q7411"],
+                founder_qids=["Q317521"],
+                websites=["https://www.spacex.com/hub/"],
+            )
+        }
+    )
+    facts = select_entity_facts("SpaceX", ["Q1"], entities)
+    assert isinstance(facts, WikidataFacts)
+    assert facts.qid == "Q1"
+    assert facts.entity_url == "https://www.wikidata.org/wiki/Q1"
+    assert facts.entity_description == "American aerospace manufacturer"
+    assert facts.inception_year == 2002
+    # QID-valued facts are RAW QIDs here — the async caller resolves labels.
+    assert facts.hq == ["Q49255"]
+    assert facts.industries == ["Q7411"]
+    assert facts.founders == ["Q317521"]
+    # Website reuses the origin canonicalization (P856 present).
+    assert facts.website == "https://www.spacex.com/"
+
+
+def test_select_entity_facts_needs_no_website() -> None:
+    """A company Wikidata knows but has no P856 for still yields facts (unlike
+    select_official_website, which requires a website)."""
+    entities = _payload(
+        {
+            "Q1": _facts_entity(
+                label="Hebbia",
+                instance_of=["Q783794"],
+                description="American software company",
+                websites=[],
+            )
+        }
+    )
+    facts = select_entity_facts("Hebbia", ["Q1"], entities)
+    assert facts is not None
+    assert facts.website is None
+    assert facts.entity_description == "American software company"
+    # The same name collision the website lookup rejects is still rejected here.
+    assert select_official_website("Hebbia", ["Q1"], entities) is None
+
+
+def test_select_entity_facts_applies_gates() -> None:
+    # A same-named non-org (no org type) is rejected by the shared gate.
+    entities = _payload(
+        {"Q1": _facts_entity(label="Clay", instance_of=["Q101352"])}
+    )
+    assert select_entity_facts("Clay", ["Q1"], entities) is None
+    # Country conflict is rejected too (shared gate 3).
+    fr = _payload(
+        {
+            "Q2": {
+                "labels": {"en": {"value": "Apex"}},
+                "aliases": {"en": []},
+                "descriptions": {"en": {"value": "French company"}},
+                "claims": {
+                    "P31": [{"mainsnak": {"datavalue": {"value": {"id": "Q4830453"}}}}],
+                    "P17": [{"mainsnak": {"datavalue": {"value": {"id": "Q142"}}}}],
+                },
+            }
+        }
+    )
+    assert select_entity_facts("Apex", ["Q2"], fr, company_country="US") is None
+    assert select_entity_facts("Apex", ["Q2"], fr, company_country="FR") is not None
+
+
+async def test_entity_facts_batch_resolves_labels(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """entity_facts issues ONE extra labels call and maps hq/industry/founder
+    QIDs to English labels (no network — the private calls are stubbed)."""
+    client = WikidataClient("nous-test (test@example.com)")
+
+    entity_payload = _payload(
+        {
+            "Q1": _facts_entity(
+                label="SpaceX",
+                instance_of=["Q4830453"],
+                description="American aerospace manufacturer",
+                hq_qids=["Q49255"],
+                industry_qids=["Q7411"],
+                founder_qids=["Q317521"],
+                websites=["https://www.spacex.com/"],
+            )
+        }
+    )
+    labels_payload = {
+        "entities": {
+            "Q49255": {"labels": {"en": {"value": "Hawthorne, California"}}},
+            "Q7411": {"labels": {"en": {"value": "aerospace"}}},
+            "Q317521": {"labels": {"en": {"value": "Elon Musk"}}},
+        }
+    }
+
+    async def fake_search(name: str, limit: int) -> list[str]:
+        return ["Q1"]
+
+    async def fake_get_entities(ids: list[str]) -> dict[str, Any]:
+        return entity_payload
+
+    async def fake_get_labels(ids: list[str]) -> dict[str, Any]:
+        assert set(ids) == {"Q49255", "Q7411", "Q317521"}
+        return labels_payload
+
+    monkeypatch.setattr(client, "_search", fake_search)
+    monkeypatch.setattr(client, "_get_entities", fake_get_entities)
+    monkeypatch.setattr(client, "_get_labels", fake_get_labels)
+
+    facts = await client.entity_facts("SpaceX")
+    assert facts is not None
+    assert facts.hq == ["Hawthorne, California"]
+    assert facts.industries == ["aerospace"]
+    assert facts.founders == ["Elon Musk"]
+    assert facts.entity_description == "American aerospace manufacturer"
+
+
+async def test_entity_facts_no_match_returns_none(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = WikidataClient("nous-test (test@example.com)")
+
+    async def fake_search(name: str, limit: int) -> list[str]:
+        return []
+
+    monkeypatch.setattr(client, "_search", fake_search)
+    assert await client.entity_facts("Nonexistent") is None

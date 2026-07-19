@@ -33,11 +33,12 @@ apply to every call.
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 from urllib.parse import urlsplit
 
 import httpx
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from nous.sources._http import DomainThrottle, ThrottledHTTPClient
 from nous.sources.reject_hosts import is_aggregator_url
@@ -111,6 +112,12 @@ ORG_TYPE_QIDS: frozenset[str] = frozenset(
 )
 
 
+# Cap on how many QID-valued facts (hq / industry / founder) get their English
+# labels batch-resolved in the one extra wbgetentities call. A prominent company
+# rarely states more than a handful; a cap bounds the single request's size.
+MAX_LABEL_QIDS: int = 10
+
+
 class WikidataMatch(BaseModel):
     """A confirmed Wikidata entity match carrying an official website."""
 
@@ -118,6 +125,30 @@ class WikidataMatch(BaseModel):
     entity_url: str  # https://www.wikidata.org/wiki/Q… — the provenance source
     website: str  # origin-canonicalized P856 official website
     matched_label: str
+
+
+class WikidataFacts(BaseModel):
+    """Entity FACTS for the same name+org-type matched entity as ``WikidataMatch``.
+
+    The describe-fallback evidence source: the third-party facts nous can cite
+    for a company whose own site it cannot read. ``entity_description`` (Wikidata's
+    one-line "American aerospace manufacturer") is the single highest-value fact —
+    it is exactly the non-funding descriptor the describe-fallback prompt gates on.
+    QID-valued facts (``hq`` / ``industries`` / ``founders``) are stored as their
+    resolved English LABELS, not QIDs, so they read as evidence. ``website`` mirrors
+    ``WikidataMatch.website`` (or None when the entity states no usable P856); every
+    fact is attributable to ``entity_url``.
+    """
+
+    qid: str
+    entity_url: str  # https://www.wikidata.org/wiki/Q… — the provenance source
+    matched_label: str
+    entity_description: str | None = None
+    inception_year: int | None = None
+    hq: list[str] = Field(default_factory=list)  # headquarters labels (P159)
+    industries: list[str] = Field(default_factory=list)  # industry labels (P452)
+    founders: list[str] = Field(default_factory=list)  # founder labels (P112)
+    website: str | None = None  # origin-canonicalized P856, when stated
 
 
 def _names_match(company_name: str, candidate_names: list[str]) -> str | None:
@@ -184,6 +215,66 @@ def _extract_official_websites(claims: dict[str, Any]) -> list[str]:
     return out
 
 
+def _extract_entity_description(entity: dict[str, Any]) -> str | None:
+    """The English one-line entity description (e.g. "American aerospace
+    manufacturer"), or None. This is the single highest-value describe-fallback
+    fact — a ready-made non-funding descriptor curated by Wikidata."""
+    value = entity.get("descriptions", {}).get("en", {}).get("value")
+    return value if isinstance(value, str) and value.strip() else None
+
+
+def _extract_inception_year(claims: dict[str, Any]) -> int | None:
+    """Founding year from the earliest P571 (inception) time statement, or None.
+
+    Wikidata times are ISO-ish strings with a leading sign ("+2015-00-00T00:00:00Z");
+    only the year is reliable (month/day are often 0), so we take just the year.
+    """
+    years: list[int] = []
+    for stmt in claims.get("P571", []):
+        try:
+            time_str = stmt["mainsnak"]["datavalue"]["value"]["time"]
+        except (KeyError, TypeError):
+            continue
+        match = re.match(r"[+-]?(\d{1,4})", str(time_str))
+        if match:
+            year = int(match.group(1))
+            if year > 0:
+                years.append(year)
+    return min(years) if years else None
+
+
+def _extract_qid_values(claims: dict[str, Any], prop: str) -> list[str]:
+    """Ordered, de-duplicated QID values of a wikibase-item property (P159 /
+    P452 / P112). The QIDs are label-resolved by the async caller."""
+    out: list[str] = []
+    for stmt in claims.get(prop, []):
+        try:
+            qid = stmt["mainsnak"]["datavalue"]["value"]["id"]
+        except (KeyError, TypeError):
+            continue
+        if qid not in out:
+            out.append(qid)
+    return out
+
+
+def _extract_labels(entities: dict[str, Any]) -> dict[str, str]:
+    """QID → English label map from a ``props=labels`` wbgetentities payload."""
+    out: dict[str, str] = {}
+    for qid, entity in entities.get("entities", {}).items():
+        if not isinstance(entity, dict) or "missing" in entity:
+            continue
+        label = entity.get("labels", {}).get("en", {}).get("value")
+        if isinstance(label, str) and label.strip():
+            out[qid] = label
+    return out
+
+
+def _resolve_labels(qids: list[str], labels: dict[str, str]) -> list[str]:
+    """Map QIDs to labels, dropping any that did not resolve (a bare QID is
+    useless as human-readable evidence)."""
+    return [labels[q] for q in qids if q in labels]
+
+
 def _entity_names(entity: dict[str, Any]) -> list[str]:
     """English label + all English aliases for an entity."""
     names: list[str] = []
@@ -195,6 +286,37 @@ def _entity_names(entity: dict[str, Any]) -> list[str]:
         if value:
             names.append(value)
     return names
+
+
+def _entity_matches(
+    company_name: str,
+    entity: dict[str, Any],
+    *,
+    want_country: str | None,
+) -> str | None:
+    """Gates 1-3 shared by both public lookups — name / org-type / country.
+
+    Returns the matched label when the entity is a name + org-type match that
+    does not conflict on country, else None. The final, lookup-specific gate (a
+    usable P856 for ``select_official_website``; nothing extra for
+    ``select_entity_facts``) is applied by each caller. Factored so both lookups
+    self-reject the same name collisions identically; the caller-specific gate is
+    what keeps their behavior distinct.
+    """
+    # Gate 1: name match against label + aliases.
+    matched_label = _names_match(company_name, _entity_names(entity))
+    if matched_label is None:
+        return None
+    claims = entity.get("claims", {})
+    # Gate 2: organization type.
+    if not (_extract_instance_of(claims) & ORG_TYPE_QIDS):
+        return None
+    # Gate 3: country cross-check (conservative — only on a known conflict).
+    if want_country is not None:
+        entity_countries = _extract_countries(claims)
+        if entity_countries and want_country not in entity_countries:
+            return None
+    return matched_label
 
 
 def select_official_website(
@@ -227,31 +349,15 @@ def select_official_website(
         if not isinstance(claims, dict):
             continue
 
-        # Gate 1: name match against label + aliases.
-        matched_label = _names_match(company_name, _entity_names(entity))
+        # Gates 1-3: name / org-type / country (shared with select_entity_facts).
+        matched_label = _entity_matches(
+            company_name, entity, want_country=want_country
+        )
         if matched_label is None:
             continue
 
-        # Gate 2: organization type.
-        if not (_extract_instance_of(claims) & ORG_TYPE_QIDS):
-            continue
-
-        # Gate 3: country cross-check (conservative — only on a known conflict).
-        if want_country is not None:
-            entity_countries = _extract_countries(claims)
-            if entity_countries and want_country not in entity_countries:
-                continue
-
         # Gate 4: a usable official website.
-        website: str | None = None
-        for raw in _extract_official_websites(claims):
-            origin = _origin(raw)
-            if origin is None or not is_storable_website(origin):
-                continue
-            if is_aggregator_url(origin):  # never accept a directory/social host
-                continue
-            website = origin
-            break
+        website = _first_usable_website(claims)
         if website is None:
             continue
 
@@ -260,6 +366,66 @@ def select_official_website(
             entity_url=f"{_ENTITY_BASE}{qid}",
             website=website,
             matched_label=matched_label,
+        )
+    return None
+
+
+def _first_usable_website(claims: dict[str, Any]) -> str | None:
+    """First P856 value that canonicalizes to a storable, non-aggregator origin."""
+    for raw in _extract_official_websites(claims):
+        origin = _origin(raw)
+        if origin is None or not is_storable_website(origin):
+            continue
+        if is_aggregator_url(origin):  # never accept a directory/social host
+            continue
+        return origin
+    return None
+
+
+def select_entity_facts(
+    company_name: str,
+    search_ids: list[str],
+    entities: dict[str, Any],
+    *,
+    company_country: str | None = None,
+) -> WikidataFacts | None:
+    """Pure selection core (no I/O): facts for the first name+org-type matched
+    entity, or None.
+
+    Same gates 1-3 as :func:`select_official_website` (so the two lookups agree
+    on which entity is this company), but WITHOUT the P856 requirement — an entity
+    Wikidata knows is this company yet states no website can still carry a
+    description / inception / industry, which is exactly the describe-fallback
+    evidence. The QID-valued facts (``hq`` / ``industries`` / ``founders``) come
+    back as RAW QIDs here; the async caller batch-resolves them to English labels.
+    """
+    want_country = (company_country or "").strip().upper() or None
+    ent_map = entities.get("entities", {})
+    for qid in search_ids:
+        entity = ent_map.get(qid)
+        # wbgetentities marks an absent id with a "missing" key ({"missing": ""}).
+        if not isinstance(entity, dict) or "missing" in entity:
+            continue
+        claims = entity.get("claims", {})
+        if not isinstance(claims, dict):
+            continue
+
+        matched_label = _entity_matches(
+            company_name, entity, want_country=want_country
+        )
+        if matched_label is None:
+            continue
+
+        return WikidataFacts(
+            qid=qid,
+            entity_url=f"{_ENTITY_BASE}{qid}",
+            matched_label=matched_label,
+            entity_description=_extract_entity_description(entity),
+            inception_year=_extract_inception_year(claims),
+            hq=_extract_qid_values(claims, "P159"),
+            industries=_extract_qid_values(claims, "P452"),
+            founders=_extract_qid_values(claims, "P112"),
+            website=_first_usable_website(claims),
         )
     return None
 
@@ -338,7 +504,22 @@ class WikidataClient:
             {
                 "action": "wbgetentities",
                 "ids": "|".join(ids),
-                "props": "labels|aliases|claims",
+                # "descriptions" carries Wikidata's one-line entity summary
+                # ("American aerospace manufacturer") — the highest-value
+                # describe-fallback fact; harmless to official_website.
+                "props": "labels|aliases|claims|descriptions",
+                "languages": "en",
+                "format": "json",
+            }
+        )
+
+    async def _get_labels(self, ids: list[str]) -> dict[str, Any]:
+        """Labels-only wbgetentities for QID-valued facts (hq/industry/founder)."""
+        return await self._get_json(
+            {
+                "action": "wbgetentities",
+                "ids": "|".join(ids),
+                "props": "labels",
                 "languages": "en",
                 "format": "json",
             }
@@ -373,3 +554,64 @@ class WikidataClient:
         return select_official_website(
             company_name, ids, entities, company_country=company_country
         )
+
+    async def entity_facts(
+        self,
+        company_name: str,
+        *,
+        company_country: str | None = None,
+        limit: int = 5,
+    ) -> WikidataFacts | None:
+        """Resolve ``company_name`` to its Wikidata entity FACTS, or None.
+
+        Reuses the exact search + org-type gate + name-match + country cross-check
+        as :meth:`official_website` (same entity selection), then adds ONE extra
+        ``props=labels`` call to resolve the QID-valued facts (headquarters /
+        industry / founders, capped at :data:`MAX_LABEL_QIDS`) to English labels.
+        So a hit costs three API calls (search, get-entities, get-labels), or two
+        when the entity states no QID facts. Returns None on no match or on any
+        transport/parse failure — never raises for an ordinary miss.
+        """
+        try:
+            ids = await self._search(company_name, limit)
+            if not ids:
+                return None
+            entities = await self._get_entities(ids)
+        except (httpx.HTTPStatusError, httpx.RequestError, BlockedAddressError) as exc:
+            logger.info("wikidata facts lookup failed for %r: %s", company_name, exc)
+            return None
+        except (ValueError, KeyError, TypeError) as exc:
+            logger.info("wikidata facts parse failed for %r: %s", company_name, exc)
+            return None
+
+        facts = select_entity_facts(
+            company_name, ids, entities, company_country=company_country
+        )
+        if facts is None:
+            return None
+
+        # Batch-resolve the QID-valued facts to English labels in ONE call.
+        qids = list(dict.fromkeys([*facts.hq, *facts.industries, *facts.founders]))[
+            :MAX_LABEL_QIDS
+        ]
+        labels: dict[str, str] = {}
+        if qids:
+            try:
+                labels = _extract_labels(await self._get_labels(qids))
+            except (
+                httpx.HTTPStatusError,
+                httpx.RequestError,
+                BlockedAddressError,
+                ValueError,
+                KeyError,
+                TypeError,
+            ) as exc:
+                # A label-resolution miss is not fatal: the description /
+                # inception facts still stand; the QID facts just drop out.
+                logger.info(
+                    "wikidata label resolution failed for %r: %s", company_name, exc
+                )
+        facts.hq = _resolve_labels(facts.hq, labels)
+        facts.industries = _resolve_labels(facts.industries, labels)
+        facts.founders = _resolve_labels(facts.founders, labels)
+        return facts

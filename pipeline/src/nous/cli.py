@@ -1646,6 +1646,71 @@ def resolve_website_fallback_cmd(
     asyncio.run(_run())
 
 
+@cli.command("describe-fallback")
+@click.option(
+    "--limit",
+    type=int,
+    default=20,
+    show_default=True,
+    help="Max unscrapable-residue companies to probe; bounds LLM spend.",
+)
+@click.option(
+    "--dry-run/--apply",
+    default=True,
+    show_default=True,
+    help=(
+        "Dry-run (default) probes the whole pipeline and prints the yield table "
+        "WITHOUT writing — the only supported mode today. --apply is opt-in and "
+        "fails loudly until the persisting path lands (a later PR, after the prod "
+        "dry run clears the quality gate)."
+    ),
+)
+def describe_fallback_cmd(limit: int | None, dry_run: bool) -> None:
+    """Probe third-party-grounded descriptions for the unscrapable residue — PAID.
+
+    For shown, description-less companies with no readable own page, assembles
+    Wikidata + entity-guard-corroborated news evidence and asks DeepSeek for a
+    SHORT description gated to that evidence (grounding descriptor code-checked
+    against the evidence text). Dry-run measures yield / confidence / funding-only
+    leakage and writes nothing. Cost: one call per company that has any evidence.
+    """
+    import asyncio
+
+    from nous.config import Settings
+    from nous.db.session import AsyncSessionLocal
+    from nous.observability import emit_run_telemetry, write_step_summary
+    from nous.pipeline.describe_fallback import (
+        render_yield_table,
+        run_describe_fallback,
+    )
+
+    settings = Settings()
+
+    async def _run() -> None:
+        # emit_run_telemetry in finally so the LLM $ table is written even if the
+        # stage raises mid-run (the ledger accrues per successful call). No
+        # record_pipeline_run: this is a dry-run probe (house pattern) and the
+        # apply path (which would write rows) is not built.
+        try:
+            try:
+                async with AsyncSessionLocal() as session:
+                    summary = await run_describe_fallback(
+                        session,
+                        user_agent=settings.SEC_USER_AGENT,
+                        limit=limit,
+                        dry_run=dry_run,
+                    )
+            except ValueError as exc:
+                # --apply path not built yet — surface cleanly, not as a traceback.
+                raise click.ClickException(str(exc)) from exc
+            click.echo(summary.model_dump_json(indent=2))
+            write_step_summary(render_yield_table(summary))
+        finally:
+            emit_run_telemetry("describe-fallback")
+
+    asyncio.run(_run())
+
+
 @cli.command("link-competitors")
 @click.option(
     "--limit",
