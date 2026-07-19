@@ -251,6 +251,9 @@ async def run_repair_catalog(
         company.website = None
         company.website_resolved_at = None
         company.description_short = None
+        # Provenance goes with the description it described (0045) — same
+        # stale-tag hygiene as repair_wrong_websites' reset.
+        company.description_source = None
         company.description_long = None
         company.primary_category = None
         company.tags = None

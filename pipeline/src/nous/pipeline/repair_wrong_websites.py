@@ -638,6 +638,10 @@ async def _reset_website_fields(
     company.website = None
     company.website_resolved_at = None
     company.description_short = None
+    # Provenance goes with the description it described (0045) — a stale
+    # 'fallback' tag on an empty description would mis-gate whatever is
+    # written next.
+    company.description_source = None
     company.description_long = None
     company.primary_category = None
     company.tags = None

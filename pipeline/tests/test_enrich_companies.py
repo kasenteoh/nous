@@ -142,6 +142,33 @@ def _make_raw_page(company_id: Any, *, url: str = "https://acme.com/") -> RawPag
 # ---------------------------------------------------------------------------
 
 
+async def test_enrich_supersedes_fallback_description_provenance(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The blue-origin trajectory (0045 handoff): a row carrying a
+    describe-fallback description loses the 'fallback' provenance when the
+    own-website enrich path writes its description — otherwise the own-site
+    text would inherit stale third-party gating/attribution."""
+    company = _make_company(slug="enrich-fallback-handoff")
+    company.description_short = "Acme is an American aerospace manufacturer."
+    company.description_source = "fallback"
+    db.add(company)
+    await db.flush()
+    page = _make_raw_page(company.id)
+    db.add(page)
+    await db.flush()
+    await db.commit()
+
+    fake, _calls = _llm_router()
+    monkeypatch.setattr("nous.pipeline.enrich_companies.complete_json", fake)
+
+    await run_enrich_companies(db)
+
+    await db.refresh(company)
+    assert company.description_short == _CANNED_JUDGE.description_short
+    assert company.description_source is None  # own-website provenance
+
+
 async def test_enrich_populates_company_fields(
     db: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:

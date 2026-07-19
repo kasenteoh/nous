@@ -307,7 +307,17 @@ async def run_enrich_companies(
             .order_by(Company.id)
         )
     else:
-        conditions: list[ColumnElement[bool]] = [Company.description_short.is_(None)]
+        conditions: list[ColumnElement[bool]] = [
+            Company.description_short.is_(None),
+            # A describe-fallback description (0045, third-party-grounded) is a
+            # stopgap, not a description of record: once the company's OWN site
+            # becomes scrapable (the exists(raw_pages) precondition below —
+            # fallback rows have no pages by construction, so this arms only
+            # when a scrape lands), re-enrich so the own-website description
+            # supersedes it. The judge write-site resets description_source to
+            # NULL, which removes the row from this condition — no loop.
+            Company.description_source == "fallback",
+        ]
         if refetch_after_days is not None:
             cutoff = datetime.now(tz=UTC) - timedelta(days=refetch_after_days)
             conditions.append(Company.last_enriched_at.is_(None))
@@ -431,6 +441,15 @@ async def run_enrich_companies(
         normalized_tags = canonicalize_tags(description.tags)
 
         company.description_short = description.description_short
+        # This description is grounded in the company's OWN scraped pages, so
+        # its provenance is the own-website default (NULL). Load-bearing when
+        # the row previously carried a describe-fallback description
+        # (description_source='fallback', migration 0045): without this reset
+        # the own-site description would inherit stale third-party provenance —
+        # wrongly gated out of meta/JSON-LD and falsely attributed on-page.
+        # The blue-origin trajectory: fallback-described first, own-site
+        # description supersedes once the scrape lands.
+        company.description_source = None
         company.primary_category = description.primary_category
         company.tags = normalized_tags
         company.last_enriched_at = now
