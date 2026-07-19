@@ -804,6 +804,26 @@ One happy-path "/c/[slug] renders" test is high-leverage.
 confidence. An admin view surfacing medium-confidence pairs for manual approval
 remains a possible enhancement.
 
+### Missing-data residue after the 2026-07-19 wrong-website healing (#242)
+#242 made news-article-as-website rows self-healing (14 healed on first
+apply; watch `aggregator_url_reset` each cron ~0 steady-state). What's left
+description-less, in order:
+- **Healed-website re-resolution tail [S]**: the 14 reset slugs (incl.
+  bespoke-labs, clio, alsym-energy, hydra-host) re-resolve + re-enrich over
+  the next crons — spot-check a few after ISR; any that re-heal to a NEWS
+  host again indicate a resolver gap, not a repair gap.
+- **Cloudflare-403 scrape cohort [decision parked]**: sites reachable in a
+  browser but 403ing Actions IPs (blue-origin's blueorigin.com may be one —
+  check its scrape outcome next cron). "Route around, don't evade" stands.
+- **Website-less residue [blocked on data]**: the re-mining pool is
+  EXHAUSTED (2026-07-19 backfill dispatch: seen=0) — no Wikidata P856, no
+  minable article link. Re-measure as scrape/discovery coverage grows.
+- **Structured-describe fallback ("A") [product call — owner]**: the ONLY
+  description path for the two unscrapable cohorts. Previously dropped
+  (2026-07-12, marginal + off-page description_short compliance gap). If
+  the "no missing data" mandate extends to these pages, re-open husk-style
+  with the three required fixes from the worklog.
+
 ### Deliberately deferred — with reasons
 - **Accounts/auth** — localStorage watchlists cover the consumer need; auth adds
   email infra, privacy surface, and session bugs for zero differentiation today.
