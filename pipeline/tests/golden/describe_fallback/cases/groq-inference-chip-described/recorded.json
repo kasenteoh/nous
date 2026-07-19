@@ -1,9 +1,11 @@
 {
-  "provenance": "simulated",
+  "provenance": "deepseek",
+  "model": "deepseek-chat",
+  "recorded_at": "2026-07-19T20:08:16+00:00",
   "response": {
-    "description_short": "Groq designs AI inference chips and runs a cloud service for large language models.",
-    "grounding_descriptor": "AI inference chip",
-    "confidence": "medium",
+    "description_short": "Groq designs AI inference chips and hosts a cloud service for running large language models.",
+    "grounding_descriptor": "AI inference chip company",
+    "confidence": "high",
     "null_reason": null
   }
 }

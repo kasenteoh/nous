@@ -1,9 +1,11 @@
 {
-  "provenance": "simulated",
+  "provenance": "deepseek",
+  "model": "deepseek-chat",
+  "recorded_at": "2026-07-19T20:08:20+00:00",
   "response": {
     "description_short": "Natron Energy is a sodium-ion battery maker producing cells for data-center backup power.",
-    "grounding_descriptor": "sodium-ion battery",
-    "confidence": "medium",
+    "grounding_descriptor": "sodium-ion battery maker",
+    "confidence": "high",
     "null_reason": null
   }
 }

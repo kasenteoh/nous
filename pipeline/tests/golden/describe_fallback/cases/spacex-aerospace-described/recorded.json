@@ -1,8 +1,10 @@
 {
-  "provenance": "simulated",
+  "provenance": "deepseek",
+  "model": "deepseek-chat",
+  "recorded_at": "2026-07-19T20:08:24+00:00",
   "response": {
-    "description_short": "SpaceX is an American aerospace manufacturer and space launch company.",
-    "grounding_descriptor": "aerospace manufacturer",
+    "description_short": "American aerospace manufacturer and space launch company.",
+    "grounding_descriptor": "American aerospace manufacturer and space launch company",
     "confidence": "high",
     "null_reason": null
   }
