@@ -433,8 +433,12 @@ async def test_dry_run_described_and_null_samples(
         prompt: str, model: type[DescribeFallbackResult]
     ) -> DescribeFallbackResult:
         if "aerospace" in prompt.lower():
+            # Claim-grounded per M1: every content word ("american",
+            # "manufacturer") appears in the evidence. A description drifting
+            # past the evidence ("builds launch vehicles") is claims_not_grounded
+            # — pinned separately in the M1 unit tests.
             return DescribeFallbackResult(
-                description_short="Aerospace Co builds launch vehicles.",
+                description_short="Aerospace Co is an American aerospace manufacturer.",
                 grounding_descriptor="aerospace manufacturer",
                 confidence="high",
                 null_reason=None,
@@ -457,7 +461,7 @@ async def test_dry_run_described_and_null_samples(
     assert summary.null_insufficient == 1
     by_slug = {s.slug: s for s in summary.samples}
     assert by_slug[described_co.slug].description_short == (
-        "Aerospace Co builds launch vehicles."
+        "Aerospace Co is an American aerospace manufacturer."
     )
     assert by_slug[described_co.slug].wikidata is True
     assert by_slug[null_co.slug].description_short is None
