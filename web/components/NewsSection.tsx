@@ -35,7 +35,7 @@ export function NewsSection({ items }: { items: NewsItem[] }) {
     <section className="mb-12">
       <h2 className="text-lg font-semibold text-ink mb-4">In the news</h2>
 
-      <ul className="flex flex-col gap-4">
+      <ul className="flex flex-col gap-4" aria-label="News stories">
         {visible.map((item) => (
           <StoryRow key={item.article.id} item={item} />
         ))}
@@ -78,9 +78,10 @@ export function NewsSection({ items }: { items: NewsItem[] }) {
  *  by" disclosure round coverage uses. */
 function StoryRow({ item }: { item: NewsItem }) {
   const { article, coverage } = item;
-  // The lead's host, as the lib computed it (coverage is lead-first and only
-  // ever holds renderable URLs, so [0] exists whenever the row does).
-  const host = coverage[0]?.host ?? null;
+  // The stored source hostname (what the old merged view showed — review
+  // catch), falling back to the lead's URL-derived host when absent (coverage
+  // is lead-first and only ever holds renderable URLs, so [0] exists).
+  const host = article.source || coverage[0]?.host || null;
   return (
     <li>
       <a

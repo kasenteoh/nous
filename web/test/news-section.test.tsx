@@ -79,6 +79,7 @@ describe("NewsSection", () => {
             news({
               url: "https://reuters.com/ipo-chatter",
               title: "Acme mulls IPO",
+              source: "reuters.com",
               published_date: "2026-05-10",
             }),
           ],
@@ -95,6 +96,25 @@ describe("NewsSection", () => {
     );
     // Date + the lead's host on the meta line.
     expect(screen.getByText(/reuters\.com/)).toBeInTheDocument();
+  });
+
+  it("falls back to the lead URL's host when the stored source is absent", () => {
+    render(
+      <NewsSection
+        items={newsItems(
+          [],
+          [
+            news({
+              url: "https://bloomberg.com/scoop",
+              title: "Acme said to raise",
+              source: null,
+              published_date: "2026-05-01",
+            }),
+          ],
+        )}
+      />,
+    );
+    expect(screen.getByText(/bloomberg\.com/)).toBeInTheDocument();
   });
 
   it("renders nothing at all when every article attached to a round", () => {
