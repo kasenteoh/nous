@@ -1,0 +1,9 @@
+{
+  "provenance": "simulated",
+  "response": {
+    "description_short": "Fivetran is an automated data integration company that moves data into cloud warehouses.",
+    "grounding_descriptor": "automated data integration",
+    "confidence": "high",
+    "null_reason": null
+  }
+}

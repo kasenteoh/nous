@@ -1,0 +1,9 @@
+{
+  "provenance": "simulated",
+  "response": {
+    "description_short": "Perplexity AI is a conversational search engine that answers questions with cited sources.",
+    "grounding_descriptor": "conversational search engine",
+    "confidence": "high",
+    "null_reason": null
+  }
+}

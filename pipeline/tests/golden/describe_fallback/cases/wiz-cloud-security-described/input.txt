@@ -1,0 +1,2 @@
+Wiz, the cloud security platform, reaches new enterprise milestones (source: https://news.example/wiz)
+Wiz provides a cloud security platform that scans cloud environments for misconfigurations and vulnerabilities.

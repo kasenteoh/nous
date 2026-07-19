@@ -1,0 +1,6 @@
+{
+  "description_short": "Wiz provides a cloud security platform that scans cloud environments for risks.",
+  "grounding_descriptor": "cloud security platform",
+  "confidence": "high",
+  "null_reason": null
+}

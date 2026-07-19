@@ -1,0 +1,2 @@
+Fivetran, the automated data integration company, expands its connector catalog (source: https://techcrunch.example/fivetran)
+Fivetran builds automated data integration pipelines that move data into cloud warehouses for analytics teams.

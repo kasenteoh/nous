@@ -1,0 +1,9 @@
+{
+  "provenance": "simulated",
+  "response": {
+    "description_short": "Figure AI is a humanoid robotics company building general-purpose robots for warehouses.",
+    "grounding_descriptor": "humanoid robotics",
+    "confidence": "high",
+    "null_reason": null
+  }
+}

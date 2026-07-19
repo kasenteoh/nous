@@ -1,32 +1,44 @@
-"""describe-fallback — third-party-grounded description_short (PROBE, dry-run only).
+"""describe-fallback — third-party-grounded description_short (GENERATIVE, GATED).
 
-The MEASURE-FIRST probe for the owner-approved "describe-fallback" (BACKLOG
-2026-07-19 "missing-data residue"; the deferred option "A" re-opened). Normal
-descriptions are written ONLY from a company's own scraped pages; this stage
-targets the residue that has NO readable own pages — companies nous shows but
-cannot describe because the homepage is Cloudflare-403'd or absent. For each, it
-assembles third-party EVIDENCE nous already holds — Wikidata entity facts plus
-entity-guard-corroborated news coverage — and asks the ``describe_fallback``
-prompt for a SHORT factual description, gated hard: every clause traceable to the
-shown evidence, null over thin, and a code-checked grounding descriptor.
+The owner-approved "describe-fallback" (BACKLOG 2026-07-19 "missing-data
+residue"; the deferred option "A" re-opened). Normal descriptions are written
+ONLY from a company's own scraped pages; this stage targets the residue that has
+NO readable own pages — companies nous shows but cannot describe because the
+homepage is Cloudflare-403'd or absent. For each, it assembles third-party
+EVIDENCE nous already holds — Wikidata entity facts plus entity-guard-
+corroborated news coverage — and asks the ``describe_fallback`` prompt for a
+SHORT factual description, gated hard: every clause traceable to the shown
+evidence, null over thin, and a code-checked grounding descriptor.
 
-This PR is the probe: **dry-run only**. It runs the whole pipeline (cohort →
-evidence → LLM → post-validation) and reports a yield table so the owner can see
-what fraction of the residue gets a grounded description, at what confidence, and
-how often the model tries to describe on funding facts alone. It writes NOTHING —
-no ``description_short``, no provenance, no stamp (there is no migration in this
-PR). ``dry_run=False`` raises: the apply path lands in a later PR after the prod
-dry run clears the quality gate.
+Two modes:
+
+- ``--dry-run`` (the #243 evidence gate, kept) runs the whole pipeline (cohort →
+  evidence → LLM → post-validation) and reports a yield table so the owner can
+  see what fraction of the residue gets a grounded description, at what
+  confidence, and how often the model tries to describe on funding facts alone.
+  It writes NOTHING — no ``description_short``, no provenance, no stamp.
+- apply (``--apply``) additionally PERSISTS, per company: writes
+  ``description_short`` + ``description_source='fallback'`` for a grounded,
+  non-low-confidence, claim-checked description (re-checking ``description_short
+  IS NULL`` right before the write so a concurrent enrich is never clobbered),
+  and stamps ``companies.describe_fallback_prompt_version`` on every completed
+  adjudication so a company that correctly yields no description is not
+  re-billed. Selection is version-gated (stamp NULL OR < PROMPT_VERSION), so a
+  prompt bump re-selects everyone while stamped rows never re-bill.
 
 The moat rule (this is a GENERATIVE stage, so the gates are stricter than
-anywhere else): the description is never trusted on the model's word. Two
+anywhere else): the description is never trusted on the model's word. Three
 code-level checks back the prompt's own rules — the prompt's validator drops a
-description lacking a grounding descriptor, and this stage additionally verifies
-that the echoed descriptor actually appears in the evidence text (an ungrounded
-echo is discarded with its own counter). Wrong-entity news is filtered before it
-becomes evidence by the same cheap corroboration + entity guard the ingest path
-uses. Cost: one DeepSeek call per company that has any evidence (skipped
-otherwise); the exact spend lands in the ``emit_run_telemetry`` block.
+description lacking a grounding descriptor; this stage verifies that the echoed
+descriptor actually appears in the evidence text (an ungrounded echo is
+discarded); and a token-level claim check (M1) requires most of the
+description's own content words to appear in the evidence, so a fluent
+paraphrase that drifts past the descriptor is caught too. Wrong-entity news is
+filtered before it becomes evidence by the same cheap corroboration + entity
+guard the ingest path uses. A dumb country-adjective regex additionally flags
+non-US-looking descriptions for the ops exclusion flow (transparent, no LLM).
+Cost: one DeepSeek call per company that has any evidence (skipped otherwise);
+the exact spend lands in the ``emit_run_telemetry`` block.
 """
 
 from __future__ import annotations
@@ -35,7 +47,7 @@ import logging
 import re
 
 from pydantic import BaseModel, Field
-from sqlalchemy import exists, func, not_, select
+from sqlalchemy import exists, func, not_, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from nous.db.models import Company, NewsArticle, RawPage
@@ -85,7 +97,7 @@ class CompanySample(BaseModel):
 
 
 class DescribeFallbackSummary(BaseModel):
-    """Stage summary — feeds the yield table and telemetry. Dry-run only."""
+    """Stage summary — feeds the yield table, telemetry, and pipeline_runs."""
 
     dry_run: bool
     prompt_version: str
@@ -103,8 +115,16 @@ class DescribeFallbackSummary(BaseModel):
     null_insufficient: int = 0  # model returned null: insufficient evidence
     null_ambiguity: int = 0  # model returned null: entity ambiguity
     descriptor_not_in_evidence: int = 0  # echoed descriptor absent from evidence
+    claims_not_grounded: int = 0  # M1: description content words absent from evidence
     low_confidence: int = 0  # described but confidence=='low' (would NOT persist)
     errors: int = 0  # per-company LLM errors (non-rate-limit)
+    # Apply-mode counters (0 in dry-run).
+    persisted: int = 0  # description_short written (grounded, non-low, claim-checked)
+    skipped_already_described: int = 0  # re-check found description_short already set
+    # Non-US side-finding: slugs whose produced description reads non-US (a dumb
+    # country-adjective/city regex, no LLM) — persisted normally, surfaced for
+    # the ops exclusion flow.
+    non_us_suspects: list[str] = Field(default_factory=list)
     samples: list[CompanySample] = Field(default_factory=list)
 
 
@@ -164,6 +184,18 @@ _GENERIC_DESCRIPTORS: frozenset[str] = frozenset(
 _SOURCE_SUFFIX_RE = re.compile(r"\(source: [^)]*\)")
 
 
+def _normalize_evidence(evidence: str) -> str:
+    """URL-stripped, whitespace/case-normalized evidence — the shared basis for
+    both the descriptor check and the M1 claim check.
+
+    Source-URL suffixes ("(source: https://…)") are stripped first so a phrase
+    appearing only inside a citation URL is never treated as editorial evidence
+    (review catch M4).
+    """
+    stripped = _SOURCE_SUFFIX_RE.sub(" ", evidence)
+    return " ".join(stripped.lower().split())
+
+
 def _descriptor_in_evidence(descriptor: str | None, evidence: str) -> bool:
     """Does ``descriptor`` appear in ``evidence`` case-insensitively after
     whitespace normalization? The moat-critical post-validation: the model's
@@ -180,9 +212,86 @@ def _descriptor_in_evidence(descriptor: str | None, evidence: str) -> bool:
     norm_desc = " ".join(descriptor.lower().split())
     if len(norm_desc) < 5 or norm_desc in _GENERIC_DESCRIPTORS:
         return False
-    stripped = _SOURCE_SUFFIX_RE.sub(" ", evidence)
-    norm_evidence = " ".join(stripped.lower().split())
-    return norm_desc in norm_evidence
+    return norm_desc in _normalize_evidence(evidence)
+
+
+# ── M1: token-level claim check ──────────────────────────────────────────────
+
+# Words that carry no identity signal — dropped before the M1 claim check so a
+# description is scored on its CONTENT words, not connective tissue or the
+# generic verbs every profile shares. Small and deliberately generic; the
+# company's own name tokens are dropped too (a description naturally repeats its
+# subject's name, which third-party evidence phrased about "the company" need
+# not echo).
+_CLAIM_STOPWORDS: frozenset[str] = frozenset(
+    {
+        "a", "an", "and", "are", "as", "at", "be", "been", "builds", "based",
+        "by", "company", "companies", "develops", "for", "from", "in", "into",
+        "is", "it", "its", "makes", "of", "offers", "on", "or", "platform",
+        "product", "products", "provider", "provides", "service", "services",
+        "software", "solution", "solutions", "that", "the", "their", "they",
+        "this", "to", "was", "were", "which", "with", "also", "using", "used",
+    }
+)
+
+# Fraction of a description's content words that must appear in the evidence for
+# the M1 claim check to pass. The descriptor check verifies only the ONE echoed
+# phrase; this backs it with a floor over the WHOLE sentence, so a description
+# that grounds its descriptor but invents the rest of the clause is still
+# caught. 0.6 tolerates the connective/synonym slack an honest present-tense
+# rewrite of third-party facts carries.
+_CLAIM_GROUNDING_FLOOR = 0.6
+
+_WORD_TOKEN_RE = re.compile(r"[a-z0-9]+")
+
+
+def _claim_is_grounded(description: str, company_name: str, evidence: str) -> bool:
+    """M1: do >= ``_CLAIM_GROUNDING_FLOOR`` of the description's content words
+    appear in the (URL-stripped, normalized) evidence?
+
+    Content words are the description's alphanumeric tokens minus the stopword
+    set and the company's own name tokens. Uses the SAME normalization as
+    ``_descriptor_in_evidence`` (source URLs stripped, whitespace/case folded),
+    substring-matched. Vacuously true when nothing remains to check (the
+    descriptor gate has already run, so an all-stopword/name description is not
+    re-litigated here).
+    """
+    norm_evidence = _normalize_evidence(evidence)
+    name_tokens = set(_WORD_TOKEN_RE.findall(company_name.lower()))
+    content = [
+        tok
+        for tok in _WORD_TOKEN_RE.findall(description.lower())
+        if len(tok) > 1 and tok not in _CLAIM_STOPWORDS and tok not in name_tokens
+    ]
+    if not content:
+        return True
+    found = sum(1 for tok in content if tok in norm_evidence)
+    return found / len(content) >= _CLAIM_GROUNDING_FLOOR
+
+
+# ── non-US side-finding (dumb, transparent, no LLM) ──────────────────────────
+
+# A produced description matching any of these reads non-US; it is persisted
+# normally but its slug is surfaced under summary.non_us_suspects for the ops
+# exclusion flow. Deliberately dumb — a word-boundary regex over common
+# country adjectives and major non-US cities, no LLM, no geocoding.
+_NON_US_RE = re.compile(
+    r"\b(?:"
+    r"indian|canadian|british|german|french|chinese|israeli|japanese|korean|"
+    r"australian|dutch|swedish|swiss|spanish|italian|brazilian|mexican|"
+    r"singaporean|irish|finnish|norwegian|danish|belgian|austrian|polish|"
+    r"bengaluru|bangalore|london|berlin|munich|toronto|vancouver|montreal|"
+    r"paris|tokyo|shanghai|beijing|shenzhen|singapore|sydney|melbourne|"
+    r"amsterdam|stockholm|zurich|dublin|seoul|mumbai|delhi|"
+    r"tel aviv|sao paulo|mexico city"
+    r")\b",
+    re.IGNORECASE,
+)
+
+
+def _looks_non_us(description: str) -> bool:
+    """True when the description matches the dumb non-US country/city regex."""
+    return _NON_US_RE.search(description) is not None
 
 
 # ── news corroboration ──────────────────────────────────────────────────────
@@ -268,6 +377,44 @@ async def _surviving_articles(
 # ── stage ───────────────────────────────────────────────────────────────────
 
 
+async def _persist_company(
+    session: AsyncSession,
+    company: Company,
+    to_persist: str | None,
+    summary: DescribeFallbackSummary,
+) -> None:
+    """Apply-mode write for one company: optional description + version stamp; commit.
+
+    Stamps ``describe_fallback_prompt_version`` (the caller only reaches here
+    for a COMPLETED adjudication or a clean skipped-no-evidence, both of which
+    must not re-select next run). When ``to_persist`` is a description, the
+    write is a single conditional ``UPDATE … WHERE description_short IS NULL``
+    — atomic check-and-set, so even a concurrent enrich write between selection
+    and persist cannot be overwritten (review catch: the prior select-then-set
+    left a TOCTOU window; the Actions concurrency group masks it today, but the
+    guard shouldn't depend on deployment topology). One commit per company (the
+    enrich_companies pattern), so a mid-run crash leaves earlier companies
+    durably stamped/written.
+    """
+    if to_persist is not None:
+        # Never overwrite, atomically: the row qualifies only while
+        # description_short is still NULL at UPDATE time.
+        written = (
+            await session.execute(
+                update(Company)
+                .where(Company.id == company.id, Company.description_short.is_(None))
+                .values(description_short=to_persist, description_source="fallback")
+                .returning(Company.id)
+            )
+        ).scalar_one_or_none()
+        if written is not None:
+            summary.persisted += 1
+        else:
+            summary.skipped_already_described += 1
+    company.describe_fallback_prompt_version = PROMPT_VERSION
+    await session.commit()
+
+
 async def run_describe_fallback(
     session: AsyncSession,
     *,
@@ -275,33 +422,36 @@ async def run_describe_fallback(
     limit: int | None = 20,
     dry_run: bool = True,
 ) -> DescribeFallbackSummary:
-    """Probe third-party-grounded descriptions for the unscrapable residue.
+    """Third-party-grounded descriptions for the unscrapable residue.
 
     Cohort: shown companies (``exclusion_reason IS NULL``) with NO description
-    (``description_short`` and ``description_long`` both NULL) and NO readable own
-    page (no ``raw_pages`` row with >= ``_MIN_RAW_PAGE_CHARS`` of content),
-    prominence-ordered so a bounded ``--limit`` covers marquee residue first. Per
-    company: assemble Wikidata + corroborated-news evidence, and — when there is
-    any — send ONE ``describe_fallback`` LLM call, then verify the grounding
-    descriptor against the evidence. Writes NOTHING (probe only); returns the
-    yield tally.
+    (``description_short`` and ``description_long`` both NULL), NO readable own
+    page (no ``raw_pages`` row with >= ``_MIN_RAW_PAGE_CHARS`` of content), AND
+    whose ``describe_fallback_prompt_version`` is NULL or below the current
+    ``PROMPT_VERSION`` (version-gated idempotency — a prompt bump re-selects
+    everyone, stamped rows never re-bill). Prominence-ordered so a bounded
+    ``--limit`` covers marquee residue first. Per company: assemble Wikidata +
+    corroborated-news evidence, and — when there is any — send ONE
+    ``describe_fallback`` LLM call, then verify the grounding descriptor AND the
+    token-level claim check (M1) against the evidence.
 
-    ``dry_run=False`` raises ``ValueError`` — the apply path is not built (no
-    migration in this PR). ``LLMRateLimitError`` breaks the loop (don't keep
-    hammering a tripped quota); other per-company LLM errors are counted and the
-    loop continues.
+    ``dry_run`` (default) writes nothing and returns the yield tally. Apply
+    (``dry_run=False``) additionally persists ``description_short`` +
+    ``description_source='fallback'`` for a grounded, non-low-confidence,
+    claim-checked description (re-checking ``description_short IS NULL`` right
+    before the write), and stamps every completed adjudication (and a clean
+    skipped-no-evidence) per company. ``LLMRateLimitError`` breaks the loop
+    (don't keep hammering a tripped quota — the un-stamped remainder re-selects
+    next run); other per-company LLM errors are counted and leave the company
+    un-stamped (re-eligible).
     """
-    if not dry_run:
-        # The CLI catches this and surfaces it as a ClickException; the workflow
-        # refuses dry_run=false before it ever reaches here.
-        raise ValueError("describe-fallback apply path not built yet — probe only")
-
     summary = DescribeFallbackSummary(dry_run=dry_run, prompt_version=PROMPT_VERSION)
     sample_cap = limit if limit is not None else _MAX_SAMPLES
 
-    # The unscrapable / website-less residue: shown, description-less, and lacking
-    # any raw_page with real content. NOT exists() over the length floor is the
-    # "no readable own page" clause.
+    # The unscrapable / website-less residue: shown, description-less, lacking
+    # any raw_page with real content, and not yet stamped at the current prompt
+    # version. NOT exists() over the length floor is the "no readable own page"
+    # clause; the version gate is the idempotency key (mirrors --redescribe-outdated).
     stmt = (
         select(Company)
         .where(
@@ -313,6 +463,10 @@ async def run_describe_fallback(
                     RawPage.company_id == Company.id,
                     func.length(RawPage.content) >= _MIN_RAW_PAGE_CHARS,
                 )
+            ),
+            or_(
+                Company.describe_fallback_prompt_version.is_(None),
+                Company.describe_fallback_prompt_version < PROMPT_VERSION,
             ),
         )
         .order_by(
@@ -337,8 +491,13 @@ async def run_describe_fallback(
             if facts is not None and wiki_lines:
                 summary.wikidata_hits += 1
 
-            # Evidence B: corroborated recent news.
+            # Evidence B: corroborated recent news. Snapshot guard_errors around
+            # the call: a company whose evidence assembly hit an LLM guard error
+            # must NOT be stamped (it might have had evidence we couldn't see), so
+            # it re-selects next run.
+            guard_errors_before = summary.guard_errors
             survivors = await _surviving_articles(session, company, summary)
+            had_guard_error = summary.guard_errors > guard_errors_before
             article_blocks = [_article_block(a) for a in survivors]
 
             evidence = _assemble_evidence(wiki_lines, article_blocks)
@@ -357,6 +516,11 @@ async def run_describe_fallback(
                             null_reason="no_evidence",
                         )
                     )
+                # A CLEAN skip (no evidence today → no evidence tomorrow) stamps
+                # so it isn't re-billed; a prompt bump re-selects it anyway. A
+                # skip caused by a guard LLM error does NOT stamp (re-eligible).
+                if not dry_run and not had_guard_error:
+                    await _persist_company(session, company, None, summary)
                 continue
 
             prompt = build_prompt(company_name=company.name, evidence=evidence)
@@ -380,16 +544,32 @@ async def run_describe_fallback(
                 continue
             summary.llm_calls += 1
 
-            sample = _adjudicate_result(company.slug, result, evidence, summary)
+            sample, to_persist = _adjudicate_result(
+                company.name, company.slug, result, evidence, summary
+            )
             sample.evidence_sources = evidence_sources
             sample.wikidata = bool(wiki_lines)
             if len(summary.samples) < sample_cap:
                 summary.samples.append(sample)
 
+            # Every completed adjudication stamps (described, deliberate null,
+            # descriptor/claim rejection alike) so it isn't re-billed; only a
+            # grounded, non-low, claim-checked description also writes text.
+            # EXCEPT: a NULL outcome adjudicated on PARTIAL evidence (a guard
+            # LLM error dropped articles this run) does not stamp — the missing
+            # articles may describe the company, so the row stays re-eligible
+            # rather than being deferred to the next prompt bump (review catch;
+            # a described outcome still stamps — richer evidence can only have
+            # agreed). Persistent guard errors re-bill ~$0.0005/run — accepted.
+            if not dry_run and not (to_persist is None and had_guard_error):
+                await _persist_company(session, company, to_persist, summary)
+
     logger.info(
         "describe-fallback: cohort=%d wikidata_hits=%d articles_seen=%d "
         "corroborated=%d guard_dropped=%d llm_calls=%d described=%d "
-        "descriptor_not_in_evidence=%d low_conf=%d skipped_no_evidence=%d errors=%d",
+        "descriptor_not_in_evidence=%d claims_not_grounded=%d low_conf=%d "
+        "skipped_no_evidence=%d persisted=%d skipped_already_described=%d "
+        "non_us_suspects=%d errors=%d dry_run=%s",
         summary.cohort_selected,
         summary.wikidata_hits,
         summary.articles_seen,
@@ -398,27 +578,43 @@ async def run_describe_fallback(
         summary.llm_calls,
         summary.described,
         summary.descriptor_not_in_evidence,
+        summary.claims_not_grounded,
         summary.low_confidence,
         summary.skipped_no_evidence,
+        summary.persisted,
+        summary.skipped_already_described,
+        len(summary.non_us_suspects),
         summary.errors,
+        dry_run,
     )
     return summary
 
 
 def _adjudicate_result(
+    company_name: str,
     slug: str,
     result: DescribeFallbackResult,
     evidence: str,
     summary: DescribeFallbackSummary,
-) -> CompanySample:
-    """Post-validate one LLM result into a sample + summary counters.
+) -> tuple[CompanySample, str | None]:
+    """Post-validate one LLM result into (sample, description-to-persist).
 
     The prompt's own validator already dropped a description missing its
-    descriptor / over length; here the MOAT check is the descriptor-in-evidence
-    verification: a description whose echoed grounding descriptor does not actually
-    appear in the evidence is discarded (``descriptor_not_in_evidence``), never
-    trusted. A surviving description is tallied; ``low`` confidence is flagged
-    separately because it would NOT persist once the apply path lands.
+    descriptor / over length. Here two MOAT checks back it, both against the
+    shown evidence, never the model's word:
+
+    1. **descriptor-in-evidence** — the echoed grounding descriptor must appear
+       in the evidence (``descriptor_not_in_evidence`` otherwise).
+    2. **token-level claim check (M1)** — most of the description's own content
+       words must appear in the evidence, so a fluent paraphrase that grounds its
+       descriptor but invents the rest of the clause is caught
+       (``claims_not_grounded`` otherwise).
+
+    The returned string is the description to PERSIST — non-None only for a
+    grounded, claim-checked, non-low-confidence description. ``low`` confidence
+    is tallied and surfaced but never persisted. A produced description that
+    reads non-US is flagged in ``non_us_suspects`` (persisted normally — the flag
+    is for the ops exclusion flow, it does not block the write).
     """
     sample = CompanySample(slug=slug)
     if result.description_short is not None:
@@ -426,14 +622,23 @@ def _adjudicate_result(
             # The echo is not grounded in the evidence — discard it.
             summary.descriptor_not_in_evidence += 1
             sample.null_reason = "descriptor_not_in_evidence"
-            return sample
+            return sample, None
+        if not _claim_is_grounded(result.description_short, company_name, evidence):
+            # The descriptor grounds but the sentence as a whole drifts past the
+            # evidence — discard it (M1).
+            summary.claims_not_grounded += 1
+            sample.null_reason = "claims_not_grounded"
+            return sample, None
         summary.described += 1
         sample.description_short = result.description_short
         sample.grounding_descriptor = result.grounding_descriptor
         sample.confidence = result.confidence
+        if _looks_non_us(result.description_short):
+            summary.non_us_suspects.append(slug)
         if result.confidence == "low":
             summary.low_confidence += 1
-        return sample
+            return sample, None  # described but never persisted
+        return sample, result.description_short
 
     # The model returned an explicit null — record its reason.
     reason = result.null_reason or "insufficient_evidence"
@@ -444,15 +649,21 @@ def _adjudicate_result(
         summary.null_ambiguity += 1
     else:
         summary.null_insufficient += 1
-    return sample
+    return sample, None
 
 
 def render_yield_table(summary: DescribeFallbackSummary) -> str:
-    """Render the probe summary as GitHub-flavored markdown for the step summary."""
+    """Render the run summary as GitHub-flavored markdown for the step summary.
+
+    Dry-run: the yield + fabrication proxies + a go/no-go guide. Apply: the same
+    yield plus the persistence counters (written, skipped-already-described) and
+    the non-US suspect list for the ops exclusion flow.
+    """
     cohort = summary.cohort_selected
     described_pct = (summary.described / cohort * 100) if cohort else 0.0
+    mode = "dry-run probe" if summary.dry_run else "apply"
     lines: list[str] = []
-    lines.append("## describe-fallback — dry-run probe")
+    lines.append(f"## describe-fallback — {mode}")
     lines.append("")
     lines.append(f"- **Prompt version:** `{summary.prompt_version}`")
     lines.append(f"- **Cohort selected:** {cohort}")
@@ -481,6 +692,24 @@ def render_yield_table(summary: DescribeFallbackSummary) -> str:
         f"- **Descriptor not in evidence (echo discarded):** "
         f"{summary.descriptor_not_in_evidence}"
     )
+    lines.append(
+        f"- **Claims not grounded (M1 — sentence drift discarded):** "
+        f"{summary.claims_not_grounded}"
+    )
+    if not summary.dry_run:
+        lines.append(
+            f"- **Persisted (description_short written):** {summary.persisted}"
+        )
+        lines.append(
+            f"- **Skipped (already described mid-run):** "
+            f"{summary.skipped_already_described}"
+        )
+    if summary.non_us_suspects:
+        suspects = ", ".join(summary.non_us_suspects)
+        lines.append(
+            f"- **Non-US suspects (persisted; ops-exclusion review):** "
+            f"{len(summary.non_us_suspects)} — {suspects}"
+        )
     lines.append(f"- **Errors:** {summary.errors}")
     lines.append("- **Cost:** see the LLM-usage block below (DeepSeek, paid).")
     lines.append("")
@@ -497,16 +726,17 @@ def render_yield_table(summary: DescribeFallbackSummary) -> str:
             f"| {s.slug} | {s.evidence_sources} | {wd} | {desc} "
             f"| {descriptor} | {conf} | {null} |"
         )
-    lines.append("")
-    lines.append("### Go / no-go")
-    lines.append(
-        "- Grounded descriptions on marquee residue + descriptor-in-evidence "
-        "holding + near-zero funding-only nulls leaking through → build the "
-        "persisting apply path (write description_short + a third-party "
-        "provenance stamp, skip low-confidence)."
-    )
-    lines.append(
-        "- Frequent descriptor_not_in_evidence, low-confidence, or entity-ambiguity "
-        "nulls → tighten the prompt / evidence assembly before persisting."
-    )
+    if summary.dry_run:
+        lines.append("")
+        lines.append("### Go / no-go")
+        lines.append(
+            "- Grounded descriptions on marquee residue + descriptor-in-evidence "
+            "holding + near-zero funding-only nulls leaking through → run the "
+            "persisting apply path (--apply)."
+        )
+        lines.append(
+            "- Frequent descriptor_not_in_evidence, claims_not_grounded, "
+            "low-confidence, or entity-ambiguity nulls → tighten the prompt / "
+            "evidence assembly before persisting."
+        )
     return "\n".join(lines)

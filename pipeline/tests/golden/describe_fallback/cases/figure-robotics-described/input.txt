@@ -1,0 +1,2 @@
+Figure AI unveils its humanoid robotics platform (source: https://news.example/figure)
+Figure AI is a humanoid robotics company building general-purpose robots for warehouse work.

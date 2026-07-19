@@ -1,0 +1,3 @@
+Wikidata description: American artificial intelligence safety and research company (source: https://www.wikidata.org/wiki/Q1)
+Industry: artificial intelligence (source: https://www.wikidata.org/wiki/Q1)
+Founded: 2021 (source: https://www.wikidata.org/wiki/Q1)
