@@ -1,7 +1,9 @@
 {
-  "provenance": "simulated",
+  "provenance": "deepseek",
+  "model": "deepseek-chat",
+  "recorded_at": "2026-07-19T20:08:21+00:00",
   "response": {
-    "description_short": "Perplexity AI is a conversational search engine that answers questions with cited sources.",
+    "description_short": "Perplexity AI is an American conversational search engine that answers questions with cited sources.",
     "grounding_descriptor": "conversational search engine",
     "confidence": "high",
     "null_reason": null

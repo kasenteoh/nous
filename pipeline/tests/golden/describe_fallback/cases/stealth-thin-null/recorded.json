@@ -1,9 +1,11 @@
 {
-  "provenance": "simulated",
+  "provenance": "deepseek",
+  "model": "deepseek-chat",
+  "recorded_at": "2026-07-19T20:08:26+00:00",
   "response": {
     "description_short": null,
     "grounding_descriptor": null,
     "confidence": "low",
-    "null_reason": "insufficient_evidence"
+    "null_reason": "no_nonfunding_descriptor"
   }
 }
