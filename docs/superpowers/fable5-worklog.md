@@ -2314,3 +2314,39 @@ Owner: "let's do it" (the QA P0s). Both adversarially reviewed (APPROVE).
   subsequent crons; /c/blue-origin description after scrape+enrich+ISR
   (blueorigin.com may 403 from Actions IPs — if so the row is at least
   truthful: no false Website citation).
+
+## PR #243 — feat(pipeline): describe-fallback dry-run probe (third-party-grounded descriptions)
+
+- The owner reversed the 2026-07-12 "drop A" decision under the "no missing
+  data" mandate (this session's AskUserQuestion: full fallback approved).
+  Target cohort measured first from the data-quality report: 1,079 of 3,223
+  shown companies lack a description (~697 also website-less; the re-mining
+  pool is exhausted — see #242's entry). This PR is the measure-first husk
+  slice: dry-run ONLY, no persistence, no migration.
+- New GATED GENERATIVE prompt `describe_fallback` (2026-07-19.1) honoring
+  the deferred design's fix #3: evidence-bound, the non-funding-descriptor
+  bar with a code-enforced `grounding_descriptor` echo that the stage
+  re-verifies against the evidence text post-hoc (URL suffixes stripped,
+  generic/short descriptors rejected — review catches), null-over-thin
+  with auditable null reasons, no funding figures in prose, 260-char cap.
+- `wikidata.py entity_facts()`: the entity's own English description (the
+  highest-value fact) + inception/HQ/industry/founder claims, one batched
+  label-resolution call; `official_website` behavior unchanged (shared
+  `_entity_matches`, pre-existing tests pin it).
+- Stage: unscrapable-residue cohort, prominence-ordered; evidence = wikidata
+  facts + articles surviving cheap corroboration (the REAL wrong-entity
+  filter here — the guard's LLM layer no-op-attaches on profile-less rows;
+  deliberate, escalate to force_adjudicate in the apply PR if probe samples
+  show contamination); one LLM call per evidenced company; read-only.
+  dry_run=False refused at THREE layers (workflow, CLI, stage).
+- **Adversarial review** APPROVE (0 critical/high; write-escape prevention
+  "ironclad"): applied M2 (generic-descriptor floor), M3 (direct
+  model_validator tests), M4 (source-URL stripping), L1 (guard-consistent
+  title dedup). M1 (token-level claim verification beyond the descriptor)
+  is DELIBERATELY deferred to the apply PR — the dry-run yield table is
+  the manual gate this time.
+- Suite 1241 green. Next: review the prod dry-run step summary (run
+  29700550554) — yield, sample quality, $ — then the apply PR (migration:
+  description provenance stamp; persistence; golden set) + the web PR
+  (attribution line + off-page description_short gating per fix #1; the
+  scout's leak map is in this session's transcript and the BACKLOG entry).
