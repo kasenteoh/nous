@@ -431,6 +431,15 @@ async def run_enrich_companies(
         normalized_tags = canonicalize_tags(description.tags)
 
         company.description_short = description.description_short
+        # This description is grounded in the company's OWN scraped pages, so
+        # its provenance is the own-website default (NULL). Load-bearing when
+        # the row previously carried a describe-fallback description
+        # (description_source='fallback', migration 0045): without this reset
+        # the own-site description would inherit stale third-party provenance —
+        # wrongly gated out of meta/JSON-LD and falsely attributed on-page.
+        # The blue-origin trajectory: fallback-described first, own-site
+        # description supersedes once the scrape lands.
+        company.description_source = None
         company.primary_category = description.primary_category
         company.tags = normalized_tags
         company.last_enriched_at = now
