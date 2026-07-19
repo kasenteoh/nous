@@ -2224,3 +2224,44 @@ Owner: "let's do it" (the QA P0s). Both adversarially reviewed (APPROVE).
   discovery cron (company dedup). Watch: repair summary's
   equal_valuation_rows_merged + widened 2b merges; bunkerhill pair
   should finally merge on the weekly run. Suite 1880 green.
+
+## PR #241 — feat(web): split company timeline into Funding + In the news
+
+- The owner-approved 2026-07-18 separation (spec
+  `specs/2026-07-18-timeline-news-separation-design.md`, layout A): the
+  merged `/c/[slug]` EventTimeline became two stacked server components.
+  `FundingTimeline` — the rail, rounds ONLY, keeping every round-row
+  affordance (money-green markers, amount/valuation/investors, ✓
+  VerifiedBadge, confidence tooltip + low pill, single-source inline
+  SourceLink, collapsed "Covered by …" for ≥2 sources). `NewsSection` —
+  standalone story clusters only (the #239 clusters matching no round),
+  muted compact list (no rail): lead headline link + date + stored source
+  host, shared disclosure for syndications; newest 8 visible, older
+  behind a native `<details>` "Show N older stories" (nothing dropped —
+  trust invariant).
+- `buildTimeline` contractually UNCHANGED (comment-only edit);
+  `page.tsx` calls it ONCE, splits by kind with `Extract<>` type
+  predicates, and owns the both-empty line. Coverage stays with its
+  round — every article appears exactly once. `CoverageDisclosure`
+  extracted to a shared module (one implementation, both consumers);
+  `EventTimeline.tsx` deleted.
+- Tests: `event-timeline-coverage.test.tsx` split into
+  `funding-timeline.test.tsx` + new `news-section.test.tsx` (8-story cap
+  boundary, singular/plural label, omit-when-empty, source-host
+  fallback); the `components.test.tsx` / `per-fact-sourcing.test.tsx`
+  EventTimeline blocks migrated onto the split components (per-section
+  ordering replaces the interleave test); page-level tests pin section
+  order + all three empty states. Husk test's heading assertion moved
+  "Timeline"→"Funding".
+- **Adversarial review** (code-reviewer APPROVE + spec-compliance critic
+  ACCEPT, 29/29 requirements): 1 MEDIUM applied (StoryRow prefers the
+  DB-stored `article.source` hostname over the render-time URL-derived
+  host, which stays the fallback) + 1 MINOR applied (news list
+  aria-label). Deliberate presentational calls, reviewed as in-spec: the
+  per-row "· Funding"/"· News" kind labels dropped (redundant under
+  section headers), rail `aria-label` "Company timeline"→"Funding
+  rounds", news uses a semantic `<ul>`.
+- Read-time only (no pipeline/schema/query change). Web suite 447 green
+  (lint + test + build). Verify after ISR (~6h): /c/blue-origin and
+  /c/kalshi show a "Funding" rail + separate "In the news" list, every
+  article exactly once.
