@@ -7,6 +7,21 @@ authoritative history), then `BACKLOG.md` (annotated with what shipped; its
 **"2026-07-17 post-surgery QA sweep"** section is the active work queue).
 The plan docs under `docs/superpowers/plans/` are historical context.
 
+## LATEST UPDATE — funding/news timeline separation SHIPPED (2026-07-19, PR #241)
+
+The owner-approved split (spec
+`specs/2026-07-18-timeline-news-separation-design.md`, layout A) is merged:
+`/c/[slug]`'s merged EventTimeline is now `FundingTimeline` (rounds-only
+rail, all round affordances kept) + `NewsSection` (standalone story
+clusters, muted list, newest 8 + `<details>` for older) with a shared
+`CoverageDisclosure`; `buildTimeline` unchanged, page splits one call by
+kind and owns the both-empty line. Read-time only; web suite 447 green;
+adversarially reviewed (2 agents), both findings applied pre-merge.
+**Verify after ISR (~6h):** /c/blue-origin + /c/kalshi show the two
+sections, every article exactly once; prod Vercel deploy on merge commit
+4f92f33 confirmed green (check the commit status if resuming before that
+verification happened).
+
 ## LATEST UPDATE — entity-resolution arc SHIPPED end-to-end (2026-07-18, PRs #231–#238)
 
 The 2026-07-17 P0 ("name-collision entity resolution at round ingestion") is
