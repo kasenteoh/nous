@@ -179,6 +179,31 @@ describe("renderCompanyMarkdown", () => {
     expect(md).toContain("## Competitors (AI-inferred)");
   });
 
+  it("omits the blockquote lead for a describe-fallback description", () => {
+    // A third-party-grounded one-liner (description_source === "fallback",
+    // migration 0045) must not lead this machine-consumed .md surface, which has
+    // no per-fact attribution slot.
+    const md = renderCompanyMarkdown(
+      detail({
+        company: company({
+          description_short: "Acme builds robots.",
+          description_source: "fallback",
+        }),
+      }),
+      ORIGIN,
+    );
+    expect(md).toContain("# Acme");
+    expect(md).not.toContain("> Acme builds robots.");
+  });
+
+  it("keeps the blockquote lead for an own-website description (absent source)", () => {
+    const c = company();
+    // Byte-identical to today: the field is absent (pre-migration prod row).
+    expect("description_source" in c).toBe(false);
+    const md = renderCompanyMarkdown(detail({ company: c }), ORIGIN);
+    expect(md).toContain("> Acme builds robots.");
+  });
+
   it("annotates a non-active status with its source", () => {
     const md = renderCompanyMarkdown(
       detail({

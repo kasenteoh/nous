@@ -8,6 +8,17 @@ export interface CompanyRow {
   normalized_name: string;
   description_short: string | null; // filled in M2
   description_long: string | null; // filled in M2
+  // Provenance of description_short (migration 0045). NULL/undefined = written
+  // from the company's OWN website (the legacy behavior). 'fallback' = written
+  // by the describe-fallback stage from THIRD-PARTY evidence (Wikidata + press);
+  // such a description must NEVER reach a machine-syndicated surface that carries
+  // no attribution (page metadata, the Organization/FAQ JSON-LD, the .md
+  // sibling), but stays VISIBLE in on-site UI with an honest attribution rider.
+  // Optional (`?`), not just nullable — same migration-order-free reason as the
+  // fields below (website_source, total_raised_*, momentum_*, …): prod rows lack
+  // the column until 0045 runs there, and select("*") omits unknown columns, so
+  // the key may be absent at runtime. Treat undefined as null (own-website).
+  description_source?: string | null;
   primary_category: string | null; // filled in M2
   tags: string[] | null; // filled in M2 — Supabase returns Postgres text[] as string[]
   website: string | null; // filled in M2
@@ -269,6 +280,11 @@ export interface AlternativesData {
     slug: string;
     name: string;
     description_short: string | null;
+    // Provenance of description_short (migration 0045); 'fallback' = third-party
+    // grounded. Gates the description out of the page's <meta> lead (a
+    // machine-syndicated surface) while the visible header keeps it. Optional /
+    // nullable for the same migration-order-free reason as CompanyRow's field.
+    description_source?: string | null;
     industry_group: string | null;
   };
   resolved: AlternativeCompany[];
