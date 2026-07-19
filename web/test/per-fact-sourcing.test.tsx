@@ -3,14 +3,15 @@
 //                           for a present + parseable http(s) URL).
 //   2. citationSourceType — host → source-type label inference (unknown → omit).
 //   3. <Sources>          — the muted source-type tag rendered per citation.
-//   4. <EventTimeline>    — extraction_confidence tooltip on ALL rounds, visible
+//   4. <FundingTimeline>  — extraction_confidence tooltip on ALL rounds, visible
 //                           pill only for `low`, + the per-round source link.
 
 import { render, screen, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { SourceLink } from "@/components/SourceLink";
 import { Sources, citationSourceType } from "@/components/Sources";
-import { EventTimeline } from "@/components/EventTimeline";
+import { FundingTimeline, type FundingItem } from "@/components/FundingTimeline";
+import { buildTimeline } from "@/lib/timeline";
 import type { FundingRoundWithInvestors } from "@/lib/types";
 
 // ─── Fixtures ─────────────────────────────────────────────────────────────────
@@ -220,21 +221,27 @@ describe("Sources source-type labels", () => {
   });
 });
 
-// ─── <EventTimeline> confidence transparency + per-round source link ──────────
+// ─── <FundingTimeline> confidence transparency + per-round source link ────────
 
-describe("EventTimeline confidence transparency", () => {
+/** The page's split, funding half: buildTimeline with no news. */
+function fundingItems(rounds: FundingRoundWithInvestors[]): FundingItem[] {
+  return buildTimeline(rounds, []).filter(
+    (item): item is FundingItem => item.kind === "funding",
+  );
+}
+
+describe("FundingTimeline confidence transparency", () => {
   function tooltipOf(roundType: string): string | null {
     return screen.getByText(roundType).closest("p")?.getAttribute("title") ?? null;
   }
 
   it("puts a confidence tooltip on high/medium rounds with NO pill", () => {
     render(
-      <EventTimeline
-        rounds={[
+      <FundingTimeline
+        items={fundingItems([
           round({ round_type: "High round", extraction_confidence: "high" }),
           round({ round_type: "Mid round", extraction_confidence: "medium" }),
-        ]}
-        news={[]}
+        ])}
       />,
     );
     expect(tooltipOf("High round")).toBe("Extracted with high confidence");
@@ -245,9 +252,10 @@ describe("EventTimeline confidence transparency", () => {
 
   it("keeps the visible pill for low, plus the tooltip", () => {
     render(
-      <EventTimeline
-        rounds={[round({ round_type: "Low round", extraction_confidence: "low" })]}
-        news={[]}
+      <FundingTimeline
+        items={fundingItems([
+          round({ round_type: "Low round", extraction_confidence: "low" }),
+        ])}
       />,
     );
     expect(tooltipOf("Low round")).toBe("Extracted with low confidence");
@@ -261,9 +269,10 @@ describe("EventTimeline confidence transparency", () => {
 
   it("claims no confidence when the enum is absent (null → no tooltip, no pill)", () => {
     render(
-      <EventTimeline
-        rounds={[round({ round_type: "Unscored", extraction_confidence: null })]}
-        news={[]}
+      <FundingTimeline
+        items={fundingItems([
+          round({ round_type: "Unscored", extraction_confidence: null }),
+        ])}
       />,
     );
     expect(tooltipOf("Unscored")).toBeNull();
@@ -272,14 +281,13 @@ describe("EventTimeline confidence transparency", () => {
 
   it("renders a per-round source link only when primary_news_url is parseable", () => {
     const withUrl = render(
-      <EventTimeline
-        rounds={[
+      <FundingTimeline
+        items={fundingItems([
           round({
             round_type: "Sourced round",
             primary_news_url: "https://techcrunch.com/round",
           }),
-        ]}
-        news={[]}
+        ])}
       />,
     );
     const link = within(withUrl.container).getByRole("link", {
@@ -289,9 +297,10 @@ describe("EventTimeline confidence transparency", () => {
 
     // Absent / scheme-less URL → no source superscript.
     const noUrl = render(
-      <EventTimeline
-        rounds={[round({ round_type: "Unsourced round", primary_news_url: null })]}
-        news={[]}
+      <FundingTimeline
+        items={fundingItems([
+          round({ round_type: "Unsourced round", primary_news_url: null }),
+        ])}
       />,
     );
     expect(

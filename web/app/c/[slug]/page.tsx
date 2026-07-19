@@ -35,7 +35,9 @@ import { StatusBadge } from "@/components/StatusBadge";
 import { MomentumBadge } from "@/components/MomentumBadge";
 import { Team } from "@/components/Team";
 import { FounderBackground } from "@/components/FounderBackground";
-import { EventTimeline } from "@/components/EventTimeline";
+import { FundingTimeline, type FundingItem } from "@/components/FundingTimeline";
+import { NewsSection, type NewsItem } from "@/components/NewsSection";
+import { buildTimeline } from "@/lib/timeline";
 import { Investors } from "@/components/Investors";
 import { Competitors } from "@/components/Competitors";
 import { RelatedCompanies } from "@/components/RelatedCompanies";
@@ -311,6 +313,9 @@ export default async function CompanyPage({ params }: Props) {
   // "✓ Verified against source" — supported verdicts keyed by fact (empty until
   // the verify-sources apply pass runs; degrades to no badges).
   const vlookup = buildVerificationLookup(verifications);
+  // Funding + news, assembled ONCE and split by kind below (FundingTimeline /
+  // NewsSection take pre-split items — no double computation).
+  const timelineItems = buildTimeline(fundingRounds, news);
 
   // Relationship-graph fetches depend on the resolved company id, so they run
   // after getCompanyBySlug — but in parallel with each other (same idiom as the
@@ -739,9 +744,31 @@ export default async function CompanyPage({ params }: Props) {
              until career_moves lands + is populated (migration-order-free). ── */}
       <FounderBackground careerMoves={careerMoves} />
 
-      {/* ── Timeline: funding rounds + news, merged reverse-chronologically
-             (replaces the old separate Funding History table + News list) ── */}
-      <EventTimeline rounds={fundingRounds} news={news} verified={vlookup} />
+      {/* ── Funding + In the news (owner-approved 2026-07-18 split of the old
+             merged EventTimeline): the funding rail first — the page's spine —
+             then standalone stories in a muted list beneath. buildTimeline runs
+             ONCE and is split by kind; round-covering articles stay collapsed
+             under their round, so every article appears exactly once. Each
+             section omits itself when empty; the page owns the both-empty
+             line. */}
+      <FundingTimeline
+        items={timelineItems.filter(
+          (item): item is FundingItem => item.kind === "funding",
+        )}
+        verified={vlookup}
+      />
+      <NewsSection
+        items={timelineItems.filter(
+          (item): item is NewsItem => item.kind === "news",
+        )}
+      />
+      {timelineItems.length === 0 && (
+        <section className="mb-12">
+          <p className="text-sm text-ink-muted">
+            No funding rounds or news recorded yet.
+          </p>
+        </section>
+      )}
 
       {/* ── Investors ──────────────────────────────────────────────────── */}
       <Investors
