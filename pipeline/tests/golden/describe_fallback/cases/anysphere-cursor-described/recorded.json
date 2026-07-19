@@ -1,9 +1,10 @@
 {
   "provenance": "deepseek",
   "model": "deepseek-chat",
-  "recorded_at": "2026-07-19T20:08:09+00:00",
+  "recorded_at": "2026-07-19T21:53:06+00:00",
   "response": {
     "description_short": "Anysphere is a developer of Cursor, an AI code editor.",
+    "description_long": null,
     "grounding_descriptor": "developer of Cursor, an AI code editor",
     "confidence": "high",
     "null_reason": null
