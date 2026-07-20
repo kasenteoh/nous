@@ -2579,3 +2579,30 @@ Owner: "let's do it" (the QA P0s). Both adversarially reviewed (APPROVE).
   prod counters, each verified by run telemetry. Watch: the next
   eval-record (dispatched) anchors 2026-07-20.1 goldens; ISR surfaces
   profiles on pages over ~6h.
+
+## PR #253 — feat(pipeline): funding-prominence override — mega-raisers stay shown
+
+- The owner's "you removed blue origin?" → root cause: fixing its website
+  let the eligibility judge finally read blueorigin.com and (correctly,
+  under the old rule) exclude a 25-year-old aerospace giant from a
+  startup catalog. Owner policy call (AskUserQuestion): a recorded round
+  >= $500M (PROMINENCE_OVERRIDE_USD, util/prominence.py) keeps a company
+  shown despite a not-a-startup verdict.
+- Both automated exclusion sites guarded (enrich judge-apply +
+  judge-eligibility); prominence-kept rows stamp as kept rows (no
+  re-select loop — verified by review's termination trace); prominence
+  NEVER overrides non_us (elif→if restructure; the full verdict matrix
+  traced with zero unintended drift; pinned at both sites). Manual ops
+  exclusions untouched. unexclude-prominent lever (dry-run default) +
+  ops.yml commands + runbook lever 3.
+- **The dry-run EARNED the default**: 6 candidates, only 2 correct.
+  Rejected: 'blue' (the audit's misattributed Blue Origin $10B round
+  shielding a junk row — the review's hazard #5 live on first contact),
+  mistral ("founded 1976" wrong-entity contamination + French), iceye
+  (Finnish), helsing (German). APPLIED surgically via slug-scoped
+  unexclude-company instead: blue-origin + shield-ai (US, 2015, $1.5B+,
+  the judge's own reasoning waffled). Blanket-apply of this lever should
+  ALWAYS follow a dry-run review — the not_a_startup pool is contaminated
+  with wrong-entity and non-US rows whose correct end-state is excluded.
+- Pages return on ISR (~6h). Suite 1258 green; review COMMENT (0
+  blocking), both MEDIUMs applied pre-merge.

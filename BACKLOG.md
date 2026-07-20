@@ -834,6 +834,19 @@ description-less, in order:
   manifest-law, outright, samples(?) — the (?) ones look like
   false-positive regex hits; eyeball before excluding anything.
 
+### Prominence-override dry-run rejects (2026-07-20) — route to their real fixes
+The unexclude-prominent dry-run surfaced 4 not_a_startup rows shielded by
+questionable data; each needs its OWN flow, never a blanket unexclude:
+- **blue** — the audit headliner re-confirmed: Blue Origin's $10B round
+  misattributed to a music-band row. delete-round (slug blue, amount
+  10000000000) + the retroactive audit item covers it.
+- **mistral** — "founded 1976" in the judge detail = wrong-entity
+  contamination (Mistral AI is 2023/French); inspect + likely wrong
+  website/entity purge, then non_us if FR HQ confirms.
+- **iceye** (FI) / **helsing** (DE) — non-US; correct end-state is
+  excluded. Set hq_country via ops/inspect evidence so the reason reads
+  non_us rather than not_a_startup (cosmetic; low priority).
+
 ### Deliberately deferred — with reasons
 - **Accounts/auth** — localStorage watchlists cover the consumer need; auth adds
   email infra, privacy surface, and session bugs for zero differentiation today.
