@@ -1726,6 +1726,89 @@ def describe_fallback_cmd(limit: int | None, dry_run: bool) -> None:
     asyncio.run(_run())
 
 
+@cli.command("refetch-article-text")
+@click.option(
+    "--limit",
+    type=int,
+    default=50,
+    show_default=True,
+    help="Max thin/interstitial articles to process (bounds the fetch budget).",
+)
+@click.option(
+    "--max-runtime-minutes",
+    type=float,
+    default=None,
+    help=(
+        "Wall-clock budget: stop cleanly at the next article boundary once "
+        "exceeded. Remaining articles are picked up by the next run."
+    ),
+)
+@click.option(
+    "--dry-run/--apply",
+    default=True,
+    show_default=True,
+    help=(
+        "Dry-run (default) reports the selection size + a URL sample and writes "
+        "nothing (no network). --apply re-fetches each candidate's publisher "
+        "page and heals news_articles.raw_content in place."
+    ),
+)
+def refetch_article_text_cmd(
+    limit: int,
+    max_runtime_minutes: float | None,
+    dry_run: bool,
+) -> None:
+    """Heal thin / Google-News-interstitial news_articles.raw_content — $0.
+
+    Re-resolves Google-News-ingested rows (or any row with sub-500-char stored
+    text) to their publisher page and overwrites raw_content with real article
+    prose, so describe-fallback / the entity guard / funding extraction see full
+    text instead of an interstitial stub. The URL is never touched (dedup
+    identity); every attempt is stamped so the backlog drains idempotently.
+    Dry-run (default) sizes the work without fetching. Polite: robots/UA/1-rps
+    throttle/SSRF via the shared fetch client.
+    """
+    import asyncio
+    from datetime import UTC, datetime
+
+    from nous.config import Settings
+    from nous.db.session import AsyncSessionLocal
+    from nous.observability import record_pipeline_run, write_step_summary
+    from nous.pipeline.refetch_article_text import (
+        render_refetch_table,
+        run_refetch_article_text,
+    )
+
+    settings = Settings()
+
+    async def _run() -> None:
+        started = datetime.now(UTC)
+        async with AsyncSessionLocal() as session:
+            summary = await run_refetch_article_text(
+                session,
+                user_agent=settings.SEC_USER_AGENT,
+                limit=limit,
+                max_runtime_minutes=max_runtime_minutes,
+                dry_run=dry_run,
+            )
+        click.echo(summary.model_dump_json(indent=2))
+        write_step_summary(render_refetch_table(summary))
+        if not dry_run:
+            # Apply only (house pattern). flag_empty=False: a run that heals
+            # nothing (all paywalled/thin, or the backlog already drained) is a
+            # valid outcome, not a silent failure.
+            await record_pipeline_run(
+                "refetch-article-text",
+                started_at=started,
+                inputs_seen=summary.selected,
+                rows_written=summary.refetched,
+                summary=summary,
+                flag_empty=False,
+            )
+
+    asyncio.run(_run())
+
+
 @cli.command("link-competitors")
 @click.option(
     "--limit",

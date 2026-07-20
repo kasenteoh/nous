@@ -37,8 +37,8 @@ from nous.sources.news import (
     _GOOGLE_NEWS_HOST,
     NewsArticleResult,
     NewsClient,
-    ResolvedArticle,
     article_mentions_company,
+    resolve_and_fetch_article_text,
 )
 from nous.sources.prnewswire import fetch_prnewswire_funding_articles
 from nous.sources.siliconangle import fetch_siliconangle_funding_articles
@@ -190,20 +190,23 @@ async def _ingest_one_article(
     body_for_guard: str | None = None
 
     if hostname(result.url) == _GOOGLE_NEWS_HOST:
-        resolved: ResolvedArticle | None = await client.resolve_article(result.url)
-        if resolved is not None:
-            # The redirect resolved to a real publisher article. Prefer the
-            # publisher URL/source for attribution + dedup, and store the full
-            # body. Guard against a publisher article already stored under
-            # another Google-News link (or a direct link).
-            if resolved.url != result.url and await _article_already_stored(
-                session, resolved.url
+        # The shared resolve+fetch helper (the SAME machinery refetch-article-text
+        # uses to heal stored rows) chases the GN redirect to the publisher and
+        # extracts real article prose — so new rows store publisher text, not the
+        # interstitial stub. Returns (publisher_url, body) on success.
+        resolved_url, text = await resolve_and_fetch_article_text(client, result.url)
+        if resolved_url is not None and text is not None:
+            # Prefer the publisher URL/source for attribution + dedup, and store
+            # the full body. Guard against a publisher article already stored
+            # under another Google-News link (or a direct link).
+            if resolved_url != result.url and await _article_already_stored(
+                session, resolved_url
             ):
                 return
-            url = resolved.url
-            source = resolved.source
-            content = resolved.body
-            body_for_guard = resolved.body
+            url = resolved_url
+            source = hostname(resolved_url)
+            content = text
+            body_for_guard = text
             summary.articles_resolved += 1
         else:
             # Resolution failed — keep the headline (+ snippet); still useful.
@@ -214,12 +217,16 @@ async def _ingest_one_article(
                 return
             content = _headline_content(result)
     else:
-        body = await client.fetch_article_body(result.url)
-        if body is None:
+        # Direct publisher link (rare in GN RSS) — the helper fetches + extracts
+        # with the same thin-body guard, keeping the URL as-is.
+        _resolved_url, text = await resolve_and_fetch_article_text(
+            client, result.url
+        )
+        if text is None:
             summary.articles_skipped_thin += 1
             return
-        content = body
-        body_for_guard = body
+        content = text
+        body_for_guard = text
 
     if not article_mentions_company(
         company.name,

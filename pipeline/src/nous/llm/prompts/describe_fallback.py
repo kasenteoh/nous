@@ -60,7 +60,13 @@ from pydantic import BaseModel, Field, model_validator
 # .5: rule 7 reworded AFFIRMATIVELY — under .4 the model offered a long
 # profile once in 365 companies ("optional/better-null" read as "don't
 # bother"); rich evidence now makes the profile the expected outcome.
-PROMPT_VERSION: str = "2026-07-20.1"
+# 2026-07-20.2: no template change — re-selects the cohort so profiles rebuild
+# on the HEALED evidence after the article-text refetch backfill (thin/Google-
+# News-interstitial raw_content re-fetched to real publisher prose). The
+# describe-fallback evidence bar reads news_articles.raw_content, so a company
+# whose profile was starved by interstitial junk (e.g. blue-origin at 177 chars)
+# is re-described once its coverage carries full text.
+PROMPT_VERSION: str = "2026-07-20.2"
 
 # Cap on the combined evidence block (wikidata facts + article excerpts).
 # Descriptors live in headlines/ledes; more text costs tokens without adding
