@@ -1,0 +1,90 @@
+name: refetch-article-text
+
+# Manual lever for the article-text healing stage, against the production DB.
+# No local environment holds DATABASE_URL — Actions secrets are the only place
+# this can run against the real news_articles backlog. Two uses:
+#   1. Dry run (default): size the candidate backlog (thin / Google-News rows)
+#      and print a URL sample. No network, no writes.
+#   2. Backfill: a bounded apply run that re-fetches each candidate's publisher
+#      page and heals raw_content in place, draining the backlog faster than any
+#      cron would.
+#
+# Example (size the backlog):
+#   gh workflow run refetch-article-text.yml -f dry_run=true -f limit=50
+# Example (apply 200, 10-min budget):
+#   gh workflow run refetch-article-text.yml -f dry_run=false -f limit=200 \
+#     -f max_runtime_minutes=10
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Dry run: report the selection size + a URL sample without fetching or writing."
+        required: false
+        type: boolean
+        default: true
+      limit:
+        description: "Max thin/interstitial articles to process."
+        required: false
+        type: string
+        default: "50"
+      max_runtime_minutes:
+        description: "Wall-clock budget (minutes). Blank = no budget (bounded only by --limit)."
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+# Mutates news_articles on an apply run — serialize with every other DB-writing
+# workflow (the cron, discovery, ops).
+concurrency:
+  group: nous-pipeline-db
+  cancel-in-progress: false
+
+jobs:
+  refetch-article-text:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: pipeline
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      # The stage builds a NewsClient, which requires a contact-email
+      # User-Agent (empty → ValueError on apply). Same requirement as ops.yml.
+      SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39 # v3
+
+      - name: Install dependencies
+        run: uv sync
+
+      - name: Apply migrations
+        # The stage reads/writes news_articles.text_refetched_at (migration
+        # 0046), so ensure prod is at head before running. Safe: only migrations
+        # already merged to the default branch exist here.
+        run: uv run alembic upgrade head
+
+      - name: Run refetch-article-text
+        env:
+          OP_DRY_RUN: ${{ inputs.dry_run }}
+          OP_LIMIT: ${{ inputs.limit }}
+          OP_MAX_RUNTIME: ${{ inputs.max_runtime_minutes }}
+        # Inputs pass through env vars (never string-interpolated into the
+        # script). The stage writes its markdown table to $GITHUB_STEP_SUMMARY
+        # itself (observability.write_step_summary); the JSON summary lands in
+        # the run log. pipefail so a failing `uv run` surfaces as a failed step.
+        run: |
+          set -o pipefail
+          ARGS=(--limit "${OP_LIMIT:-50}")
+          if [ "$OP_DRY_RUN" = "true" ]; then ARGS+=(--dry-run); else ARGS+=(--apply); fi
+          if [ -n "$OP_MAX_RUNTIME" ]; then ARGS+=(--max-runtime-minutes "$OP_MAX_RUNTIME"); fi
+          uv run nous refetch-article-text "${ARGS[@]}"

@@ -489,6 +489,16 @@ class NewsArticle(Base):
     source: Mapped[str]  # hostname, e.g. "techcrunch.com"
     published_date: Mapped[date | None] = mapped_column(Date)
     raw_content: Mapped[str]
+    # When refetch-article-text (migration 0046) last ATTEMPTED to heal this
+    # row's raw_content from its publisher page — success or not. NULL = never
+    # attempted. Stamped on every attempt (healed, thin/failed fetch, or
+    # robots-block) so a permanently-thin article isn't re-fetched every run;
+    # clearing it forces a retry. Not indexed: read as part of the stage's
+    # bounded, prominence-ordered backlog drain, not a hot WHERE key at scale
+    # (same reasoning as describe_fallback_prompt_version, migration 0045).
+    text_refetched_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     # processed=true marks the article as having been passed through
     # extract-funding; the work-queue index in 0003 is partial on this column.
     processed: Mapped[bool] = mapped_column(

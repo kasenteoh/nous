@@ -23,6 +23,7 @@ from nous.sources.news import (
     _phrase_in_tokens,
     _tokenize,
     article_mentions_company,
+    resolve_and_fetch_article_text,
 )
 from nous.sources.techcrunch import TC_FUNDING_FEED, fetch_techcrunch_funding_articles
 from nous.util.ssrf import BlockedAddressError
@@ -1012,3 +1013,147 @@ def test_common_word_name_possessive_and_verb_variants() -> None:
     assert article_mentions_company("Away", "Away receives $50M investment")
     assert article_mentions_company("Away", "Away bags $100M to expand")
     assert article_mentions_company("Away", "Away completes $80M raise")
+
+
+# ---------------------------------------------------------------------------
+# resolve_and_fetch_article_text — the shared resolve+fetch helper (ingest +
+# refetch-article-text). Returns (publisher_url, text) on success, (None, None)
+# on any ordinary failure (never raises).
+# ---------------------------------------------------------------------------
+
+_DIRECT_ARTICLE = "https://directpub.com/company-raises-series-a"
+
+
+async def test_helper_gn_redirect_returns_publisher_url_and_text() -> None:
+    """A news.google.com redirect resolves to the publisher; the helper returns
+    the publisher URL + extracted body."""
+    transport = _MockTransport(
+        [
+            _Route(
+                "news.google.com/rss/articles",
+                location="https://realpub.com/redirect-co-series-b",
+            ),
+            _Route("realpub.com/robots.txt", status=404),
+            _Route(
+                "realpub.com/redirect-co-series-b", status=200, body=_REAL_ARTICLE_HTML
+            ),
+        ]
+    )
+    client = NewsClient(user_agent=USER_AGENT)
+    async with client:
+        _inject(client, transport)
+        url, text = await resolve_and_fetch_article_text(client, _GN_REDIRECT)
+
+    assert url == "https://realpub.com/redirect-co-series-b"
+    assert text is not None and len(text) >= MIN_BODY_CHARS
+    assert "Series B led by Acme Ventures" in text
+
+
+async def test_helper_gn_thin_body_returns_none_none() -> None:
+    """A resolved page below MIN_BODY_CHARS → (None, None)."""
+    short_html = "<html><body><p>Subscribe to read.</p></body></html>"
+    transport = _MockTransport(
+        [
+            _Route(
+                "news.google.com/rss/articles", location="https://thinpub.com/article"
+            ),
+            _Route("thinpub.com/robots.txt", status=404),
+            _Route("thinpub.com/article", status=200, body=short_html),
+        ]
+    )
+    client = NewsClient(user_agent=USER_AGENT)
+    async with client:
+        _inject(client, transport)
+        url, text = await resolve_and_fetch_article_text(client, _GN_REDIRECT)
+
+    assert url is None
+    assert text is None
+
+
+async def test_helper_gn_publisher_robots_blocked_returns_none_none() -> None:
+    """robots.txt disallow on the resolved publisher → (None, None)."""
+    transport = _MockTransport(
+        [
+            _Route(
+                "news.google.com/rss/articles", location="https://blocked-pub.com/a"
+            ),
+            _Route("blocked-pub.com/robots.txt", status=200, body=ROBOTS_DISALLOW_ALL),
+            _Route("blocked-pub.com/a", status=200, body=_REAL_ARTICLE_HTML),
+        ]
+    )
+    client = NewsClient(user_agent=USER_AGENT)
+    async with client:
+        _inject(client, transport)
+        url, text = await resolve_and_fetch_article_text(client, _GN_REDIRECT)
+
+    assert (url, text) == (None, None)
+
+
+async def test_helper_gn_no_redirect_returns_none_none() -> None:
+    """A GN link that stays on news.google.com (consent interstitial) → (None, None)."""
+    transport = _MockTransport(
+        [
+            _Route("news.google.com/robots.txt", status=404),
+            _Route(
+                "news.google.com/rss/articles",
+                status=200,
+                body="<html><body><p>consent interstitial</p></body></html>",
+            ),
+        ]
+    )
+    client = NewsClient(user_agent=USER_AGENT)
+    async with client:
+        _inject(client, transport)
+        url, text = await resolve_and_fetch_article_text(client, _GN_REDIRECT)
+
+    assert (url, text) == (None, None)
+
+
+async def test_helper_direct_publisher_url_returns_url_and_text() -> None:
+    """A direct (non-GN) publisher URL is fetched via fetch_article_body; the
+    helper keeps the URL as-is and returns the extracted text."""
+    transport = _MockTransport(
+        [
+            _Route("directpub.com/robots.txt", status=404),
+            _Route(_DIRECT_ARTICLE, status=200, body=_REAL_ARTICLE_HTML),
+        ]
+    )
+    client = NewsClient(user_agent=USER_AGENT)
+    async with client:
+        _inject(client, transport)
+        url, text = await resolve_and_fetch_article_text(client, _DIRECT_ARTICLE)
+
+    assert url == _DIRECT_ARTICLE  # URL untouched for a direct publisher link
+    assert text is not None and len(text) >= MIN_BODY_CHARS
+
+
+async def test_helper_direct_publisher_http_error_returns_none_none() -> None:
+    """A 404 on a direct publisher URL → (None, None)."""
+    transport = _MockTransport(
+        [
+            _Route("directpub.com/robots.txt", status=404),
+            _Route(_DIRECT_ARTICLE, status=404),
+        ]
+    )
+    client = NewsClient(user_agent=USER_AGENT)
+    async with client:
+        _inject(client, transport)
+        url, text = await resolve_and_fetch_article_text(client, _DIRECT_ARTICLE)
+
+    assert (url, text) == (None, None)
+
+
+async def test_helper_direct_publisher_network_error_returns_none_none() -> None:
+    """A network error on a direct publisher URL → (None, None) (never raises)."""
+    transport = _MockTransport(
+        [
+            _Route("directpub.com/robots.txt", status=404),
+            _Route(_DIRECT_ARTICLE, raise_network_error=True),
+        ]
+    )
+    client = NewsClient(user_agent=USER_AGENT)
+    async with client:
+        _inject(client, transport)
+        url, text = await resolve_and_fetch_article_text(client, _DIRECT_ARTICLE)
+
+    assert (url, text) == (None, None)

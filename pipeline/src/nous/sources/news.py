@@ -48,6 +48,7 @@ __all__ = [
     "ResolvedArticle",
     "RobotsBlockedError",
     "article_mentions_company",
+    "resolve_and_fetch_article_text",
 ]
 
 logger = logging.getLogger(__name__)
@@ -857,3 +858,47 @@ class NewsClient:
                 )
             )
         return results
+
+
+async def resolve_and_fetch_article_text(
+    client: NewsClient, url: str
+) -> tuple[str | None, str | None]:
+    """Resolve + fetch one article's real publisher text, politely.
+
+    The single code path shared by ingest-news (new rows) and refetch-article-text
+    (healing stored rows) so both store the SAME publisher prose:
+
+    - A ``news.google.com`` redirect is chased to its publisher via
+      ``NewsClient.resolve_article`` (the resolver machinery) — one GET (robots-
+      exempt on the GN hop, robots-enforced on the publisher), the shared 1 req/s
+      per-domain throttle, our contact-email User-Agent, the SSRF guard, and the
+      MIN_BODY_CHARS thin-body cutoff all live inside it. Returns
+      ``(publisher_url, article_text)``.
+    - A direct publisher URL is fetched via ``NewsClient.fetch_article_body``
+      (same discipline). Returns ``(url, article_text)``.
+
+    Returns ``(None, None)`` on ANY ordinary failure — robots-block, 4xx/5xx,
+    network error, SSRF-block, a Google-News link that never leaves the consent
+    interstitial, non-HTML, or an extracted body below MIN_BODY_CHARS (paywall /
+    JS shell). The reused ``resolve_article`` / ``fetch_article_body`` collapse
+    every such case to ``None`` by their documented contract, so the caller sees
+    one "no usable text" outcome rather than a per-cause breakdown. Never raises
+    for ordinary failures; a defensive catch keeps an unexpected error from
+    sinking a bulk backlog drain.
+
+    When text is non-None it is guaranteed ``>= MIN_BODY_CHARS`` (both underlying
+    calls enforce that floor), so the caller can store it without re-checking.
+    """
+    try:
+        if hostname(url) == _GOOGLE_NEWS_HOST:
+            resolved = await client.resolve_article(url)
+            if resolved is None:
+                return None, None
+            return resolved.url, resolved.body
+        text = await client.fetch_article_body(url)
+        if text is None:
+            return None, None
+        return url, text
+    except Exception:  # noqa: BLE001 — data-layer polite fetch never raises upward
+        logger.warning("resolve_and_fetch_article_text failed for %s", url, exc_info=True)
+        return None, None
