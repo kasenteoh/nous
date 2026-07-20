@@ -54,7 +54,10 @@ from pydantic import BaseModel, Field, model_validator
 # long-profile evidence bar was corrected to count distinct OUTLETS (GN
 # syndication had collapsed every outlet to news.google.com and zero longs
 # were written under .2).
-PROMPT_VERSION: str = "2026-07-19.3"
+# .4: no template change — re-selects the cohort after suspect articles
+# switched from silent-drop to LLM adjudication (title-case headlines had
+# false-suspected real coverage and starved the evidence; .3-run catch).
+PROMPT_VERSION: str = "2026-07-19.4"
 
 # Cap on the combined evidence block (wikidata facts + article excerpts).
 # Descriptors live in headlines/ledes; more text costs tokens without adding

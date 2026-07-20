@@ -132,6 +132,7 @@ class DescribeFallbackSummary(BaseModel):
     persisted: int = 0  # description_short written (grounded, non-low, claim-checked)
     skipped_already_described: int = 0  # re-check found description_short already set
     stale_cleared: int = 0  # fallback rows cleared on a distrust-class null re-adjudication
+    suspects_adjudicated: int = 0  # cheap-suspect articles escalated to LLM adjudication
     # Non-US side-finding: slugs whose produced description reads non-US (a dumb
     # country-adjective/city regex, no LLM) — persisted normally, surfaced for
     # the ops exclusion flow.
@@ -353,25 +354,48 @@ async def _surviving_articles(
         cheap = best_corroboration(
             company.name, None, combined, own_context=own_context or None
         )
+        force_adjudicate = False
         if not cheap.suspect:
             summary.articles_corroborated += 1
         else:
-            # A wrong-entity shape the cheap layer is confident about — drop it
-            # without spending an LLM call.
-            summary.guard_dropped += 1
+            # A suspect shape is ESCALATED, never silently dropped (.3-run
+            # catch: TITLE-CASE headlines read as extended-entity phrases to
+            # the body-calibrated heuristic and dropped blue-origin's OWN
+            # coverage, starving the evidence). What escalation means differs
+            # by cohort — be honest about it (review catch):
+            # - REFRESH rows (description_source='fallback', tagline present):
+            #   force_adjudicate makes the guard's LLM genuinely decide,
+            #   informed by the standing grounded description. Wrong-entity
+            #   articles die here. ~$0.0005/article.
+            # - PRISTINE rows (no description at all): the guard's no-profile
+            #   fast path auto-attaches BEFORE force_adjudicate is consulted —
+            #   there is no LLM discrimination to be had against an empty
+            #   profile. The defense line for these is downstream: the
+            #   descriptor-in-evidence check, the M1 claim check, and the
+            #   prompt's entity_ambiguity null gate.
+            force_adjudicate = True
+            summary.suspects_adjudicated += 1
             logger.info(
-                "describe-fallback: corroboration dropped article for %s: %s",
+                "describe-fallback: corroboration suspect — escalating "
+                "article for %s: %s",
                 company.slug,
                 title[:90],
             )
-            continue
 
-        # Layer 2: the entity guard (belt-and-suspenders; mostly no-profile attach).
+        # Layer 2: the entity guard (escalation semantics per the comment
+        # above). A tripped rate-limit circuit needs no special-casing here
+        # (review catch — the earlier early-exit dropped articles that would
+        # have attached): with allow_llm=False the guard returns
+        # llm-circuit-open as an ERROR-class decision (llm_error=True), which
+        # the branch below already counts as guard_errors → the company does
+        # not stamp and re-selects; pristine rows still auto-attach on the
+        # no-profile path regardless of the circuit.
         decision = await check_article_entity(
             company,
             title=title,
             text=body,
             allow_llm=not summary.guard_rate_limited,
+            force_adjudicate=force_adjudicate,
         )
         if decision.rate_limited:
             summary.guard_rate_limited = True
@@ -672,7 +696,7 @@ async def run_describe_fallback(
 
     logger.info(
         "describe-fallback: cohort=%d wikidata_hits=%d articles_seen=%d "
-        "corroborated=%d guard_dropped=%d llm_calls=%d described=%d "
+        "corroborated=%d guard_dropped=%d suspects_adjudicated=%d llm_calls=%d described=%d "
         "long_written=%d long_below_bar=%d long_not_grounded=%d "
         "descriptor_not_in_evidence=%d claims_not_grounded=%d low_conf=%d "
         "skipped_no_evidence=%d persisted=%d skipped_already_described=%d "
@@ -682,6 +706,7 @@ async def run_describe_fallback(
         summary.articles_seen,
         summary.articles_corroborated,
         summary.guard_dropped,
+        summary.suspects_adjudicated,
         summary.llm_calls,
         summary.described,
         summary.long_written,
@@ -829,7 +854,8 @@ def render_yield_table(summary: DescribeFallbackSummary) -> str:
     lines.append(
         f"- **Articles:** {summary.articles_seen} seen, "
         f"{summary.articles_corroborated} corroborated, "
-        f"{summary.guard_dropped} guard-dropped, {summary.guard_errors} guard-errors"
+        f"{summary.guard_dropped} guard-dropped, {summary.suspects_adjudicated} "
+        f"suspects-escalated, {summary.guard_errors} guard-errors"
     )
     if summary.guard_rate_limited:
         lines.append("- **Guard rate-limited:** yes (stopped adjudicating mid-run)")

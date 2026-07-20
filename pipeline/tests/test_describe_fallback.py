@@ -13,7 +13,7 @@ no-stamp-on-LLM-error (skipped without DATABASE_URL).
 from __future__ import annotations
 
 import os
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -696,6 +696,65 @@ async def test_guard_rejected_article_excluded_from_evidence(
     assert summary.skipped_no_evidence == 1
     assert summary.llm_calls == 0
     llm.assert_not_awaited()
+
+
+@pytestmark_db
+async def test_suspect_article_adjudicated_not_dropped(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The .3-run catch: a TITLE-CASE headline ("Blue Origin Secures …") reads
+    as an extended-entity phrase to the body-calibrated cheap heuristic. Such
+    a suspect must be ADJUDICATED (force_adjudicate=True so the no-profile
+    fast path can't auto-attach), not silently dropped — a vindicated article
+    survives into evidence."""
+    co = _co("Blue Origin")
+    db.add(co)
+    await db.flush()
+    db.add(
+        NewsArticle(
+            company_id=co.id,
+            url="https://news.google.com/rss/articles/blue-origin-raise",
+            title="Blue Origin Secures Ten Billion In Outside Funding",
+            source="Reuters",
+            raw_content="",
+        )
+    )
+    await db.commit()
+
+    seen_kwargs: dict[str, object] = {}
+
+    async def fake_guard(company, **kwargs):  # type: ignore[no-untyped-def]
+        seen_kwargs.update(kwargs)
+        return GuardDecision(attach=True, adjudicated=True, reason="llm-match")
+
+    monkeypatch.setattr(df, "WikidataClient", _fake_wikidata({}))
+    monkeypatch.setattr(df, "check_article_entity", fake_guard)
+    # Force the cheap layer's verdict rather than reverse-engineering its
+    # heuristics (CI catch: the synthetic title didn't trip the real signal —
+    # what we're pinning is the suspect→ADJUDICATE handoff, not the heuristic).
+    monkeypatch.setattr(
+        df, "best_corroboration", lambda *a, **k: Mock(suspect=True)
+    )
+    monkeypatch.setattr(
+        df,
+        "complete_json",
+        AsyncMock(
+            return_value=DescribeFallbackResult(
+                description_short=None,
+                grounding_descriptor=None,
+                confidence="low",
+                null_reason="insufficient_evidence",
+            )
+        ),
+    )
+
+    summary = await run_describe_fallback(db, user_agent=_UA, limit=20, dry_run=True)
+
+    assert summary.suspects_adjudicated == 1
+    assert seen_kwargs.get("force_adjudicate") is True
+    # The vindicated article became evidence: the describe LLM was called.
+    assert summary.llm_calls == 1
+    assert summary.guard_dropped == 0
 
 
 @pytestmark_db
