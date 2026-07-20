@@ -2544,3 +2544,38 @@ Owner: "let's do it" (the QA P0s). Both adversarially reviewed (APPROVE).
 - Run economics so far: shorts backfill 4 batches = 246 persisted /
   $0.35; .2 re-run wave = ~160 refreshed + 32 distrust-nulls cleared /
   ~$0.22+. The .3 full-cohort run applies profiles (run 29706952642).
+
+## PR #251 — fix(pipeline): adjudicate cheap-suspect articles instead of silently dropping
+
+- The .3/.4 forensics: TITLE-CASE headlines false-suspected companies' OWN
+  coverage (body-calibrated heuristic) and the stage's suspect→silent-drop
+  starved evidence. Suspects now ESCALATE to the guard — honest two-cohort
+  semantics after a REQUEST_CHANGES review (the no-profile fast path
+  auto-attaches pristine rows before force_adjudicate is consulted; REAL
+  LLM adjudication happens for refresh rows whose fallback tagline gives
+  the guard profile context; downstream moat checks are the pristine
+  rows' defense). Harmful rate-limit early-exit removed (the guard's
+  llm-circuit-open is already error-class). suspects_adjudicated counter
+  surfaced. Merged through a multi-hour GitHub 503 incident (persistent
+  recovery monitor rode it out; git transport kept working while the REST
+  API flapped).
+
+## PR #252 — fix(pipeline): affirmative long-profile instruction (2026-07-20.1)
+
+- The .4 run: evidence starvation FIXED (126 suspects adjudicated) but
+  long_written still 0 — rule 7's "optional/better-null" framing had the
+  model offering a profile once in 365 companies. Reworded AFFIRMATIVELY
+  ("declining to synthesize evidence that is present is also a failure"),
+  field description aligned (review LOW). All grounding gates unchanged.
+- **RESULT (.5 runs, 2026-07-20):** long profiles LAND — 6 written in the
+  retry batch alone (9 below-bar, 0 claim failures, 0 errors,
+  suspects_adjudicated 174, $0.08); blue-origin carries a 177-char
+  grounded profile (evidence-proportional: thin GN bodies → compact),
+  coinbase/uber/warby-parker/valar-atomics got fuller ones. Total arc
+  spend ≈ $1.05 across every batch/re-run — under the flagged envelope.
+- Iteration ledger for the record: FIVE prompt/stage versions in one day
+  (.1 shorts → .2 longs+bar → .3 outlet-counting → .4 suspect
+  adjudication → 2026-07-20.1 affirmative instruction), each driven by
+  prod counters, each verified by run telemetry. Watch: the next
+  eval-record (dispatched) anchors 2026-07-20.1 goldens; ISR surfaces
+  profiles on pages over ~6h.
