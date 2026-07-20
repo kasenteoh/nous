@@ -7,7 +7,27 @@ authoritative history), then `BACKLOG.md` (annotated with what shipped; its
 **"2026-07-17 post-surgery QA sweep"** section is the active work queue).
 The plan docs under `docs/superpowers/plans/` are historical context.
 
-## LATEST UPDATE — long profiles + evidence fixes IN FLIGHT; #251 blocked on a GitHub outage (2026-07-20 早)
+## LATEST UPDATE — descriptions arc COMPLETE: profiles LIVE (2026-07-20, PRs #241–#252)
+
+The whole arc closed. Final state: #251 merged (suspect articles
+adjudicated, not dropped — 174 adjudicated in the last run), #252 merged
+(affirmative long-profile instruction, prompt 2026-07-20.1) →
+**long profiles WRITE**: blue-origin carries a 177-char grounded profile;
+coinbase/uber/warby-parker/valar-atomics fuller ones; 0 errors, 0 claim
+failures across every run; total arc spend ≈ $1.05. A live goldens
+re-record for 2026-07-20.1 was dispatched (review the delta + merge the
+eval-record branch next session — REMOTELY via gh, never a local checkout
+while agents work). ISR surfaces profiles on pages over ~6h.
+NEXT-SESSION QUEUE (unchanged otherwise): (1) merge the pending
+eval-record branch after delta review; (2) non-US exclusion sweep
+(BACKLOG list, verify each); (3) watch healed-14 re-enrichment +
+blue-origin own-site scrape supersede + repair counter ~0 +
+data-quality description % (baseline 66.5 → expect mid-70s); (4) prompt
+hygiene batch at next bump (entity-ambiguity wording + scorer-gates-M1);
+(5) owner-optional: evidence-pool widening (live article re-fetch + more
+feeds) for the ~800 evidence-less residue.
+
+## LATEST UPDATE — long profiles + evidence fixes IN FLIGHT (superseded — resolved above) (2026-07-20 早)
 
 The owner asked for About-length fallback profiles → evidence-proportional
 design shipped (#248: >= 3 distinct sources + M1 on the long; refresh-own-
