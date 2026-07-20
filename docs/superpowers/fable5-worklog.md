@@ -2606,3 +2606,26 @@ Owner: "let's do it" (the QA P0s). Both adversarially reviewed (APPROVE).
   with wrong-entity and non-US rows whose correct end-state is excluded.
 - Pages return on ISR (~6h). Suite 1258 green; review COMMENT (0
   blocking), both MEDIUMs applied pre-merge.
+
+## PR #254 — feat(pipeline): article-text refetch — NEGATIVE RESULT recorded
+
+- Shipped clean (migration 0046, shared resolve+fetch helper, refetch
+  stage + workflow, ingest routed through the shared path; reviewer
+  cleared data-destruction before an infra stall; remaining checks
+  verified directly — etiquette traced through both branches,
+  ingest source derivation byte-identical, no read-time re-grounding,
+  dry-run network/write-free; recorded on the PR).
+- **The heal itself: 0/250.** Design error in the cohort choice: GN-host
+  rows are BY CONSTRUCTION the residue where redirect resolution already
+  failed at ingest (successes store publisher URLs + real text). Google's
+  opaque /rss/articles/CBMi… tokens don't resolve server-side — they need
+  a real browser — so retrying the same mechanism from the same Actions
+  infrastructure fails identically. All attempts stamped (no re-billing);
+  fetch-only cost.
+- CONSEQUENCE: describe_fallback 2026-07-20.2 re-run NOT dispatched
+  (unchanged evidence → identical profiles re-billed). The bump stays
+  parked until evidence genuinely improves. The GN-residue evidence line
+  is EXHAUSTED within current constraints (owner declined the reader-API
+  route for now; local residential scrape-assist raised, undecided).
+  Ingestion improvement stands regardless: new GN articles that DO
+  resolve store real text via the shared path.
