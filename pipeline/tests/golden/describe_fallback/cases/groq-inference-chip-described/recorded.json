@@ -1,10 +1,10 @@
 {
   "provenance": "deepseek",
   "model": "deepseek-chat",
-  "recorded_at": "2026-07-19T21:53:12+00:00",
+  "recorded_at": "2026-07-20T04:06:39+00:00",
   "response": {
-    "description_short": "Groq is an AI inference chip company that designs AI inference chips and hosts a cloud service for running large language models.",
-    "description_long": null,
+    "description_short": "Groq designs AI inference chips and hosts a cloud service for running large language models.",
+    "description_long": "Groq is an AI inference chip company that designs specialized hardware for running large language models. In addition to its chip design, the company operates a cloud service that provides access to its inference technology and has opened a new data center to support its cloud offerings.",
     "grounding_descriptor": "AI inference chip company",
     "confidence": "high",
     "null_reason": null

@@ -1,10 +1,10 @@
 {
   "provenance": "deepseek",
   "model": "deepseek-chat",
-  "recorded_at": "2026-07-19T21:53:09+00:00",
+  "recorded_at": "2026-07-20T04:06:34+00:00",
   "response": {
     "description_short": "Figure AI is a humanoid robotics company building general-purpose robots for warehouse work.",
-    "description_long": null,
+    "description_long": "Figure AI has unveiled a humanoid robotics platform. The company builds general-purpose robots designed for warehouse work.",
     "grounding_descriptor": "humanoid robotics company",
     "confidence": "high",
     "null_reason": null

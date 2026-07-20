@@ -1,10 +1,10 @@
 {
   "provenance": "deepseek",
   "model": "deepseek-chat",
-  "recorded_at": "2026-07-19T21:53:06+00:00",
+  "recorded_at": "2026-07-20T04:06:31+00:00",
   "response": {
-    "description_short": "Anysphere is a developer of Cursor, an AI code editor.",
-    "description_long": null,
+    "description_short": "Anysphere is the developer of Cursor, an AI code editor that has gained enterprise traction.",
+    "description_long": "Anysphere develops Cursor, an AI-powered code editor designed to assist software developers with code generation and editing. The company's product has seen increasing adoption in enterprise environments, indicating growing interest in AI-assisted development tools.",
     "grounding_descriptor": "developer of Cursor, an AI code editor",
     "confidence": "high",
     "null_reason": null

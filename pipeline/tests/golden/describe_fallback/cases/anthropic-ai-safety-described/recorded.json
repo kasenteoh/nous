@@ -1,11 +1,11 @@
 {
   "provenance": "deepseek",
   "model": "deepseek-chat",
-  "recorded_at": "2026-07-19T21:53:05+00:00",
+  "recorded_at": "2026-07-20T04:06:30+00:00",
   "response": {
-    "description_short": "Anthropic is an American artificial intelligence safety and research company.",
+    "description_short": "Anthropic is an artificial intelligence safety and research company founded in 2021.",
     "description_long": null,
-    "grounding_descriptor": "American artificial intelligence safety and research company",
+    "grounding_descriptor": "artificial intelligence safety and research company",
     "confidence": "high",
     "null_reason": null
   }

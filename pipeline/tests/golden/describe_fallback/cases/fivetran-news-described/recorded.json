@@ -1,10 +1,10 @@
 {
   "provenance": "deepseek",
   "model": "deepseek-chat",
-  "recorded_at": "2026-07-19T21:53:10+00:00",
+  "recorded_at": "2026-07-20T04:06:36+00:00",
   "response": {
     "description_short": "Fivetran is an automated data integration company that builds pipelines to move data into cloud warehouses for analytics teams.",
-    "description_long": null,
+    "description_long": "Fivetran is an automated data integration company that builds pipelines to move data into cloud warehouses for analytics teams. The company offers a connector catalog that enables automated data ingestion from various sources, streamlining data preparation for analysis.",
     "grounding_descriptor": "automated data integration company",
     "confidence": "high",
     "null_reason": null
