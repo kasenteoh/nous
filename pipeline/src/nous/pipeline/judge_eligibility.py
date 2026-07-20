@@ -55,6 +55,7 @@ from nous.llm.prompts.company_eligibility import (
 )
 from nous.llm.prompts.company_eligibility import EligibilityJudgment, build_prompt
 from nous.pipeline.enrich_companies import _infer_country_from_url
+from nous.util.prominence import PROMINENCE_OVERRIDE_USD, max_recorded_round_usd
 from nous.util.text import extract_visible_text, truncate_to_chars
 
 logger = logging.getLogger(__name__)
@@ -129,6 +130,9 @@ def nonstartup_signal_clause() -> ColumnElement[bool]:
 class JudgeEligibilitySummary(BaseModel):
     companies_judged: int = 0
     companies_excluded: int = 0
+    # not_a_startup verdicts overturned by the funding-prominence override
+    # (owner call 2026-07-20): a >= $500M recorded raise keeps the row shown.
+    prominence_overrides: int = 0
     llm_failures: int = 0
     skipped_rate_limited: int = 0
 
@@ -214,11 +218,33 @@ async def _judge_one_company(
             company.hq_country = "US"
 
     if judgment.is_startup is False:
-        company.exclusion_reason = "not_a_startup"
-        company.exclusion_detail = judgment.not_startup_reason
-        company.excluded_at = now
-        summary.companies_excluded += 1
-    elif company.hq_country is not None and company.hq_country != "US":
+        async with asyncio.timeout(db_op_timeout):
+            prominent_amount = await max_recorded_round_usd(session, company.id)
+        if prominent_amount is not None and prominent_amount >= PROMINENCE_OVERRIDE_USD:
+            # Funding-prominence override (owner call 2026-07-20): a >= $500M
+            # recorded raise keeps the row SHOWN despite the not-a-startup
+            # verdict (the blue-origin case — see nous.util.prominence). Leave
+            # exclusion unset; the eligibility stamp above already marks the row
+            # judged, so the backfill won't re-select it. Manual/non_us
+            # exclusions are unaffected — this only overturns not_a_startup.
+            logger.info(
+                "prominence override kept %s: $%s round (>= $%s) despite"
+                " not-a-startup verdict",
+                company.slug,
+                f"{prominent_amount:,.0f}",
+                f"{PROMINENCE_OVERRIDE_USD:,.0f}",
+            )
+            summary.prominence_overrides += 1
+        else:
+            company.exclusion_reason = "not_a_startup"
+            company.exclusion_detail = judgment.not_startup_reason
+            company.excluded_at = now
+            summary.companies_excluded += 1
+    if (
+        company.exclusion_reason is None
+        and company.hq_country is not None
+        and company.hq_country != "US"
+    ):
         company.exclusion_reason = "non_us"
         company.exclusion_detail = (
             f"HQ country inferred as {company.hq_country}"

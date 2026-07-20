@@ -23,6 +23,8 @@ on:
         options:
           - exclude-company
           - unexclude-company
+          - unexclude-prominent-dry-run
+          - unexclude-prominent-apply
           - inspect-company
           - reresolve-company
           - repair-misattributed-news-dry-run
@@ -177,6 +179,13 @@ jobs:
             if [ "$OP_CLEAR_STATUS" = "true" ]; then ARGS+=(--clear-status); fi
             if [ "$OP_COMMAND" = "delete-round-apply" ]; then ARGS+=(--apply); fi
             uv run nous delete-round "${ARGS[@]}" \
+              | { echo '```json'; cat; echo '```'; } | tee "$GITHUB_STEP_SUMMARY"
+          elif [ "$OP_COMMAND" = "unexclude-prominent-dry-run" ] || [ "$OP_COMMAND" = "unexclude-prominent-apply" ]; then
+            # Catalog-wide funding-prominence backfill: re-includes not_a_startup
+            # mega-raisers (>= $500M recorded round). Not slug-scoped.
+            ARGS=()
+            if [ "$OP_COMMAND" = "unexclude-prominent-apply" ]; then ARGS+=(--apply); fi
+            uv run nous unexclude-prominent "${ARGS[@]}" \
               | { echo '```json'; cat; echo '```'; } | tee "$GITHUB_STEP_SUMMARY"
           elif [ "$OP_COMMAND" = "audit-round-entities" ]; then
             # Catalog-wide $0 entity-corroboration probe: read-only report.

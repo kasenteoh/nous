@@ -68,6 +68,7 @@ from nous.llm.prompts.company_description_long import (
     build_prompt as build_long_description_prompt,
 )
 from nous.util.industry import normalize_industry
+from nous.util.prominence import PROMINENCE_OVERRIDE_USD, max_recorded_round_usd
 from nous.util.tags import canonicalize_tags
 from nous.util.text import extract_visible_text, truncate_to_chars
 from nous.util.us_state import canonical_us_state
@@ -208,6 +209,10 @@ class EnrichSummary(BaseModel):
     skipped_no_text: int = 0
     skipped_bad_website: int = 0
     skipped_rate_limited: int = 0
+    # not_a_startup verdicts overturned by the funding-prominence override
+    # (owner call 2026-07-20): a >= $500M recorded raise keeps the row shown and
+    # it is described like any kept company.
+    prominence_overrides: int = 0
     # Second-call (long description) bookkeeping.
     descriptions_written: int = 0
     # Included companies whose text was under _MIN_DESCRIBE_CHARS — judged and
@@ -522,11 +527,36 @@ async def run_enrich_companies(
                 company.hq_country = "US"
 
         if description.is_startup is False:
-            company.exclusion_reason = "not_a_startup"
-            company.exclusion_detail = description.not_startup_reason
-            company.excluded_at = now
-            summary.companies_excluded += 1
-        elif company.hq_country is not None and company.hq_country != "US":
+            prominent_amount = await max_recorded_round_usd(session, company.id)
+            if (
+                prominent_amount is not None
+                and prominent_amount >= PROMINENCE_OVERRIDE_USD
+            ):
+                # Funding-prominence override (owner call 2026-07-20): a >= $500M
+                # recorded raise keeps the row SHOWN despite the not-a-startup
+                # verdict (the blue-origin case — see nous.util.prominence).
+                # Leaving exclusion_reason NULL makes this a KEPT row: the
+                # describe second-call below runs and stamps enrichment_prompt_
+                # version exactly as for any shown company. Manual/non_us
+                # exclusions are unaffected — this only overturns not_a_startup.
+                logger.info(
+                    "prominence override kept %s: $%s round (>= $%s) despite"
+                    " not-a-startup verdict",
+                    company.slug,
+                    f"{prominent_amount:,.0f}",
+                    f"{PROMINENCE_OVERRIDE_USD:,.0f}",
+                )
+                summary.prominence_overrides += 1
+            else:
+                company.exclusion_reason = "not_a_startup"
+                company.exclusion_detail = description.not_startup_reason
+                company.excluded_at = now
+                summary.companies_excluded += 1
+        if (
+            company.exclusion_reason is None
+            and company.hq_country is not None
+            and company.hq_country != "US"
+        ):
             company.exclusion_reason = "non_us"
             company.exclusion_detail = (
                 f"HQ country inferred as {company.hq_country}"

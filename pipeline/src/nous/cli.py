@@ -2843,6 +2843,34 @@ def unexclude_company(slug: str) -> None:
     asyncio.run(_run())
 
 
+@cli.command("unexclude-prominent")
+@click.option(
+    "--apply",
+    is_flag=True,
+    default=False,
+    help="Actually clear the exclusions. Default is a dry-run that lists candidates.",
+)
+def unexclude_prominent(apply: bool) -> None:
+    """Re-include not_a_startup companies with a >= $500M recorded round.
+
+    The retroactive funding-prominence override (owner call 2026-07-20): clears
+    the automated not_a_startup exclusion for mega-raisers the judge excluded
+    before the rule existed (the blue-origin case). Manual/non_us exclusions are
+    never touched. Dry-run by default; --apply to clear.
+    """
+    import asyncio
+
+    from nous.db.session import AsyncSessionLocal
+    from nous.pipeline.unexclude_prominent import run_unexclude_prominent
+
+    async def _run() -> None:
+        async with AsyncSessionLocal() as session:
+            summary = await run_unexclude_prominent(session, dry_run=not apply)
+            click.echo(summary.model_dump_json(indent=2))
+
+    asyncio.run(_run())
+
+
 @cli.command("reresolve-company")
 @click.argument("slug")
 @click.option(
