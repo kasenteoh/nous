@@ -7,6 +7,30 @@ authoritative history), then `BACKLOG.md` (annotated with what shipped; its
 **"2026-07-17 post-surgery QA sweep"** section is the active work queue).
 The plan docs under `docs/superpowers/plans/` are historical context.
 
+## LATEST UPDATE — long profiles + evidence fixes IN FLIGHT; #251 blocked on a GitHub outage (2026-07-20 早)
+
+The owner asked for About-length fallback profiles → evidence-proportional
+design shipped (#248: >= 3 distinct sources + M1 on the long; refresh-own-
+stopgap-never-own-site write guard; stale-fallback lifecycle
+clear-on-distrust/keep-on-availability; About/.md attribution variants).
+#249 live goldens (one KNOWN last-line regression documented: the
+same-name-different-field null case — entity guard upstream is the real
+defense; re-strengthen wording at next bump). #250: the long bar counts
+distinct OUTLETS (article.source) — GN syndication had collapsed every
+outlet to news.google.com, zero longs written. **#251 (OPEN, blocked)**:
+suspect articles ESCALATED to the guard instead of silently dropped
+(title-case headlines false-suspected blue-origin's own coverage and
+starved evidence). All #251 findings applied; pipeline/web/push-event
+secrets all GREEN — only the PR-event Gitleaks job keeps dying on
+GitHub's OWN api 503s (incident began ~2026-07-20 00:00Z; even rerun API
+calls 503). A persistent monitor reruns it when the API stays healthy.
+**RESUME:** verify #251 full rollup → squash-merge → dispatch
+describe-fallback.yml apply limit=1200 (the .4 run; watch
+suspects_adjudicated + long_written — this is the run that should write
+blue-origin's About profile) → verify /c/blue-origin + counters →
+worklog #251 + HANDOFF. Run economics so far: shorts $0.35, .2 wave
+~$0.26, .3 retry $0.04 — all within the approved envelope.
+
 ## LATEST UPDATE — describe-fallback SHIPPED + BACKFILLED (2026-07-19 evening, PRs #243–#247)
 
 The full arc landed same-day: probe (#243) → apply+migration **0045** (#244)
