@@ -23,7 +23,7 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from nous.db.models import Company, Person, RawPage
+from nous.db.models import Company, FundingRound, Person, RawPage
 from nous.llm.client import LLMParseError, LLMRateLimitError
 from nous.llm.prompts.company_description import (
     PROMPT_VERSION as JUDGE_VERSION,
@@ -748,6 +748,59 @@ async def test_ok_startup_sets_stamp_without_exclusion(
     await db.refresh(company)
     assert company.exclusion_reason is None
     assert company.eligibility_checked_at is not None
+
+
+async def test_prominence_override_keeps_mega_raiser_and_describes_it(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Owner override (2026-07-20): a not-a-startup verdict is overturned for a
+    company with a >= $500M recorded round (the blue-origin case). It is treated
+    as a KEPT row — no exclusion, the describe second-call runs and stamps the
+    enrichment version — while a non-prominent company with the SAME verdict is
+    still excluded and NOT described."""
+    mega = _make_company(name="Mega Raiser", slug="prom-enrich-mega")
+    small = _make_company(name="Small Co", slug="prom-enrich-small")
+    db.add_all([mega, small])
+    await db.flush()
+    db.add_all(
+        [
+            _make_raw_page(mega.id, url="https://mega.example/"),
+            _make_raw_page(small.id, url="https://small.example/"),
+            # The prominence check reads funding_rounds directly (NOT the
+            # latest_round_amount denorm, deliberately left unset here).
+            FundingRound(company_id=mega.id, amount_raised=Decimal("650000000")),
+            FundingRound(company_id=small.id, amount_raised=Decimal("10000000")),
+        ]
+    )
+    await db.commit()
+
+    canned = CompanyDescription(
+        description_short="Reads like a mature company, not a startup.",
+        primary_category="aerospace",
+        website_state="ok",
+        is_startup=False,
+        not_startup_reason="Decades-old; reads as established.",
+    )
+    fake, calls = _llm_router(judge=canned)
+    monkeypatch.setattr("nous.pipeline.enrich_companies.complete_json", fake)
+
+    summary = await run_enrich_companies(db)
+    assert summary.prominence_overrides == 1
+    assert summary.companies_excluded == 1
+
+    await db.refresh(mega)
+    await db.refresh(small)
+    # Mega raiser: kept, described, and stamped exactly like any shown company.
+    assert mega.exclusion_reason is None
+    assert mega.eligibility_checked_at is not None
+    assert mega.description_long is not None
+    assert mega.enrichment_prompt_version == DESCRIBE_VERSION
+    # Non-prominent company with the same verdict: excluded, never described.
+    assert small.exclusion_reason == "not_a_startup"
+    assert small.description_long is None
+    assert small.enrichment_prompt_version is None
+    # One describe call total — for the mega raiser only.
+    assert calls == {"judge": 2, "describe": 1}
 
 
 # ---------------------------------------------------------------------------

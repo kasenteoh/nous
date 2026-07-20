@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import os
 from datetime import UTC, datetime
+from decimal import Decimal
 from unittest.mock import AsyncMock
 from uuid import UUID
 
@@ -24,7 +25,7 @@ import pytest
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from nous.db.models import Company, RawPage
+from nous.db.models import Company, FundingRound, RawPage
 from nous.llm.client import LLMRateLimitError
 from nous.llm.prompts.company_eligibility import EligibilityJudgment
 from nous.pipeline.judge_eligibility import (
@@ -135,6 +136,119 @@ async def test_judgment_excludes_and_stamps(
     assert refetched.year_incorporated == 2000
 
     # Second run selects nothing — the stamp makes the backfill one-shot.
+    summary2 = await run_judge_eligibility(committed_session_factory)
+    assert summary2.companies_judged == 0
+
+
+async def test_prominence_override_keeps_mega_raiser_but_excludes_the_rest(
+    committed_session_factory: Factory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Owner override (2026-07-20): a not-a-startup verdict is overturned for a
+    company with a >= $500M recorded round (the blue-origin case) — it stays
+    SHOWN and is stamped like a kept row — while a non-prominent company with the
+    SAME verdict is still excluded and stamped. One run, one mocked verdict."""
+    async with committed_session_factory() as s1:
+        mega = _enriched_company("Aaa Mega Raiser", "prom-judge-mega")
+        small = _enriched_company("Bbb Small Co", "prom-judge-small")
+        s1.add_all([mega, small])
+        await s1.flush()
+        mega_id: UUID = mega.id
+        small_id: UUID = small.id
+        s1.add_all(
+            [
+                RawPage(
+                    company_id=mega_id,
+                    url="https://mega.example/",
+                    content="Building rockets for two decades." * 20,
+                ),
+                RawPage(
+                    company_id=small_id,
+                    url="https://small.example/",
+                    content="A small local business." * 20,
+                ),
+                FundingRound(
+                    company_id=mega_id, amount_raised=Decimal("500000000")
+                ),
+                FundingRound(
+                    company_id=small_id, amount_raised=Decimal("10000000")
+                ),
+            ]
+        )
+        await s1.commit()
+
+    canned = EligibilityJudgment(
+        is_startup=False,
+        not_startup_reason="Reads as a mature company, not a startup.",
+    )
+    monkeypatch.setattr(
+        "nous.pipeline.judge_eligibility.complete_json",
+        AsyncMock(return_value=canned),
+    )
+
+    summary = await run_judge_eligibility(committed_session_factory)
+    assert summary.companies_judged == 2
+    assert summary.prominence_overrides == 1
+    assert summary.companies_excluded == 1
+
+    async with committed_session_factory() as s3:
+        mega_row = await s3.get(Company, mega_id)
+        small_row = await s3.get(Company, small_id)
+    # Mega raiser: kept (no exclusion) but still stamped, so the backfill won't
+    # re-select it next run.
+    assert mega_row is not None
+    assert mega_row.exclusion_reason is None
+    assert mega_row.eligibility_checked_at is not None
+    # Non-prominent company with the same verdict: excluded + stamped as usual.
+    assert small_row is not None
+    assert small_row.exclusion_reason == "not_a_startup"
+    assert small_row.eligibility_checked_at is not None
+
+
+async def test_prominence_never_overrides_non_us(
+    committed_session_factory: Factory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Prominence overturns ONLY the startup judgment, never nationality
+    (review catch): a prominent not-a-startup company whose HQ country is
+    non-US is still excluded as non_us."""
+    async with committed_session_factory() as s1:
+        co = _enriched_company("Ccc Foreign Mega", "prom-judge-foreign")
+        co.hq_country = "GB"
+        s1.add(co)
+        await s1.flush()
+        co_id: UUID = co.id
+        s1.add_all(
+            [
+                RawPage(
+                    company_id=co_id,
+                    url="https://foreign.example/",
+                    content="A large established company." * 20,
+                ),
+                FundingRound(
+                    company_id=co_id, amount_raised=Decimal("900000000")
+                ),
+            ]
+        )
+        await s1.commit()
+
+    canned = EligibilityJudgment(
+        is_startup=False,
+        not_startup_reason="Reads as a mature company, not a startup.",
+    )
+    monkeypatch.setattr(
+        "nous.pipeline.judge_eligibility.complete_json",
+        AsyncMock(return_value=canned),
+    )
+
+    summary = await run_judge_eligibility(committed_session_factory)
+    assert summary.prominence_overrides == 1  # the startup verdict WAS overturned
+    assert summary.companies_excluded == 1  # …but non_us still fires
+
+    async with committed_session_factory() as s2:
+        row = await s2.get(Company, co_id)
+    assert row is not None
+    assert row.exclusion_reason == "non_us"
+
+    # Idempotent: both rows are stamped, so a second run selects nothing.
     summary2 = await run_judge_eligibility(committed_session_factory)
     assert summary2.companies_judged == 0
 

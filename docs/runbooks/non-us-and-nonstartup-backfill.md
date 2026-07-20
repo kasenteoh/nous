@@ -67,6 +67,29 @@ Repeat with the same command until the judge step reports zero selected. The
 sweep shares the normal judge step (45-min timeout); ~200/run is comfortably
 inside it.
 
+## Lever 3 — `unexclude-prominent` (funding-prominence override)
+
+Owner rule (2026-07-20): a company with a RECORDED funding round >= $500M stays
+in the shown cohort regardless of the LLM's is-a-startup verdict — the automated
+`not_a_startup` exclusion must not fire for it (the blue-origin case: correctly
+auto-excluded under the old rule once its fixed site became scrapable, but the
+owner wants SpaceX-class private mega-raisers visible). The in-pipeline guards
+(`enrich-companies`, `judge-eligibility`) enforce this going forward; this lever
+is the one-shot backfill for rows already excluded before the rule existed.
+
+Selection: `exclusion_reason = 'not_a_startup'` AND max recorded round >= $500M.
+Manual/`non_us`/`parse_artifact` exclusions are never touched (operator intent
+wins). Dry-run by default (lists slug + max round + exclusion_detail):
+
+```sh
+gh workflow run ops.yml -f command=unexclude-prominent-dry-run
+# then, after reviewing the candidate list:
+gh workflow run ops.yml -f command=unexclude-prominent-apply
+```
+
+Idempotent: an applied row no longer matches `not_a_startup`, so a second run
+selects nothing.
+
 ## Ordering, cost, verification
 
 - **Order doesn't matter** — the two levers select disjoint work-lists. Running
