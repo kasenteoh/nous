@@ -803,6 +803,44 @@ async def test_prominence_override_keeps_mega_raiser_and_describes_it(
     assert calls == {"judge": 2, "describe": 1}
 
 
+async def test_enrich_prominence_never_overrides_non_us(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Mirror of the judge-site test (review catch): at the ENRICH site too,
+    prominence overturns only the startup judgment — a prominent GB-HQ
+    company still excludes as non_us and gets no paid describe call."""
+    co = _make_company(name="Foreign Mega", slug="prom-enrich-foreign")
+    co.hq_country = "GB"
+    db.add(co)
+    await db.flush()
+    db.add_all(
+        [
+            _make_raw_page(co.id, url="https://foreign.example/"),
+            FundingRound(company_id=co.id, amount_raised=Decimal("900000000")),
+        ]
+    )
+    await db.commit()
+
+    canned = CompanyDescription(
+        description_short="Reads like a mature company, not a startup.",
+        primary_category="aerospace",
+        website_state="ok",
+        is_startup=False,
+        not_startup_reason="Decades-old; reads as established.",
+    )
+    fake, calls = _llm_router(judge=canned)
+    monkeypatch.setattr("nous.pipeline.enrich_companies.complete_json", fake)
+
+    summary = await run_enrich_companies(db)
+    assert summary.prominence_overrides == 1  # startup verdict overturned…
+    assert summary.companies_excluded == 1  # …but non_us still fires
+
+    await db.refresh(co)
+    assert co.exclusion_reason == "non_us"
+    assert co.description_long is None  # excluded rows get no describe call
+    assert calls == {"judge": 1, "describe": 0}
+
+
 # ---------------------------------------------------------------------------
 # --backfill-missing-taxonomy tests
 # ---------------------------------------------------------------------------

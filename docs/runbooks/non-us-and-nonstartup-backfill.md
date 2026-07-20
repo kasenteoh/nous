@@ -92,7 +92,9 @@ selects nothing.
 
 ## Ordering, cost, verification
 
-- **Order doesn't matter** — the two levers select disjoint work-lists. Running
+- **Order doesn't matter** — the three levers select disjoint work-lists
+  (lever 3 targets only `not_a_startup` rows with a >= $500M round, which
+  neither of the first two touch). Running
   both in one dispatch is fine (each stage is `continue-on-error` and bounded).
 - **Cost**: one DeepSeek call per swept company (~1.5k companies worst-case
   across both levers ⇒ single-digit dollars total at DeepSeek pricing) plus
