@@ -99,12 +99,14 @@ class DescribeFallbackResult(BaseModel):
     description_long: str | None = Field(
         default=None,
         description=(
-            "OPTIONAL. One or two present-tense, neutral-register paragraphs "
-            "expanding on what the company IS and does, supported ONLY by the "
-            "evidence shown. EVERY claim must be traceable to the evidence. No "
-            "funding amounts, valuations, or investor names. Null (the default) "
-            "whenever the evidence cannot support multiple grounded paragraphs "
-            "— a padded profile is worse than none."
+            "One or two present-tense, neutral-register paragraphs expanding "
+            "on what the company IS and does, supported ONLY by the evidence "
+            "shown. EXPECTED when the evidence contains a product/business "
+            "descriptor and spans several independent sources; EVERY claim "
+            "must be traceable to the evidence. No funding amounts, "
+            "valuations, or investor names. Null only when the evidence "
+            "genuinely cannot support multiple grounded sentences — a padded "
+            "profile is worse than none."
         ),
     )
     grounding_descriptor: str | None = Field(
