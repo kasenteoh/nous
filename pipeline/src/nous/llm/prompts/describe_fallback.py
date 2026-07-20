@@ -57,7 +57,10 @@ from pydantic import BaseModel, Field, model_validator
 # .4: no template change — re-selects the cohort after suspect articles
 # switched from silent-drop to LLM adjudication (title-case headlines had
 # false-suspected real coverage and starved the evidence; .3-run catch).
-PROMPT_VERSION: str = "2026-07-19.4"
+# .5: rule 7 reworded AFFIRMATIVELY — under .4 the model offered a long
+# profile once in 365 companies ("optional/better-null" read as "don't
+# bother"); rich evidence now makes the profile the expected outcome.
+PROMPT_VERSION: str = "2026-07-20.1"
 
 # Cap on the combined evidence block (wikidata facts + article excerpts).
 # Descriptors live in headlines/ledes; more text costs tokens without adding
@@ -96,12 +99,14 @@ class DescribeFallbackResult(BaseModel):
     description_long: str | None = Field(
         default=None,
         description=(
-            "OPTIONAL. One or two present-tense, neutral-register paragraphs "
-            "expanding on what the company IS and does, supported ONLY by the "
-            "evidence shown. EVERY claim must be traceable to the evidence. No "
-            "funding amounts, valuations, or investor names. Null (the default) "
-            "whenever the evidence cannot support multiple grounded paragraphs "
-            "— a padded profile is worse than none."
+            "One or two present-tense, neutral-register paragraphs expanding "
+            "on what the company IS and does, supported ONLY by the evidence "
+            "shown. EXPECTED when the evidence contains a product/business "
+            "descriptor and spans several independent sources; EVERY claim "
+            "must be traceable to the evidence. No funding amounts, "
+            "valuations, or investor names. Null only when the evidence "
+            "genuinely cannot support multiple grounded sentences — a padded "
+            "profile is worse than none."
         ),
     )
     grounding_descriptor: str | None = Field(
@@ -215,13 +220,17 @@ DIFFERENT company with the same or a similar name (different field, \
 different location than the profile suggests, a fuller different name), \
 return null with null_reason "entity_ambiguity".
 6. Better no description than a guessed one. Null is a correct answer.
-7. OPTIONAL "description_long": ONLY when the evidence is rich enough to \
-support one or two present-tense, neutral paragraphs where EVERY claim is \
-traceable to the evidence above. Same bans as the short: no funding amounts, \
-valuations, or investor names. Max {max_long_chars} characters. This profile \
-is optional — return null for it (the default) whenever the evidence cannot \
-support multiple grounded paragraphs. A padded or guessed profile is worse \
-than none. The rules for description_short are UNCHANGED by this option.
+7. "description_long": when the evidence above contains a product/business \
+descriptor AND spans several independent sources, you are EXPECTED to also \
+write a fuller profile — one or two present-tense, neutral paragraphs \
+saying what the company does, builds, and is known for, where EVERY claim \
+is traceable to the evidence above. Synthesize across the sources; do not \
+merely restate the short description. Same bans as the short: no funding \
+amounts, valuations, or investor names. Max {max_long_chars} characters. \
+Return null for it ONLY when the evidence genuinely cannot support multiple \
+grounded sentences (e.g. a lone Wikidata line) — a padded or guessed \
+profile is worse than none, but declining to synthesize evidence that is \
+present is also a failure. The rules for description_short are UNCHANGED.
 
 Return JSON matching the schema."""
 
