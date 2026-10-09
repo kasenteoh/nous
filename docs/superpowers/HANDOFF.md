@@ -32,10 +32,12 @@ worklog):
   they go to the LLM gate.
 
 **Open, in priority order:**
-1. **Confirm the crons actually fire.** No `schedule` run since 2026-09-18
-   even after keepalive's 03:34 UTC re-enable (06:00 slot missed). If still
-   silent, a commit touching `pipeline.yml` / `discovery.yml` usually
-   re-registers the schedule.
+1. **Confirm the crons actually fire.** keepalive's 03:34 UTC re-enable
+   flipped both workflows to `active`, but no `schedule` run fired (03:00,
+   06:00 and 07:xx all missed; the last one was 2026-09-18). #264 (merged
+   ~07:35 UTC) touches both workflow files to re-register the schedule.
+   Verify that a `schedule`-event pipeline run appears. If not, check
+   Settings → Actions, or GitHub's status page.
 2. **Owner call: description prompt drift.** `company_description_long`
    breaks its word caps live (structure 0.785 → 0.429, unpinned
    `deepseek-chat`). Fixing it means a prompt bump, which re-bills all long

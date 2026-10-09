@@ -2786,3 +2786,14 @@ Owner: "let's do it" (the QA P0s). Both adversarially reviewed (APPROVE).
   (zepto, clio, groww, linear, manifest-law), the drain reaches each in
   name order.
 
+## PR #264 — ci: re-register cron schedules; fix stale cadence comments
+
+- **Problem.** After keepalive's REST re-enable (03:34 UTC), both crons read
+  `active`, yet no scheduled run fired: the 03:00 and 06:00 slots were missed
+  and a 40-minute watch saw nothing.
+- **Change.** A default-branch commit touching the workflow files re-registers
+  schedules. The edits are real corrections: "10x/day" → "8x/day", and the
+  obsolete private-repo-quota rationale in discovery.yml.
+- **keepalive.yml** records the gap: a REST re-enable alone may not resume
+  schedules.
+
