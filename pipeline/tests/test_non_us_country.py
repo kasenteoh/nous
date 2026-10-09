@@ -272,6 +272,49 @@ async def test_enrich_infers_us_when_state_set(
     assert company.exclusion_reason is None
 
 
+async def test_enrich_city_without_state_leaves_country_unknown(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A city alone ("London", no state, no stated country, .com site) is NOT
+    US evidence: hq_country stays NULL so infer-hq-country can still judge it,
+    instead of being stamped US and shielded from the non_us exclusion."""
+    company = Company(
+        name="Ldn Fintech",
+        slug="ldn-fintech-city-only",
+        normalized_name="ldn fintech",
+        website="https://ldnfintech.com",
+    )
+    db.add(company)
+    await db.flush()
+    db.add(_us_state_page(company.id))
+    await db.flush()
+    await db.commit()
+
+    canned = CompanyDescription(
+        description_short="A payments startup for small merchants.",
+        primary_category="fintech",
+        tags=["payments"],
+        website_state="ok",
+        is_startup=True,
+        hq_city="London",
+        hq_state=None,
+        hq_country=None,
+    )
+
+    async def _route(prompt: str, schema: type, **kwargs: Any) -> Any:
+        if schema is CompanyDescription:
+            return canned
+        return CompanyLongDescription(description_long="Two grounded paragraphs.")
+
+    monkeypatch.setattr("nous.pipeline.enrich_companies.complete_json", _route)
+
+    await run_enrich_companies(db)
+
+    await db.refresh(company)
+    assert company.hq_country is None
+    assert company.exclusion_reason is None
+
+
 async def test_judge_eligibility_cctld_non_us(
     committed_session_factory: async_sessionmaker[AsyncSession],
     monkeypatch: pytest.MonkeyPatch,

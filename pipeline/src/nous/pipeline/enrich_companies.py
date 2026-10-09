@@ -510,10 +510,13 @@ async def run_enrich_companies(
         # Country resolution — three-tier, conservative:
         #   1. LLM explicit statement (highest confidence).
         #   2. ccTLD of the company website (deterministic, no cost).
-        #   3. US state/city present → infer US.
+        #   3. A real US state (USPS code / name) present → infer US.
         # Only set US when there is positive evidence; leave NULL otherwise so
         # the non_us exclusion can fire on a subsequent enrichment cycle once
-        # more evidence is available.
+        # more evidence is available. A CITY alone is not evidence: "London",
+        # "Bangalore" or "Toronto" with no stated country used to be stamped
+        # US here, shielding non-US companies from both this stage's non_us
+        # exclusion and infer-hq-country (which only selects hq_country NULL).
         llm_country = (description.hq_country or "").strip().upper() or None
         if llm_country:
             company.hq_country = llm_country
@@ -522,8 +525,7 @@ async def run_enrich_companies(
             cctld_country = _infer_country_from_url(company.website)
             if cctld_country:
                 company.hq_country = cctld_country
-            elif company.hq_state or company.hq_city:
-                # A US state or city from the LLM is strong enough US evidence.
+            elif canonical_us_state(company.hq_state):
                 company.hq_country = "US"
 
         if description.is_startup is False:

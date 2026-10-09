@@ -124,3 +124,46 @@ async def test_second_run_is_idempotent(db: AsyncSession) -> None:
     refetched2 = await db.get(Company, co_id)
     assert refetched2 is not None
     assert refetched2.hq_state == "CA"
+
+
+async def test_unevidenced_us_reset_to_null(db: AsyncSession) -> None:
+    """Pass 2: a city-only "US" stamp becomes NULL (eligible for
+    infer-hq-country); evidenced, verified, and excluded rows are untouched."""
+    from datetime import UTC, datetime
+
+    city_only = _make_company("City Only Co", None)
+    city_only.hq_city = "London"
+    stated = _make_company("Stated Co", None)
+    stated.last_enriched_payload = {"hq_country": "US"}
+    real_state = _make_company("Real State Co", "WA")
+    verified = _make_company("Verified Co", None)
+    verified.hq_country_checked_at = datetime.now(UTC)
+    excluded = _make_company("Excluded Co", None)
+    excluded.exclusion_reason = "manual"
+    db.add_all([city_only, stated, real_state, verified, excluded])
+    await db.commit()
+
+    dry = await run_normalize_hq_state(db, dry_run=True)
+    assert dry.unevidenced_us_reset >= 1
+    refetched = await db.get(Company, city_only.id)
+    assert refetched is not None and refetched.hq_country == "US"  # dry-run
+
+    summary = await run_normalize_hq_state(db)
+    assert summary.unevidenced_us_reset >= 1
+    expected = {
+        city_only.id: None,
+        stated.id: "US",
+        real_state.id: "US",
+        verified.id: "US",
+        excluded.id: "US",
+    }
+    for co_id, country in expected.items():
+        row = await db.get(Company, co_id)
+        assert row is not None
+        await db.refresh(row)
+        assert row.hq_country == country, row.slug
+
+    again = await run_normalize_hq_state(db)
+    row = await db.get(Company, city_only.id)
+    assert row is not None and row.hq_country is None
+    assert again is not None

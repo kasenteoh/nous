@@ -1609,7 +1609,7 @@ def normalize_hq_state_cmd(limit: int | None, dry_run: bool) -> None:
                 "normalize-hq-state",
                 started_at=started,
                 inputs_seen=summary.companies_seen,
-                rows_written=summary.normalized,
+                rows_written=summary.normalized + summary.unevidenced_us_reset,
                 summary=summary,
             )
 
