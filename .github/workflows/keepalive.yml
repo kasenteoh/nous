@@ -11,6 +11,11 @@ name: keepalive
 #      (self-heal) and flagged; an active one is re-enabled as a no-op that, per
 #      common practice (keepalive-workflow v2), keeps it from being disabled.
 #      ASSUMPTION: that no-op resets the timer. Unverified until day 60 passes.
+#      KNOWN GAP (2026-10-09): re-enabling flipped both workflows to `active`
+#      but NO scheduled run fired afterwards (03:00 and 06:00 UTC slots both
+#      missed). A commit touching the scheduled workflow files re-registers
+#      the schedule; when this job re-enables a disabled workflow, also push
+#      such a commit (or merge any PR that edits it).
 #   2. If the last commit on the default branch is >= WARN_DAYS old, open (or
 #      comment on) one deduped `keepalive` issue so the owner gets an email
 #      while there is still time to push a commit. Weekly cadence + WARN_DAYS=45
