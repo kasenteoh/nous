@@ -4,9 +4,18 @@ Collapses duplicate company rows that name-only matching let through. Two
 passes:
 
 1. **Exact-domain clustering.** Group companies by ``canonical_domain(website)``
-   (shared-hosting domains and websiteless rows are skipped). Any group with
-   more than one row is the same company under different names — auto-merge the
-   extras into a chosen survivor. No LLM needed: a shared real domain is decisive.
+   (shared-hosting domains and websiteless rows are skipped). A shared domain
+   is NOT decisive on its own: a wrong website that slipped past the aggregator
+   reject list (the Kalshi-profile-carrying-FrenFlow's-site class that
+   repair-wrong-websites cleans up) would otherwise fuse two real companies,
+   and merges are irreversible. So within a cluster, rows auto-merge only when
+   their NAMES corroborate the shared domain (:func:`names_corroborate_domain`
+   — normalized-name equality, or both names independently spelling the
+   domain's registrable label). Members that corroborate each other collapse
+   into one survivor per corroborated group; any two groups left distinct
+   inside one domain cluster become a candidate pair for the pass-2 LLM gate
+   (judged first, ahead of fuzzy pairs, under the same budget and the same
+   same_company + high-confidence bar).
 
 2. **Fuzzy adjudication.** Among the rows left standing, generate candidate
    pairs from soft signals — trigram-similar normalized names, or a shared
@@ -27,9 +36,10 @@ A merged-away loser's slug is not lost: ``merge_companies`` records it in
 ``slug_aliases`` so the web layer permanently redirects the dead URL to the
 survivor (see the slug_aliases section of its docstring for chain semantics).
 
-Quota discipline (spec §11): at most ``llm_limit`` LLM judgments per run,
-highest-similarity pairs first. When more candidates exist than the cap, the
-overflow count is logged and reported in the summary — never silently dropped.
+Quota discipline (spec §11): at most ``llm_limit`` LLM judgments per run
+(uncorroborated domain pairs first, then highest-similarity fuzzy pairs).
+When more candidates exist than the cap, the overflow count is logged and
+reported in the summary — never silently dropped.
 
 ``dry_run=True`` performs every read and LLM call but skips the merges/commits,
 reporting what *would* be merged.
@@ -38,6 +48,7 @@ reporting what *would* be merged.
 from __future__ import annotations
 
 import logging
+import re
 from datetime import date, datetime
 from decimal import Decimal
 from uuid import UUID
@@ -50,6 +61,7 @@ from nous.db.models import Company
 from nous.db.upsert import merge_companies
 from nous.llm.client import LLMError, LLMParseError, LLMRateLimitError, complete_json
 from nous.llm.prompts.company_match import CompanyMatch, build_company_match_prompt
+from nous.util.slugify import normalize_name, slugify
 from nous.util.url import canonical_domain
 
 logger = logging.getLogger(__name__)
@@ -63,10 +75,37 @@ NAME_SIMILARITY_THRESHOLD = 0.45
 CO_LOCATED_NAME_THRESHOLD = 0.30
 
 
+# Name-corroboration rule for the domain pass (see names_corroborate_domain).
+# A name token-prefix shorter than this can't vouch for a domain label on its
+# own ("ai", "go" prefix a thousand names) — mirrors article_links'
+# _MIN_DOMAIN_LABEL_MATCH. A label equal to the WHOLE name is exempt (x.com).
+_MIN_LABEL_PREFIX_MATCH = 4
+# Marketing affixes companies wrap their name in when the bare .com is taken
+# (getclay.com, tryramp.com, acmehq.com). One affix is stripped before
+# matching; kept deliberately short — every entry widens what counts as
+# "the name spells the domain".
+_DOMAIN_LABEL_PREFIXES = ("get", "try", "use", "join", "hello", "meet")
+_DOMAIN_LABEL_SUFFIXES = ("hq", "app", "labs", "ai")
+# Second-level labels under a two-letter ccTLD that are part of the public
+# suffix (acme.co.uk → "acme", not "co").
+_CCTLD_SECOND_LEVELS = frozenset({"co", "com", "org", "net", "gov", "ac", "edu"})
+
+
 class DedupSummary(BaseModel):
     companies_seen: int = 0
+    # Merges that came out of a shared-domain cluster: name-corroborated
+    # auto-merges plus LLM-confirmed domain pairs (never also in llm_merges).
     domain_merges: int = 0
+    domain_merges_name_corroborated: int = 0
+    # Shared-domain pairs whose names did NOT corroborate the domain, routed to
+    # the LLM gate instead of auto-merging: judged / merged / rejected (judged
+    # but not same_company + high). Pairs past llm_limit count in ``skipped``.
+    domain_pairs_sent_to_llm: int = 0
+    domain_pairs_llm_merged: int = 0
+    domain_pairs_rejected: int = 0
+    # Every LLM judgment made (domain + fuzzy), bounded by llm_limit.
     llm_judged: int = 0
+    # Fuzzy-pass (non-domain) LLM merges.
     llm_merges: int = 0
     skipped: int = 0
 
@@ -136,6 +175,130 @@ def _choose_survivor(rows: list[_CompanyRow]) -> _CompanyRow:
     return min(rows, key=_survivor_sort_key)
 
 
+# ---------------------------------------------------------------------------
+# Name corroboration for the domain pass (pure — unit-tested without a DB)
+# ---------------------------------------------------------------------------
+
+
+def registrable_label(domain: str) -> str:
+    """The registrable label of a ``canonical_domain`` host, alphanumerics only.
+
+    "app.acme.com" → "acme"; "get-clay.com" → "getclay"; "acme.co.uk" →
+    "acme". A two-letter ccTLD under a generic second level (co/com/org/…) is
+    treated as a two-part public suffix; anything else uses the label left of
+    the TLD. Not a full public-suffix list — an unusual suffix only makes the
+    rule stricter (the label won't match a name, so the pair goes to the LLM).
+    """
+    labels = [part for part in domain.lower().split(".") if part]
+    if not labels:
+        return ""
+    if len(labels) == 1:
+        core = labels[0]
+    elif (
+        len(labels) >= 3
+        and len(labels[-1]) == 2
+        and labels[-2] in _CCTLD_SECOND_LEVELS
+    ):
+        core = labels[-3]
+    else:
+        core = labels[-2]
+    return re.sub(r"[^a-z0-9]+", "", core)
+
+
+def name_explains_domain_label(name: str, label: str) -> bool:
+    """True when ``name`` spells the domain ``label`` — exactly, or as a
+    leading run of its tokens.
+
+    The name is tokenized like a slug (unicode-folded, corporate suffix
+    stripped, split on non-alphanumerics), and the label must equal the
+    concatenation of the first k tokens for some k: "Acme Robotics" explains
+    "acme" and "acmerobotics"; "Hooli XYZ" explains "hooli"; "Kalshi" does not
+    explain "frenflow". One marketing affix may be stripped from the label
+    first (getclay → clay, acmehq → acme). A partial or affix-stripped match
+    must be ≥ ``_MIN_LABEL_PREFIX_MATCH`` chars; only a label equal to the
+    WHOLE name matches at any length.
+    """
+    tokens = [token for token in slugify(name).split("-") if token]
+    if not tokens or not label:
+        return False
+    prefix_keys = {"".join(tokens[:k]) for k in range(1, len(tokens) + 1)}
+    if label == "".join(tokens):
+        return True
+    candidates = {label}
+    for prefix in _DOMAIN_LABEL_PREFIXES:
+        if label.startswith(prefix):
+            candidates.add(label[len(prefix):])
+    for suffix in _DOMAIN_LABEL_SUFFIXES:
+        if label.endswith(suffix):
+            candidates.add(label[: -len(suffix)])
+    return any(
+        len(candidate) >= _MIN_LABEL_PREFIX_MATCH and candidate in prefix_keys
+        for candidate in candidates
+    )
+
+
+def names_corroborate_domain(name_a: str, name_b: str, domain: str) -> bool:
+    """Do two companies' names corroborate that their shared ``domain`` means
+    they are the same company? The domain pass auto-merges only when this holds.
+
+    True when EITHER
+    - the normalized names are equal and non-empty ("Acme, Inc." / "ACME"), OR
+    - BOTH names independently explain the domain's registrable label
+      (:func:`name_explains_domain_label`).
+
+    Requiring both names to explain the label is what blocks the known
+    wrong-website class: when one company carries another's site (a Kalshi row
+    pointing at frenflow.com), the intruder's name doesn't spell the domain,
+    so the pair goes to the LLM gate instead of auto-merging. Known limit: two
+    distinct same-stem companies that BOTH got the stem's domain by a blind
+    name→TLD guess ("Sierra" / "Sierra Space" → sierra.com) still corroborate
+    — the rule can't tell a descriptor ("Robotics") from a distinct product
+    name ("Space"); that wrong-website class is repair-wrong-websites' job.
+    """
+    norm_a, norm_b = normalize_name(name_a), normalize_name(name_b)
+    if norm_a and norm_a == norm_b:
+        return True
+    label = registrable_label(domain)
+    return name_explains_domain_label(name_a, label) and name_explains_domain_label(
+        name_b, label
+    )
+
+
+def _corroborated_groups(
+    rows: list[_CompanyRow], domain: str
+) -> list[list[_CompanyRow]]:
+    """Partition one domain cluster into groups whose names corroborate the
+    domain with each other (connected components of
+    :func:`names_corroborate_domain`).
+
+    Each group of ≥2 auto-merges into its own survivor; distinct groups are
+    NOT merged with each other without an LLM verdict. Deterministic: groups
+    and their members come out in survivor-preference order.
+    """
+    ordered = sorted(rows, key=_survivor_sort_key)
+    parent = list(range(len(ordered)))
+
+    def find(i: int) -> int:
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+
+    for i in range(len(ordered)):
+        for j in range(i + 1, len(ordered)):
+            if names_corroborate_domain(ordered[i].name, ordered[j].name, domain):
+                root_i, root_j = find(i), find(j)
+                if root_i != root_j:
+                    parent[max(root_i, root_j)] = min(root_i, root_j)
+
+    groups: dict[int, list[_CompanyRow]] = {}
+    for i, row in enumerate(ordered):
+        groups.setdefault(find(i), []).append(row)
+    # Roots are each group's lowest index, so sorting by root keeps the
+    # survivor-preference order across groups too.
+    return [groups[root] for root in sorted(groups)]
+
+
 async def _load_companies(session: AsyncSession) -> list[_CompanyRow]:
     stmt = select(
         Company.id,
@@ -177,43 +340,74 @@ async def _run_domain_pass(
     summary: DedupSummary,
     *,
     dry_run: bool,
-) -> set[UUID]:
-    """Cluster ``rows`` by canonical domain and merge each multi-row cluster.
+) -> tuple[set[UUID], list[tuple[UUID, UUID]]]:
+    """Cluster ``rows`` by canonical domain; auto-merge only name-corroborated
+    members, and hand the rest to the LLM gate.
 
-    Returns the set of ids that were merged away (losers) so the fuzzy pass can
-    exclude them. In ``dry_run`` mode no merge/commit happens but losers are
-    still reported so the count reflects what would be collapsed.
+    Each multi-row cluster is split into :func:`_corroborated_groups`; every
+    group of ≥2 collapses into its preferred survivor (no LLM). When a cluster
+    holds more than one group, every pair of group survivors is returned as an
+    LLM candidate — the shared domain makes them worth judging, but nothing
+    about their names says they are one company.
+
+    Returns ``(merged_away, llm_pairs)``: the loser ids (so the LLM pass can
+    exclude them) and the uncorroborated pairs, survivor-preferred id first.
+    In ``dry_run`` mode no merge/commit happens but losers are still reported
+    so the count reflects what would be collapsed.
     """
-    groups: dict[str, list[_CompanyRow]] = {}
+    clusters: dict[str, list[_CompanyRow]] = {}
     for row in rows:
         domain = canonical_domain(row.website)
         if domain is None:
             continue
-        groups.setdefault(domain, []).append(row)
+        clusters.setdefault(domain, []).append(row)
 
     merged_away: set[UUID] = set()
-    for domain, group in groups.items():
-        if len(group) < 2:
+    llm_pairs: list[tuple[UUID, UUID]] = []
+    for domain, cluster in clusters.items():
+        if len(cluster) < 2:
             continue
-        survivor = _choose_survivor(group)
-        losers = [r for r in group if r.id != survivor.id]
-        for loser in losers:
-            merged_away.add(loser.id)
-            summary.domain_merges += 1
-            if dry_run:
-                continue
-            await merge_companies(
-                session, survivor_id=survivor.id, loser_id=loser.id
-            )
-        if not dry_run and losers:
+        groups = _corroborated_groups(cluster, domain)
+        representatives: list[_CompanyRow] = []
+        merged_here = 0
+        for group in groups:
+            survivor = _choose_survivor(group)
+            representatives.append(survivor)
+            for loser in group:
+                if loser.id == survivor.id:
+                    continue
+                merged_away.add(loser.id)
+                summary.domain_merges += 1
+                summary.domain_merges_name_corroborated += 1
+                merged_here += 1
+                if dry_run:
+                    continue
+                await merge_companies(
+                    session, survivor_id=survivor.id, loser_id=loser.id
+                )
+            if not dry_run and len(group) > 1:
+                logger.info(
+                    "dedup: domain %s — merged %d name-corroborated row(s) into "
+                    "survivor %s",
+                    domain,
+                    len(group) - 1,
+                    survivor.id,
+                )
+        if not dry_run and merged_here:
             await session.commit()
+
+        for i, rep_a in enumerate(representatives):
+            for rep_b in representatives[i + 1 :]:
+                llm_pairs.append((rep_a.id, rep_b.id))
+        if len(representatives) > 1:
             logger.info(
-                "dedup: domain %s — merged %d row(s) into survivor %s",
+                "dedup: domain %s shared by %d name-uncorroborated companies "
+                "(%s) — routing to the LLM gate, not auto-merging",
                 domain,
-                len(losers),
-                survivor.id,
+                len(representatives),
+                ", ".join(rep.name for rep in representatives),
             )
-    return merged_away
+    return merged_away, llm_pairs
 
 
 async def _generate_fuzzy_pairs(
@@ -264,27 +458,49 @@ async def _generate_fuzzy_pairs(
     return [(r[0], r[1], float(r.sim)) for r in result]
 
 
-async def _run_fuzzy_pass(
+async def _run_llm_pass(
     session: AsyncSession,
     rows: list[_CompanyRow],
     merged_away: set[UUID],
+    domain_pairs: list[tuple[UUID, UUID]],
     summary: DedupSummary,
     *,
     llm_limit: int,
     dry_run: bool,
 ) -> None:
-    """Adjudicate fuzzy candidate pairs with the LLM and merge HIGH-confidence
-    matches. Caps LLM judgments at ``llm_limit`` (highest-similarity first)."""
+    """Adjudicate candidate pairs with the LLM and merge HIGH-confidence matches.
+
+    Candidates are the domain pass's name-uncorroborated pairs FIRST (a shared
+    domain is the strongest nomination signal we have), then the fuzzy pairs,
+    highest-similarity first; a fuzzy pair already nominated by the domain pass
+    is not judged twice. Every candidate faces the same gate (``company_match``
+    prompt; merge only on same_company AND confidence='high') and the same
+    ``llm_limit`` budget.
+    """
     by_id = {row.id: row for row in rows if row.id not in merged_away}
     candidate_ids = set(by_id)
-    pairs = await _generate_fuzzy_pairs(session, candidate_ids)
+    fuzzy_pairs = await _generate_fuzzy_pairs(session, candidate_ids)
+
+    nominated = {frozenset(pair) for pair in domain_pairs}
+    # (id_a, id_b, similarity, from_domain_pass). Domain pairs carry no trigram
+    # similarity; NaN keeps the log line honest.
+    pairs: list[tuple[UUID, UUID, float, bool]] = [
+        (id_a, id_b, float("nan"), True) for id_a, id_b in domain_pairs
+    ] + [
+        (id_a, id_b, sim, False)
+        for id_a, id_b, sim in fuzzy_pairs
+        if frozenset((id_a, id_b)) not in nominated
+    ]
 
     if len(pairs) > llm_limit:
         summary.skipped += len(pairs) - llm_limit
         logger.warning(
-            "dedup: %d fuzzy candidate pairs exceed llm_limit=%d; judging the "
-            "%d highest-similarity pairs and deferring %d to the next run.",
+            "dedup: %d LLM candidate pairs (%d domain, %d fuzzy) exceed "
+            "llm_limit=%d; judging the first %d (domain pairs, then highest-"
+            "similarity) and deferring %d to the next run.",
             len(pairs),
+            len(domain_pairs),
+            len(pairs) - len(domain_pairs),
             llm_limit,
             llm_limit,
             len(pairs) - llm_limit,
@@ -295,7 +511,7 @@ async def _run_fuzzy_pass(
     # loser) we must not reuse the stale projection. Track the live id set.
     gone: set[UUID] = set()
 
-    for id_a, id_b, _sim in pairs:
+    for id_a, id_b, _sim, from_domain in pairs:
         if id_a in gone or id_b in gone:
             continue
         row_a = by_id.get(id_a)
@@ -310,7 +526,7 @@ async def _run_fuzzy_pass(
             match: CompanyMatch = await complete_json(prompt, CompanyMatch)
         except LLMRateLimitError:
             logger.warning(
-                "dedup: LLM rate limit hit — stopping fuzzy pass to avoid "
+                "dedup: LLM rate limit hit — stopping the LLM pass to avoid "
                 "further quota exhaustion."
             )
             break
@@ -321,13 +537,29 @@ async def _run_fuzzy_pass(
             continue
 
         summary.llm_judged += 1
+        if from_domain:
+            summary.domain_pairs_sent_to_llm += 1
 
         if not (match.same_company and match.confidence == "high"):
+            if from_domain:
+                summary.domain_pairs_rejected += 1
+                logger.info(
+                    "dedup: LLM declined shared-domain pair %r / %r "
+                    "(same_company=%s, confidence=%s) — left unmerged",
+                    row_a.name,
+                    row_b.name,
+                    match.same_company,
+                    match.confidence,
+                )
             continue
 
         survivor = _choose_survivor([row_a, row_b])
         loser = row_b if survivor.id == row_a.id else row_a
-        summary.llm_merges += 1
+        if from_domain:
+            summary.domain_merges += 1
+            summary.domain_pairs_llm_merged += 1
+        else:
+            summary.llm_merges += 1
         if dry_run:
             continue
         await merge_companies(
@@ -336,9 +568,10 @@ async def _run_fuzzy_pass(
         await session.commit()
         gone.add(loser.id)
         logger.info(
-            "dedup: LLM merged %s into %s (sim=%.2f)",
+            "dedup: LLM merged %s into %s (%s, sim=%.2f)",
             loser.id,
             survivor.id,
+            "shared domain" if from_domain else "fuzzy",
             _sim,
         )
 
@@ -349,7 +582,8 @@ async def run_dedup_companies(
     llm_limit: int = 200,
     dry_run: bool = False,
 ) -> DedupSummary:
-    """Deduplicate companies: exact-domain auto-merge, then LLM-gated fuzzy merge.
+    """Deduplicate companies: name-corroborated exact-domain auto-merge, then an
+    LLM-gated pass over uncorroborated shared-domain pairs and fuzzy pairs.
 
     See the module docstring for the algorithm and survivor rule. Returns a
     :class:`DedupSummary` of counts.
@@ -359,19 +593,24 @@ async def run_dedup_companies(
     rows = await _load_companies(session)
     summary.companies_seen = len(rows)
 
-    merged_away = await _run_domain_pass(session, rows, summary, dry_run=dry_run)
+    merged_away, domain_pairs = await _run_domain_pass(
+        session, rows, summary, dry_run=dry_run
+    )
 
-    # Reload projections after the domain pass so the fuzzy pass sees survivors'
-    # inherited description/website/HQ (and not the merged-away losers). In a
-    # dry run nothing was merged, so the original snapshot is still accurate.
+    # Reload projections after the domain pass so the LLM pass sees survivors'
+    # inherited description/website/HQ (and not the merged-away losers). The
+    # domain pairs reference group survivors, which are never merged away, so
+    # they stay valid across the reload. In a dry run nothing was merged, so
+    # the original snapshot is still accurate.
     if not dry_run and merged_away:
         rows = await _load_companies(session)
         merged_away = set()
 
-    await _run_fuzzy_pass(
+    await _run_llm_pass(
         session,
         rows,
         merged_away,
+        domain_pairs,
         summary,
         llm_limit=llm_limit,
         dry_run=dry_run,
