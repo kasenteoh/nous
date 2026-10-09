@@ -1,7 +1,7 @@
 {
   "provenance": "deepseek",
   "model": "deepseek-chat",
-  "recorded_at": "2026-07-14T07:54:22+00:00",
+  "recorded_at": "2026-10-09T04:16:19+00:00",
   "response": {
     "people": [
       {
@@ -9,7 +9,7 @@
         "prior_roles": [
           {
             "company": "Oracle",
-            "role": "SVP of Engineering",
+            "role": "SVP of engineering",
             "start_year": null,
             "end_year": null
           },
@@ -26,7 +26,7 @@
         "prior_roles": [
           {
             "company": "Afara Websystems",
-            "role": null,
+            "role": "Co-Founder",
             "start_year": null,
             "end_year": null
           }

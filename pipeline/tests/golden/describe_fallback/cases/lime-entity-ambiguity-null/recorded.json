@@ -1,12 +1,12 @@
 {
   "provenance": "deepseek",
   "model": "deepseek-chat",
-  "recorded_at": "2026-07-19T21:53:15+00:00",
+  "recorded_at": "2026-10-09T04:16:47+00:00",
   "response": {
     "description_short": null,
     "description_long": null,
     "grounding_descriptor": null,
     "confidence": "low",
-    "null_reason": "no_nonfunding_descriptor"
+    "null_reason": "entity_ambiguity"
   }
 }

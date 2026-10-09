@@ -1,16 +1,16 @@
 {
-  "provenance": "simulated",
-  "model": null,
-  "recorded_at": null,
+  "provenance": "deepseek",
+  "model": "deepseek-chat",
+  "recorded_at": "2026-10-09T04:14:19+00:00",
   "response": {
-    "description_short": "Kaveri Cloud is a cloud cost optimization platform that maps spend across AWS, GCP, and Azure and executes rightsizing and scheduling savings automatically.",
-    "primary_category": "developer tools",
+    "description_short": "Kaveri Cloud is a cloud cost optimization platform that connects to AWS, GCP, and Azure accounts to map service-level spend and recommend rightsizing, scheduling, and commitment purchases. It also offers an Autopilot mode that automatically executes approved optimizations.",
+    "primary_category": "cloud cost management",
     "tags": [
-      "finops",
-      "aws",
-      "gcp",
-      "azure",
-      "devops"
+      "cloud",
+      "devops",
+      "saas",
+      "fintech",
+      "analytics"
     ],
     "people": [],
     "hq_city": "Bangalore",

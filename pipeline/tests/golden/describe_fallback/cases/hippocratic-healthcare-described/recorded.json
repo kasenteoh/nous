@@ -1,12 +1,12 @@
 {
   "provenance": "deepseek",
   "model": "deepseek-chat",
-  "recorded_at": "2026-07-19T21:53:14+00:00",
+  "recorded_at": "2026-10-09T04:16:46+00:00",
   "response": {
-    "description_short": "Hippocratic AI is a healthcare artificial intelligence company building safety-focused language models for patient-facing tasks.",
+    "description_short": "Hippocratic AI is a healthcare artificial intelligence company that builds safety-focused language models for patient-facing tasks.",
     "description_long": null,
     "grounding_descriptor": "healthcare artificial intelligence company building safety-focused language models for patient-facing tasks",
-    "confidence": "high",
+    "confidence": "medium",
     "null_reason": null
   }
 }

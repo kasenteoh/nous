@@ -1,14 +1,15 @@
 {
-  "provenance": "simulated",
-  "model": null,
-  "recorded_at": null,
+  "provenance": "deepseek",
+  "model": "deepseek-chat",
+  "recorded_at": "2026-10-09T04:14:14+00:00",
   "response": {
-    "description_short": "Momentum Mind Academy sells coaching programs and courses, including a 12-week Founder Mindset Masterclass, rather than a software product.",
-    "primary_category": "unknown",
+    "description_short": "Momentum Mind Academy sells coaching programs, including a 12-week 'Founder Mindset Masterclass' for $1,997, one-on-one coaching, and a journal. It is an info-product/coaching business, not a software product.",
+    "primary_category": "coaching",
     "tags": [
       "coaching",
-      "courses",
-      "info-product"
+      "education",
+      "mindset",
+      "courses"
     ],
     "people": [],
     "hq_city": null,
@@ -16,7 +17,7 @@
     "industry": null,
     "website_state": "ok",
     "is_startup": false,
-    "not_startup_reason": "Coaching / courses business, not a software startup.",
+    "not_startup_reason": "Coaching and courses business selling programs and a journal, not a software product.",
     "founded_year": null,
     "hq_country": null
   }

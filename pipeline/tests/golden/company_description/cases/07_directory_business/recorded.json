@@ -1,15 +1,15 @@
 {
-  "provenance": "simulated",
-  "model": null,
-  "recorded_at": null,
+  "provenance": "deepseek",
+  "model": "deepseek-chat",
+  "recorded_at": "2026-10-09T04:14:12+00:00",
   "response": {
-    "description_short": "TradeFinderUSA is an online directory that connects homeowners with vetted local contractors and sells premium placement to listed businesses.",
+    "description_short": "TradeFinderUSA is an online directory that connects homeowners with local contractors such as plumbers, electricians, and roofers. Contractors can claim listings and pay for premium placement.",
     "primary_category": "consumer",
     "tags": [
+      "marketplace",
+      "local-services",
       "directory",
-      "home-services",
-      "local-business",
-      "marketplace"
+      "home-services"
     ],
     "people": [],
     "hq_city": null,
@@ -17,8 +17,8 @@
     "industry": null,
     "website_state": "ok",
     "is_startup": false,
-    "not_startup_reason": "Online business directory, not a software product.",
+    "not_startup_reason": "Online business directory aggregating contractor listings, not a software product.",
     "founded_year": null,
-    "hq_country": "US"
+    "hq_country": null
   }
 }

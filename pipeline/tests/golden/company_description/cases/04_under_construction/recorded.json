@@ -1,10 +1,10 @@
 {
-  "provenance": "simulated",
-  "model": null,
-  "recorded_at": null,
+  "provenance": "deepseek",
+  "model": "deepseek-chat",
+  "recorded_at": "2026-10-09T04:14:08+00:00",
   "response": {
-    "description_short": "Nimbus Kitchen's site is a launching-soon placeholder with no product information.",
-    "primary_category": "unknown",
+    "description_short": "The site is a placeholder launch page stating 'Something delicious is coming' about a new way to run a kitchen, with only a signup prompt and no product detail.",
+    "primary_category": "vertical SaaS",
     "tags": [],
     "people": [],
     "hq_city": null,

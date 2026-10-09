@@ -1,15 +1,16 @@
 {
-  "provenance": "simulated",
-  "model": null,
-  "recorded_at": null,
+  "provenance": "deepseek",
+  "model": "deepseek-chat",
+  "recorded_at": "2026-10-09T04:14:30+00:00",
   "response": {
-    "description_short": "Loopnote is a private, end-to-end encrypted journaling app that turns entries into weekly reflections on themes, moods, and habits.",
+    "description_short": "Loopnote is a private journaling app that turns entries into weekly AI-written reflections. Entries are end-to-end encrypted, with no ads, feeds, or social features.",
     "primary_category": "consumer",
     "tags": [
-      "journaling",
       "consumer",
+      "journaling",
       "mobile-app",
-      "privacy"
+      "privacy",
+      "encryption"
     ],
     "people": [],
     "hq_city": null,

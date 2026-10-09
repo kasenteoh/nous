@@ -1,19 +1,20 @@
 {
-  "provenance": "simulated",
-  "model": null,
-  "recorded_at": null,
+  "provenance": "deepseek",
+  "model": "deepseek-chat",
+  "recorded_at": "2026-10-09T04:14:23+00:00",
   "response": {
-    "description_short": "PayLattice is a payment orchestration platform that routes each transaction across 30+ PSPs, retries soft declines, and reconciles volume to one ledger.",
+    "description_short": "PayLattice is a payment orchestration platform that routes each transaction to the best acquirer in real time. Merchants integrate once to reach 30+ PSPs and local payment methods, with retries, volume balancing across providers, and reconciliation to a single ledger.",
     "primary_category": "fintech",
     "tags": [
       "payments",
       "fintech",
-      "api"
+      "api",
+      "saas"
     ],
     "people": [],
     "hq_city": null,
     "hq_state": null,
-    "industry": "payments",
+    "industry": "fintech",
     "website_state": "ok",
     "is_startup": true,
     "not_startup_reason": null,

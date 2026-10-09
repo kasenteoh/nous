@@ -1,22 +1,23 @@
 {
-  "provenance": "simulated",
-  "model": null,
-  "recorded_at": null,
+  "provenance": "deepseek",
+  "model": "deepseek-chat",
+  "recorded_at": "2026-10-09T04:14:26+00:00",
   "response": {
-    "description_short": "Kinetic Circuits sells development boards, sensor kits, and debugging tools for embedded engineers, alongside a free desktop app called KC Studio.",
+    "description_short": "Kinetic Circuits sells development boards, sensor kits, and debugging tools (ARM and RISC-V boards, LoRa/CAN transceivers, logic analyzers, and its own KC-Link programmer) for embedded engineers and hobbyists. It also offers KC Studio, a free desktop app for flashing firmware and decoding serial traffic.",
     "primary_category": "hardware",
     "tags": [
-      "hardware",
       "embedded",
       "dev-boards",
-      "iot"
+      "risc-v",
+      "arm",
+      "debugging-tools"
     ],
     "people": [],
     "hq_city": null,
     "hq_state": null,
     "industry": "hardware",
     "website_state": "ok",
-    "is_startup": true,
+    "is_startup": null,
     "not_startup_reason": null,
     "founded_year": null,
     "hq_country": null

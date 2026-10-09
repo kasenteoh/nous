@@ -1,19 +1,28 @@
 {
-  "provenance": "simulated",
-  "model": null,
-  "recorded_at": null,
+  "provenance": "deepseek",
+  "model": "deepseek-chat",
+  "recorded_at": "2026-10-09T04:14:09+00:00",
   "response": {
-    "description_short": "The scraped site describes Brightsmile Dental Care, a dental practice in Riverside, CA — not Quanta Metrics.",
-    "primary_category": "unknown",
-    "tags": [],
-    "people": [],
-    "hq_city": null,
-    "hq_state": null,
-    "industry": null,
+    "description_short": "The page describes Brightsmile Dental Care, a family and cosmetic dentistry practice in Riverside, California, not Quanta Metrics.",
+    "primary_category": "healthcare",
+    "tags": [
+      "dental",
+      "healthcare",
+      "local-services"
+    ],
+    "people": [
+      {
+        "name": "Dr. Susan Whitfield",
+        "role": "DDS"
+      }
+    ],
+    "hq_city": "Riverside",
+    "hq_state": "CA",
+    "industry": "healthcare",
     "website_state": "unrelated_site",
-    "is_startup": null,
-    "not_startup_reason": null,
+    "is_startup": false,
+    "not_startup_reason": "Local dental practice, not a software startup.",
     "founded_year": null,
-    "hq_country": null
+    "hq_country": "US"
   }
 }

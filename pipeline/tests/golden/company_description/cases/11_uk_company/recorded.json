@@ -1,15 +1,16 @@
 {
-  "provenance": "simulated",
-  "model": null,
-  "recorded_at": null,
+  "provenance": "deepseek",
+  "model": "deepseek-chat",
+  "recorded_at": "2026-10-09T04:14:18+00:00",
   "response": {
-    "description_short": "Farepoint provides payout infrastructure for online marketplaces: one API for seller onboarding, compliance checks, and multi-currency payouts.",
+    "description_short": "Farepoint provides payout infrastructure for online marketplaces: an API to onboard sellers, run compliance checks, and send funds in 40+ currencies with same-day settlement in major corridors. It also offers a dashboard for KYC, tax forms, and reconciliation.",
     "primary_category": "fintech",
     "tags": [
       "payments",
-      "marketplace",
       "api",
-      "fintech"
+      "marketplace",
+      "kyc",
+      "infrastructure"
     ],
     "people": [],
     "hq_city": "London",
@@ -19,6 +20,6 @@
     "is_startup": true,
     "not_startup_reason": null,
     "founded_year": null,
-    "hq_country": null
+    "hq_country": "GB"
   }
 }

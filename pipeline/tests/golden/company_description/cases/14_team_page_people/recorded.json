@@ -1,15 +1,16 @@
 {
-  "provenance": "simulated",
-  "model": null,
-  "recorded_at": null,
+  "provenance": "deepseek",
+  "model": "deepseek-chat",
+  "recorded_at": "2026-10-09T04:14:22+00:00",
   "response": {
-    "description_short": "Atlas Relay is a developer platform whose SDK and API add chat, comments, and notifications to products, with moderation and translation built in.",
+    "description_short": "Atlas Relay provides a developer platform and SDKs for adding in-app messaging features like chat, comments, and notifications, with moderation, translation, and offline sync included. Founded in 2020, it offers prebuilt UI kits and usage-based pricing.",
     "primary_category": "developer tools",
     "tags": [
       "messaging",
       "api",
       "sdk",
-      "devtools"
+      "devtools",
+      "saas"
     ],
     "people": [
       {
@@ -23,6 +24,10 @@
       {
         "name": "Priya Nair",
         "role": "VP of Engineering"
+      },
+      {
+        "name": "Tom Delaney",
+        "role": "Head of Developer Relations"
       }
     ],
     "hq_city": "New York",

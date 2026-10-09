@@ -1,16 +1,20 @@
 {
-  "provenance": "simulated",
-  "model": null,
-  "recorded_at": null,
+  "provenance": "deepseek",
+  "model": "deepseek-chat",
+  "recorded_at": "2026-10-09T04:14:05+00:00",
   "response": {
-    "description_short": "The website does not clearly describe the product; Verdant Labs says only that it is building something new for teams.",
-    "primary_category": "unknown",
-    "tags": [],
+    "description_short": "Verdant Labs offers only a placeholder teaser page: a tagline and a waitlist signup, with no product details. The site does not clearly describe what the company does beyond building something for teams tracking their footprint.",
+    "primary_category": "climate & energy",
+    "tags": [
+      "climate",
+      "sustainability",
+      "waitlist"
+    ],
     "people": [],
     "hq_city": null,
     "hq_state": null,
-    "industry": null,
-    "website_state": "insufficient_info",
+    "industry": "climate & energy",
+    "website_state": "under_construction",
     "is_startup": null,
     "not_startup_reason": null,
     "founded_year": null,

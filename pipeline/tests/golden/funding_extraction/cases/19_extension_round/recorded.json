@@ -1,10 +1,10 @@
 {
   "provenance": "deepseek",
   "model": "deepseek-chat",
-  "recorded_at": "2026-07-17T16:06:28+00:00",
+  "recorded_at": "2026-10-09T04:16:02+00:00",
   "response": {
     "is_funding_announcement": true,
-    "round_type": "Series A extension",
+    "round_type": "Series A",
     "amount_raised_usd": "8000000",
     "valuation_post_money_usd": null,
     "valuation_source": null,
