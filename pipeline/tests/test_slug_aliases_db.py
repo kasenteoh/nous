@@ -131,13 +131,15 @@ async def test_dedup_rerun_leaves_aliases_unchanged(db: AsyncSession) -> None:
     """Re-running the dedup stage after a domain merge is an alias no-op."""
     older = _make_company(
         "Acme Robotics",
-        website="https://acme-dedup-alias.com",
+        # Both names spell the domain (acme), so the domain pass auto-merges
+        # without an LLM verdict (names_corroborate_domain).
+        website="https://acme.com",
         description_long="Acme builds warehouse robots.",
         created_at=datetime(2026, 1, 1, tzinfo=UTC),
     )
     newer = _make_company(
         "Acme Inc",
-        website="https://www.acme-dedup-alias.com/home",
+        website="https://www.acme.com/home",
         created_at=datetime(2026, 5, 1, tzinfo=UTC),
     )
     db.add_all([older, newer])

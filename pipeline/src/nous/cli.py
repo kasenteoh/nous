@@ -1324,7 +1324,7 @@ def dedup_investors_cmd() -> None:
     help="Run reads + LLM calls but skip the merges/commits.",
 )
 def dedup_companies(llm_limit: int, dry_run: bool) -> None:
-    """Collapse duplicate company rows (exact-domain, then LLM-gated fuzzy)."""
+    """Collapse duplicate company rows (name-corroborated exact-domain, then LLM-gated)."""
     from datetime import UTC, datetime
 
     from nous.db.session import AsyncSessionLocal

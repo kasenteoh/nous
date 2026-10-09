@@ -9,17 +9,24 @@ from __future__ import annotations
 import re
 from datetime import timedelta
 from decimal import Decimal
+from typing import Any
 from uuid import UUID
 
-from sqlalchemy import and_, delete, func, or_, select, update
+from sqlalchemy import and_, case, delete, exists, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
+from sqlalchemy.sql.selectable import ScalarSelect
 
 from nous.db.models import (
+    CareerMove,
     Company,
     CompanyInvestor,
     CompanyRelationship,
+    CompanySnapshot,
+    CompanyTheme,
     Competitor,
+    FactVerification,
     FundingRound,
     FundingRoundInvestor,
     Investor,
@@ -27,6 +34,7 @@ from nous.db.models import (
     Person,
     RawPage,
     SlugAlias,
+    Theme,
 )
 from nous.llm.prompts.company_description import PersonExtraction
 from nous.llm.prompts.funding_extraction import (
@@ -852,6 +860,66 @@ _MERGE_FILL_COLUMNS: tuple[str, ...] = (
     "website_resolved_at",
 )
 
+# Provenance columns that describe ONE content column and must travel with it
+# rather than gap-fill independently. When the anchor (key) is gap-filled from
+# the loser, each follower is copied from the loser verbatim — NULL included —
+# because it describes the value just borrowed; when the survivor keeps its own
+# anchor, the followers stay the survivor's. Independent gap-fill would be
+# wrong here: a survivor whose own-website description_short is kept (source
+# NULL) would inherit the loser's description_source='fallback' and mislabel
+# its description, and a borrowed fallback description would otherwise land
+# with source NULL and masquerade as own-website copy.
+_MERGE_FILL_FOLLOWERS: dict[str, tuple[str, ...]] = {
+    "description_short": (
+        "description_source",
+        "describe_fallback_prompt_version",
+    ),
+}
+
+
+def _merged_career_stamp(survivor: str | None, loser: str | None) -> str | None:
+    """The ``career_extracted_prompt_version`` a merged company should carry.
+
+    The stamp means "career_moves reflect an extraction under this version over
+    the company's raw_pages". After a merge the survivor's raw_pages are the
+    union of both halves and its career_moves are the union of both halves'
+    rows, so the merged company has only been mined at the LOWER of the two
+    versions — and not at all if either half never was (NULL). Taking that
+    minimum (NULL lowest) keeps the stage's version gate honest: if either half
+    is unmined or stale, extract-career-history re-selects the survivor and its
+    replace-style write re-derives the moves over the merged pages (≤1 DeepSeek
+    call per affected merge); if both were current, nothing re-bills. Gap-filling
+    instead (survivor NULL → loser's stamp) would mark the survivor's own,
+    never-mined pages as done. Versions compare as strings, exactly like the
+    stage's ``< PROMPT_VERSION`` gate (date-based "YYYY-MM-DD.N" scheme).
+    """
+    if survivor is None or loser is None:
+        return None
+    return min(survivor, loser)
+
+
+def _fill_survivor_gaps(survivor: Company, loser: Company) -> None:
+    """Gap-fill ``survivor``'s NULL columns from ``loser`` (in-memory, pure).
+
+    - :data:`_MERGE_FILL_COLUMNS`: one-directional "fill the gaps" — keep
+      whatever the survivor already had, borrow only what it was missing.
+    - :data:`_MERGE_FILL_FOLLOWERS`: provenance travels with its anchor.
+    - ``career_extracted_prompt_version``: see :func:`_merged_career_stamp`.
+    """
+    for column in _MERGE_FILL_COLUMNS:
+        if getattr(survivor, column) is not None:
+            continue
+        loser_value = getattr(loser, column)
+        if loser_value is None:
+            continue
+        setattr(survivor, column, loser_value)
+        for follower in _MERGE_FILL_FOLLOWERS.get(column, ()):
+            setattr(survivor, follower, getattr(loser, follower))
+    survivor.career_extracted_prompt_version = _merged_career_stamp(
+        survivor.career_extracted_prompt_version,
+        loser.career_extracted_prompt_version,
+    )
+
 
 async def find_company_by_domain(
     session: AsyncSession, website: str | None
@@ -925,6 +993,36 @@ async def merge_companies(
     - **company_relationships** — derived edges: drop every edge touching the
       loser (either direction); derive-relationships rebuilds the survivor's set
       on its next run (it follows dedup in discovery.yml).
+    - **company_snapshots** — unique (company_id, captured_week). NOT derived:
+      past weeks can never be re-captured, so the loser's momentum history is
+      carried over. A week only the loser has moves as-is. A week both have
+      merges into the survivor's row: ``news_count_30d`` is SUMMED —
+      news_articles.url is globally unique, so the two halves counted disjoint
+      article sets and the sum is exactly what a snapshot of the merged company
+      would have recorded (max would undercount); the headcount pair is the
+      survivor's unless it has neither bound, then the loser's pair (the two
+      bounds always travel together). The loser's colliding row is then
+      deleted.
+    - **career_moves.company_id** — unique (company_id, person_normalized_name,
+      prior_company_name): survivor wins — delete loser edges the survivor
+      already records, move the rest.
+    - **career_moves.prior_company_id** — nullable in-catalog edge: the
+      survivor's own moves that would point at itself (prior = survivor or
+      loser) are unlinked to NULL (extract-career-history never links a move
+      to its own company; the biographical fact itself is kept), then every
+      other edge pointing at the loser is repointed to the survivor.
+    - **fact_verifications** — unique (company_id, fact_kind, fact_ref):
+      survivor wins — its verdict was produced against its own facts. Funding-
+      round verdicts key on the round id as text, and rounds keep their ids
+      when repointed above, so they stay attached. A carried-over company-level
+      verdict (total_raised/status) can never render a false ✓: the web shows
+      a badge only when the verdict's source_url AND claim still match the
+      fact as rendered, and the verify stage re-verifies a drifted triple.
+    - **company_themes** — unique (theme_id, company_id). compute-themes
+      assigns each company to at most ONE theme (one KMeans cluster within its
+      industry), so survivor wins wholesale, mirroring people: if the survivor
+      has any membership the loser's are dropped (decrementing those themes'
+      denormalized ``company_count``); otherwise it adopts the loser's.
     - **slug_aliases** — the loser's slug is recorded as a permanent redirect
       to the survivor, and aliases that pointed at the loser are repointed to
       the survivor BEFORE the delete (the CASCADE would destroy the chain), so
@@ -932,8 +1030,11 @@ async def merge_companies(
       the survivor's own slug is never recorded.
 
     The survivor's NULL scalar/array/jsonb fields are then filled from the loser
-    (see :data:`_MERGE_FILL_COLUMNS`) — a one-directional "fill the gaps" so we
+    (see :func:`_fill_survivor_gaps`) — a one-directional "fill the gaps" so we
     keep whatever the survivor already had and only borrow what it was missing.
+
+    Every FK to ``companies.id`` is handled above; a new one must be added here
+    or its rows silently CASCADE away with the loser.
 
     Finally the loser row is deleted. This function does NOT commit — the caller
     owns the transaction. It is a one-way fold: after it runs, ``loser_id`` no
@@ -1052,8 +1153,8 @@ async def merge_companies(
     # after dedup-companies in discovery.yml. Drop every edge touching the loser
     # in EITHER direction; the survivor's full set is rebuilt on the next derive
     # run. Repointing instead would risk unique-triple collisions (and transient
-    # self-edge CHECK violations) for zero benefit on regenerated data — the same
-    # reason company_snapshots is left to CASCADE.
+    # self-edge CHECK violations) for zero benefit on regenerated data.
+    # (company_snapshots, by contrast, is NOT regenerable — see below.)
     await session.execute(
         delete(CompanyRelationship).where(
             or_(
@@ -1078,6 +1179,160 @@ async def merge_companies(
             .values(company_id=survivor_id)
         )
 
+    # --- company_snapshots: unique (company_id, captured_week) -------------
+    # Irreplaceable time series (a past week can't be re-captured), so carry
+    # it over. Colliding weeks fold into the survivor's row first (policy in
+    # the docstring), via correlated subqueries on the loser's same-week row.
+    other_snap = aliased(CompanySnapshot)
+
+    def _loser_week_value(column: str) -> ScalarSelect[Any]:
+        # The loser's value for the outer (survivor) row's week — correlated
+        # on captured_week to the UPDATE target.
+        return (
+            select(getattr(other_snap, column))
+            .where(
+                other_snap.company_id == loser_id,
+                other_snap.captured_week == CompanySnapshot.captured_week,
+            )
+            .scalar_subquery()
+        )
+
+    loser_weeks_subq = select(other_snap.captured_week).where(
+        other_snap.company_id == loser_id
+    )
+    survivor_has_no_headcount = and_(
+        CompanySnapshot.employee_count_min.is_(None),
+        CompanySnapshot.employee_count_max.is_(None),
+    )
+    await session.execute(
+        update(CompanySnapshot)
+        .where(
+            CompanySnapshot.company_id == survivor_id,
+            CompanySnapshot.captured_week.in_(loser_weeks_subq),
+        )
+        .values(
+            news_count_30d=CompanySnapshot.news_count_30d
+            + _loser_week_value("news_count_30d"),
+            employee_count_min=case(
+                (survivor_has_no_headcount, _loser_week_value("employee_count_min")),
+                else_=CompanySnapshot.employee_count_min,
+            ),
+            employee_count_max=case(
+                (survivor_has_no_headcount, _loser_week_value("employee_count_max")),
+                else_=CompanySnapshot.employee_count_max,
+            ),
+        )
+        # The values are SQL expressions the in-session evaluator can't apply;
+        # "fetch" expires the touched rows' attributes instead.
+        .execution_options(synchronize_session="fetch")
+    )
+    survivor_weeks_subq = select(other_snap.captured_week).where(
+        other_snap.company_id == survivor_id
+    )
+    await session.execute(
+        delete(CompanySnapshot).where(
+            CompanySnapshot.company_id == loser_id,
+            CompanySnapshot.captured_week.in_(survivor_weeks_subq),
+        )
+    )
+    await session.execute(
+        update(CompanySnapshot)
+        .where(CompanySnapshot.company_id == loser_id)
+        .values(company_id=survivor_id)
+    )
+
+    # --- career_moves.company_id: unique (company, person, prior name) -----
+    survivor_move = aliased(CareerMove)
+    await session.execute(
+        delete(CareerMove).where(
+            CareerMove.company_id == loser_id,
+            exists().where(
+                survivor_move.company_id == survivor_id,
+                survivor_move.person_normalized_name
+                == CareerMove.person_normalized_name,
+                survivor_move.prior_company_name == CareerMove.prior_company_name,
+            ),
+        )
+    )
+    await session.execute(
+        update(CareerMove)
+        .where(CareerMove.company_id == loser_id)
+        .values(company_id=survivor_id)
+    )
+
+    # --- career_moves.prior_company_id: SET NULL FK, repoint to survivor ----
+    # Unlink would-be self-edges first (the merged company's own founders
+    # "previously at" itself), then repoint everyone else's edge. No unique key
+    # involves prior_company_id, so the repoint cannot collide.
+    await session.execute(
+        update(CareerMove)
+        .where(
+            CareerMove.company_id == survivor_id,
+            CareerMove.prior_company_id.in_([survivor_id, loser_id]),
+        )
+        .values(prior_company_id=None)
+    )
+    await session.execute(
+        update(CareerMove)
+        .where(CareerMove.prior_company_id == loser_id)
+        .values(prior_company_id=survivor_id)
+    )
+
+    # --- fact_verifications: unique (company, fact_kind, fact_ref) ---------
+    survivor_fact = aliased(FactVerification)
+    await session.execute(
+        delete(FactVerification).where(
+            FactVerification.company_id == loser_id,
+            exists().where(
+                survivor_fact.company_id == survivor_id,
+                survivor_fact.fact_kind == FactVerification.fact_kind,
+                survivor_fact.fact_ref == FactVerification.fact_ref,
+            ),
+        )
+    )
+    await session.execute(
+        update(FactVerification)
+        .where(FactVerification.company_id == loser_id)
+        .values(company_id=survivor_id)
+    )
+
+    # --- company_themes: ≤1 theme per company → survivor wins wholesale -----
+    survivor_has_theme = (
+        await session.execute(
+            select(CompanyTheme.id).where(CompanyTheme.company_id == survivor_id).limit(1)
+        )
+    ).first() is not None
+    if survivor_has_theme:
+        dropped_theme_ids = list(
+            (
+                await session.execute(
+                    select(CompanyTheme.theme_id).where(
+                        CompanyTheme.company_id == loser_id
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        if dropped_theme_ids:
+            await session.execute(
+                delete(CompanyTheme).where(CompanyTheme.company_id == loser_id)
+            )
+            # Keep the denormalized member count truthful until compute-themes
+            # next rewrites it (a theme that held both halves now holds one).
+            await session.execute(
+                update(Theme)
+                .where(Theme.id.in_(dropped_theme_ids))
+                .values(company_count=func.greatest(Theme.company_count - 1, 0))
+                .execution_options(synchronize_session="fetch")
+            )
+    else:
+        await session.execute(
+            update(CompanyTheme)
+            .where(CompanyTheme.company_id == loser_id)
+            .values(company_id=survivor_id)
+        )
+
     # --- fill survivor NULLs from loser ------------------------------------
     survivor = await session.get(Company, survivor_id)
     loser = await session.get(Company, loser_id)
@@ -1085,11 +1340,7 @@ async def merge_companies(
         raise ValueError(
             f"merge_companies: survivor {survivor_id} or loser {loser_id} not found"
         )
-    for column in _MERGE_FILL_COLUMNS:
-        if getattr(survivor, column) is None:
-            loser_value = getattr(loser, column)
-            if loser_value is not None:
-                setattr(survivor, column, loser_value)
+    _fill_survivor_gaps(survivor, loser)
     session.add(survivor)
 
     # --- slug_aliases: the loser's slug lives on as a permanent redirect ----

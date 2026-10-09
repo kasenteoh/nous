@@ -11,12 +11,18 @@ Coverage:
 - Fuzzy path (LLM mocked): high-confidence → merged; low-confidence → not.
 - Idempotency: a second run is a no-op.
 - merge_companies direct: FK repoint + null-fill across every child table.
+- Merge carry-over of company_snapshots / career_moves (incl. prior_company_id)
+  / fact_verifications / company_themes, each with a unique-key collision.
+- Domain-pass name corroboration: an uncorroborated shared-domain pair goes to
+  the (mocked) LLM gate and is merged only on same_company + high confidence;
+  dry-run writes nothing.
 """
 
 from __future__ import annotations
 
 import os
-from datetime import UTC, datetime
+from collections.abc import Awaitable, Callable
+from datetime import UTC, date, datetime
 from decimal import Decimal
 
 import pytest
@@ -24,12 +30,17 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from nous.db.models import (
+    CareerMove,
     Company,
     CompanyInvestor,
+    CompanySnapshot,
+    CompanyTheme,
     Competitor,
+    FactVerification,
     FundingRound,
     NewsArticle,
     RawPage,
+    Theme,
 )
 from nous.db.upsert import merge_companies, upsert_investor
 from nous.llm.prompts.company_match import CompanyMatch
@@ -683,3 +694,551 @@ def test_prompt_dict_carries_latest_funding() -> None:
         created_at=_dt(2026, 1, 1),
     )
     assert bare.to_prompt_dict()["latest_funding"] is None
+
+
+# ---------------------------------------------------------------------------
+# merge_companies: child tables that used to CASCADE away with the loser
+# ---------------------------------------------------------------------------
+
+
+async def test_merge_carries_company_snapshots(db: AsyncSession) -> None:
+    """Loser-only weeks move over; a week both have folds into the survivor's
+    row (news summed — disjoint article sets; headcount survivor-first, else
+    the loser's pair)."""
+    survivor = _make_company("Snap Survivor", website="https://snap-s.example")
+    loser = _make_company("Snap Loser")
+    db.add_all([survivor, loser])
+    await db.flush()
+    shared_no_hc = date(2026, 6, 1)  # survivor has no headcount that week
+    shared_with_hc = date(2026, 6, 8)  # both have headcount
+    loser_only = date(2026, 6, 15)
+    survivor_only = date(2026, 6, 22)
+    db.add_all(
+        [
+            CompanySnapshot(
+                company_id=survivor.id, captured_week=shared_no_hc, news_count_30d=3
+            ),
+            CompanySnapshot(
+                company_id=loser.id,
+                captured_week=shared_no_hc,
+                news_count_30d=2,
+                employee_count_min=11,
+                employee_count_max=50,
+            ),
+            CompanySnapshot(
+                company_id=survivor.id,
+                captured_week=shared_with_hc,
+                news_count_30d=4,
+                employee_count_min=1,
+                employee_count_max=10,
+            ),
+            CompanySnapshot(
+                company_id=loser.id,
+                captured_week=shared_with_hc,
+                news_count_30d=1,
+                employee_count_min=11,
+                employee_count_max=50,
+            ),
+            CompanySnapshot(
+                company_id=loser.id,
+                captured_week=loser_only,
+                news_count_30d=5,
+                employee_count_min=51,
+                employee_count_max=200,
+            ),
+            CompanySnapshot(
+                company_id=survivor.id, captured_week=survivor_only, news_count_30d=7
+            ),
+        ]
+    )
+    await db.flush()
+    survivor_id, loser_id = survivor.id, loser.id
+
+    await merge_companies(db, survivor_id=survivor_id, loser_id=loser_id)
+    await db.commit()
+
+    rows = (
+        await db.execute(
+            select(
+                CompanySnapshot.captured_week,
+                CompanySnapshot.news_count_30d,
+                CompanySnapshot.employee_count_min,
+                CompanySnapshot.employee_count_max,
+            )
+            .where(CompanySnapshot.company_id == survivor_id)
+            .order_by(CompanySnapshot.captured_week)
+        )
+    ).all()
+    assert [tuple(r) for r in rows] == [
+        (shared_no_hc, 5, 11, 50),
+        (shared_with_hc, 5, 1, 10),
+        (loser_only, 5, 51, 200),
+        (survivor_only, 7, None, None),
+    ]
+    assert await _count_for_company(db, CompanySnapshot, loser_id) == 0
+
+
+async def test_merge_carries_career_moves_and_repoints_prior_company(
+    db: AsyncSession,
+) -> None:
+    """Colliding (person, prior) edges keep the survivor's row; the rest move
+    over; a third company's edge pointing at the loser now points at the
+    survivor; an edge that would point the merged company at itself is
+    unlinked (the biographical fact is kept)."""
+    survivor = _make_company("Career Survivor", website="https://career-s.example")
+    loser = _make_company("Career Loser")
+    third = _make_company("Career Third")
+    db.add_all([survivor, loser, third])
+    await db.flush()
+    version = "2026-07-01.1"
+
+    def _move(
+        company_id: object,
+        person: str,
+        prior: str,
+        *,
+        prior_company_id: object = None,
+        role: str | None = None,
+    ) -> CareerMove:
+        return CareerMove(
+            company_id=company_id,
+            person_name=person,
+            person_normalized_name=normalize_name(person),
+            prior_company_name=prior,
+            prior_company_id=prior_company_id,
+            prior_role=role,
+            extraction_prompt_version=version,
+        )
+
+    db.add_all(
+        [
+            _move(survivor.id, "Ada Lovelace", "Google", role="Survivor role"),
+            # Collides with the survivor's edge → dropped.
+            _move(loser.id, "Ada Lovelace", "Google", role="Loser role"),
+            # Survivor lacks it → carried.
+            _move(loser.id, "Grace Hopper", "Microsoft"),
+            # Loser's founder "previously at" the survivor → self-edge, unlinked.
+            _move(
+                loser.id,
+                "Edsger Dijkstra",
+                "Career Survivor",
+                prior_company_id=survivor.id,
+            ),
+            # A third company's founder came from the loser → repointed.
+            _move(third.id, "Alan Turing", "Career Loser", prior_company_id=loser.id),
+        ]
+    )
+    await db.flush()
+    survivor_id, loser_id, third_id = survivor.id, loser.id, third.id
+
+    await merge_companies(db, survivor_id=survivor_id, loser_id=loser_id)
+    await db.commit()
+
+    survivor_moves = (
+        await db.execute(
+            select(
+                CareerMove.person_name,
+                CareerMove.prior_company_name,
+                CareerMove.prior_role,
+                CareerMove.prior_company_id,
+            ).where(CareerMove.company_id == survivor_id)
+        )
+    ).all()
+    assert sorted(tuple(r) for r in survivor_moves) == [
+        ("Ada Lovelace", "Google", "Survivor role", None),
+        ("Edsger Dijkstra", "Career Survivor", None, None),
+        ("Grace Hopper", "Microsoft", None, None),
+    ]
+    third_prior = (
+        await db.execute(
+            select(CareerMove.prior_company_id).where(
+                CareerMove.company_id == third_id
+            )
+        )
+    ).scalar_one()
+    assert third_prior == survivor_id
+
+
+async def test_merge_carries_fact_verifications(db: AsyncSession) -> None:
+    """Survivor wins a colliding (fact_kind, fact_ref); the loser's other
+    verdicts move over, and a funding-round verdict stays keyed to its round
+    (which keeps its id when repointed)."""
+    survivor = _make_company("Verify Survivor", website="https://verify-s.example")
+    loser = _make_company("Verify Loser")
+    db.add_all([survivor, loser])
+    await db.flush()
+    loser_round = FundingRound(company_id=loser.id, round_type="Seed")
+    db.add(loser_round)
+    await db.flush()
+    round_ref = str(loser_round.id)
+
+    def _verdict(
+        company_id: object, kind: str, ref: str, verdict: str, claim: str
+    ) -> FactVerification:
+        return FactVerification(
+            company_id=company_id,
+            fact_kind=kind,
+            fact_ref=ref,
+            source_url="https://news.example/a",
+            claim=claim,
+            verdict=verdict,
+            prompt_version="2026-07-01.1",
+        )
+
+    db.add_all(
+        [
+            _verdict(survivor.id, "total_raised", "", "supported", "survivor total"),
+            _verdict(loser.id, "total_raised", "", "unsupported", "loser total"),
+            _verdict(loser.id, "status", "", "supported", "loser status"),
+            _verdict(loser.id, "funding_round", round_ref, "supported", "loser round"),
+        ]
+    )
+    await db.flush()
+    survivor_id, loser_id, round_id = survivor.id, loser.id, loser_round.id
+
+    await merge_companies(db, survivor_id=survivor_id, loser_id=loser_id)
+    await db.commit()
+
+    rows = (
+        await db.execute(
+            select(
+                FactVerification.fact_kind,
+                FactVerification.fact_ref,
+                FactVerification.verdict,
+                FactVerification.claim,
+            ).where(FactVerification.company_id == survivor_id)
+        )
+    ).all()
+    assert sorted(tuple(r) for r in rows) == [
+        ("funding_round", round_ref, "supported", "loser round"),
+        ("status", "", "supported", "loser status"),
+        ("total_raised", "", "supported", "survivor total"),
+    ]
+    round_owner = (
+        await db.execute(
+            select(FundingRound.company_id).where(FundingRound.id == round_id)
+        )
+    ).scalar_one()
+    assert round_owner == survivor_id
+
+
+def _make_theme(slug_stem: str, company_count: int) -> Theme:
+    return Theme(
+        slug=f"{slug_stem}-{os.urandom(4).hex()}",
+        name=slug_stem.title(),
+        industry_group="developer-tools",
+        centroid=[0.0] * 384,
+        company_count=company_count,
+    )
+
+
+async def test_merge_company_themes_survivor_membership_wins(
+    db: AsyncSession,
+) -> None:
+    """Both halves in the same theme → one membership (the survivor's) and the
+    theme's denormalized company_count drops by one."""
+    survivor = _make_company("Theme Survivor", website="https://theme-s.example")
+    loser = _make_company("Theme Loser")
+    theme = _make_theme("shared-theme", company_count=2)
+    db.add_all([survivor, loser, theme])
+    await db.flush()
+    db.add_all(
+        [
+            CompanyTheme(theme_id=theme.id, company_id=survivor.id, similarity=0.9),
+            CompanyTheme(theme_id=theme.id, company_id=loser.id, similarity=0.8),
+        ]
+    )
+    await db.flush()
+    survivor_id, loser_id, theme_id = survivor.id, loser.id, theme.id
+
+    await merge_companies(db, survivor_id=survivor_id, loser_id=loser_id)
+    await db.commit()
+
+    members = (
+        await db.execute(
+            select(CompanyTheme.company_id, CompanyTheme.similarity).where(
+                CompanyTheme.theme_id == theme_id
+            )
+        )
+    ).all()
+    assert [tuple(m) for m in members] == [(survivor_id, 0.9)]
+    count = (
+        await db.execute(select(Theme.company_count).where(Theme.id == theme_id))
+    ).scalar_one()
+    assert count == 1
+
+
+async def test_merge_company_themes_adopted_when_survivor_has_none(
+    db: AsyncSession,
+) -> None:
+    survivor = _make_company("Theme Adopter", website="https://theme-a.example")
+    loser = _make_company("Theme Donor")
+    theme = _make_theme("donor-theme", company_count=1)
+    db.add_all([survivor, loser, theme])
+    await db.flush()
+    db.add(CompanyTheme(theme_id=theme.id, company_id=loser.id, similarity=0.7))
+    await db.flush()
+    survivor_id, loser_id, theme_id = survivor.id, loser.id, theme.id
+
+    await merge_companies(db, survivor_id=survivor_id, loser_id=loser_id)
+    await db.commit()
+
+    members = (
+        (
+            await db.execute(
+                select(CompanyTheme.company_id).where(
+                    CompanyTheme.theme_id == theme_id
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert list(members) == [survivor_id]
+    count = (
+        await db.execute(select(Theme.company_count).where(Theme.id == theme_id))
+    ).scalar_one()
+    assert count == 1
+
+
+# ---------------------------------------------------------------------------
+# Domain pass: name corroboration gates the auto-merge
+# ---------------------------------------------------------------------------
+
+
+def _llm_returning(
+    calls: list[str], *, same_company: bool, confidence: str
+) -> Callable[[str, type], Awaitable[CompanyMatch]]:
+    """A complete_json stand-in that records each prompt and returns a fixed
+    verdict."""
+
+    async def _fake_complete_json(prompt: str, schema: type) -> CompanyMatch:
+        calls.append(prompt)
+        return CompanyMatch.model_validate(
+            {"same_company": same_company, "confidence": confidence}
+        )
+
+    return _fake_complete_json
+
+
+async def test_domain_corroborated_names_auto_merge_without_llm(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    survivor = _make_company(
+        "Acme Robotics",
+        website="https://acme.com",
+        description_long="Acme builds warehouse robots.",
+        created_at=datetime(2026, 1, 1, tzinfo=UTC),
+    )
+    loser = _make_company(
+        "Acme Inc",
+        website="https://www.acme.com/home",
+        created_at=datetime(2026, 5, 1, tzinfo=UTC),
+    )
+    db.add_all([survivor, loser])
+    await db.commit()
+    survivor_id, loser_id = survivor.id, loser.id
+    calls: list[str] = []
+    monkeypatch.setattr(
+        "nous.pipeline.dedup_companies.complete_json",
+        _llm_returning(calls, same_company=False, confidence="low"),
+    )
+
+    summary = await run_dedup_companies(db, llm_limit=50)
+
+    assert summary.domain_merges == 1
+    assert summary.domain_merges_name_corroborated == 1
+    assert summary.domain_pairs_sent_to_llm == 0
+    assert calls == []
+    assert await db.get(Company, survivor_id) is not None
+    assert await db.get(Company, loser_id) is None
+
+
+@pytest.mark.parametrize(
+    ("same_company", "confidence"),
+    [(False, "high"), (True, "medium"), (True, "low")],
+)
+async def test_domain_uncorroborated_pair_goes_to_llm_and_is_not_merged(
+    db: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+    same_company: bool,
+    confidence: str,
+) -> None:
+    """A Kalshi row carrying FrenFlow's website is NOT auto-merged: the pair is
+    judged by the LLM gate and survives anything short of same + high."""
+    kalshi = _make_company(
+        "Kalshi",
+        website="https://frenflow.com/",
+        description_long="Kalshi runs a regulated prediction market.",
+        created_at=datetime(2026, 1, 1, tzinfo=UTC),
+    )
+    frenflow = _make_company(
+        "FrenFlow",
+        website="https://www.frenflow.com",
+        created_at=datetime(2026, 2, 1, tzinfo=UTC),
+    )
+    db.add_all([kalshi, frenflow])
+    await db.commit()
+    kalshi_id, frenflow_id = kalshi.id, frenflow.id
+    calls: list[str] = []
+    monkeypatch.setattr(
+        "nous.pipeline.dedup_companies.complete_json",
+        _llm_returning(calls, same_company=same_company, confidence=confidence),
+    )
+
+    summary = await run_dedup_companies(db, llm_limit=50)
+
+    assert len(calls) == 1
+    assert "Kalshi" in calls[0] and "FrenFlow" in calls[0]
+    assert summary.domain_merges == 0
+    assert summary.domain_merges_name_corroborated == 0
+    assert summary.domain_pairs_sent_to_llm == 1
+    assert summary.domain_pairs_rejected == 1
+    assert summary.domain_pairs_llm_merged == 0
+    assert summary.llm_merges == 0
+    assert await db.get(Company, kalshi_id) is not None
+    assert await db.get(Company, frenflow_id) is not None
+
+
+async def test_domain_uncorroborated_pair_merges_on_high_confidence(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The LLM can still confirm a shared-domain pair whose names don't spell
+    the domain (a rebrand); it counts as a domain merge, not a fuzzy one."""
+    old_name = _make_company(
+        "Facebook",
+        website="https://meta.com",
+        description_long="Social networking.",
+        created_at=datetime(2026, 1, 1, tzinfo=UTC),
+    )
+    new_name = _make_company(
+        "Zuck Platforms",
+        website="https://www.meta.com",
+        created_at=datetime(2026, 2, 1, tzinfo=UTC),
+    )
+    db.add_all([old_name, new_name])
+    await db.commit()
+    survivor_id, loser_id = old_name.id, new_name.id
+    calls: list[str] = []
+    monkeypatch.setattr(
+        "nous.pipeline.dedup_companies.complete_json",
+        _llm_returning(calls, same_company=True, confidence="high"),
+    )
+
+    summary = await run_dedup_companies(db, llm_limit=50)
+
+    assert len(calls) == 1
+    assert summary.domain_merges == 1
+    assert summary.domain_pairs_sent_to_llm == 1
+    assert summary.domain_pairs_llm_merged == 1
+    assert summary.llm_merges == 0
+    assert await db.get(Company, survivor_id) is not None
+    assert await db.get(Company, loser_id) is None
+
+
+async def test_domain_uncorroborated_pair_deferred_without_llm_budget(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    kalshi = _make_company("Kalshi", website="https://frenflow.com")
+    frenflow = _make_company("FrenFlow", website="https://frenflow.com")
+    db.add_all([kalshi, frenflow])
+    await db.commit()
+    kalshi_id, frenflow_id = kalshi.id, frenflow.id
+    calls: list[str] = []
+    monkeypatch.setattr(
+        "nous.pipeline.dedup_companies.complete_json",
+        _llm_returning(calls, same_company=True, confidence="high"),
+    )
+
+    summary = await run_dedup_companies(db, llm_limit=0)
+
+    assert calls == []
+    assert summary.skipped == 1
+    assert summary.domain_merges == 0
+    assert await db.get(Company, kalshi_id) is not None
+    assert await db.get(Company, frenflow_id) is not None
+
+
+async def test_domain_mixed_cluster_merges_only_corroborated_members(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """FrenFlow + FrenFlow Inc collapse; the intruder Kalshi — the most-enriched
+    row, which the old rule would have made everyone's survivor — is judged by
+    the LLM against FrenFlow's survivor and left alone on a decline."""
+    kalshi = _make_company(
+        "Kalshi",
+        website="https://frenflow.com",
+        description_long="Prediction markets.",
+        created_at=datetime(2026, 1, 1, tzinfo=UTC),
+    )
+    frenflow = _make_company(
+        "FrenFlow",
+        website="https://frenflow.com/about",
+        created_at=datetime(2026, 2, 1, tzinfo=UTC),
+    )
+    frenflow_inc = _make_company(
+        "FrenFlow Inc",
+        website="https://www.frenflow.com",
+        created_at=datetime(2026, 3, 1, tzinfo=UTC),
+    )
+    db.add_all([kalshi, frenflow, frenflow_inc])
+    await db.commit()
+    kalshi_id, frenflow_id, frenflow_inc_id = kalshi.id, frenflow.id, frenflow_inc.id
+    calls: list[str] = []
+    monkeypatch.setattr(
+        "nous.pipeline.dedup_companies.complete_json",
+        _llm_returning(calls, same_company=False, confidence="low"),
+    )
+
+    summary = await run_dedup_companies(db, llm_limit=50)
+
+    assert summary.domain_merges == 1
+    assert summary.domain_merges_name_corroborated == 1
+    assert summary.domain_pairs_sent_to_llm == 1
+    assert summary.domain_pairs_rejected == 1
+    assert await db.get(Company, kalshi_id) is not None
+    assert await db.get(Company, frenflow_id) is not None
+    assert await db.get(Company, frenflow_inc_id) is None
+
+
+async def test_domain_pass_dry_run_writes_nothing(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """dry_run reports the corroborated merge AND the LLM-confirmed domain
+    merge it would make, but every row is still there afterwards."""
+    acme = _make_company(
+        "Acme Robotics",
+        website="https://acme.com",
+        description_long="Robots.",
+        created_at=datetime(2026, 1, 1, tzinfo=UTC),
+    )
+    acme_inc = _make_company(
+        "Acme Inc",
+        website="https://www.acme.com",
+        created_at=datetime(2026, 2, 1, tzinfo=UTC),
+    )
+    kalshi = _make_company("Kalshi", website="https://frenflow.com")
+    frenflow = _make_company("FrenFlow", website="https://frenflow.com")
+    db.add_all([acme, acme_inc, kalshi, frenflow])
+    await db.commit()
+    ids = [acme.id, acme_inc.id, kalshi.id, frenflow.id]
+    companies_before = (
+        await db.execute(select(func.count()).select_from(Company))
+    ).scalar_one()
+    calls: list[str] = []
+    monkeypatch.setattr(
+        "nous.pipeline.dedup_companies.complete_json",
+        _llm_returning(calls, same_company=True, confidence="high"),
+    )
+
+    summary = await run_dedup_companies(db, llm_limit=50, dry_run=True)
+
+    assert summary.domain_merges == 2
+    assert summary.domain_merges_name_corroborated == 1
+    assert summary.domain_pairs_llm_merged == 1
+    companies_after = (
+        await db.execute(select(func.count()).select_from(Company))
+    ).scalar_one()
+    assert companies_after == companies_before
+    for company_id in ids:
+        assert await db.get(Company, company_id) is not None
