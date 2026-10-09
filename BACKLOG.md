@@ -73,10 +73,27 @@ the whole company). Recurrence-proofing is part of the bar.
   article of one company (extract-funding re-mines rounds from pre-guard
   articles — wonder re-spawned twice before this existed). Applied:
   wonder 11 articles + $650M round; terrafirma 9 + $100M round.
-- NEXT: golden set for article_subject_match (eval-record live), then the
-  retroactive audit — dispatch purge-wrong-entity-articles-dry-run per
-  probe suspect (213 list, run 29642507263; built/blue/magic first),
-  review verdicts, apply. prometheus $6.2B routes to dedup widening.
+- ~~golden set for article_subject_match~~ — SHIPPED (#260, live-recorded
+  #262). ~~retroactive audit~~ — SHIPPED + APPLIED 2026-10-09 (#258
+  purge-wrong-entity-batch; runbook docs/runbooks/wrong-entity-purge.md):
+  queue 220 rounds / 144 companies drained, 716+ wrong-entity articles and
+  105+ misattributed rounds removed (~$0.50).
+- REMAINING (human review):
+  - **reresolve, don't purge:** prometheus (prometheus.com profile vs Bezos's
+    $12B Prometheus), humans (humans.io CRM under the name "humans&" vs
+    Humans& AI lab's $480M).
+  - **own round unverified:** transcend ($40M), entire ($30M, held).
+  - **no description, so the lever refuses:** milestone, owner-com, genius,
+    aardvark, covariant-ai, … (~26).
+  - **homonym-website class [M]:** most wrong-money profiles were homonyms
+    (linx-security, fomo, forevr, astrix, oso, pomelo, fathom, sona, lilac,
+    …). Purging made them consistent, but the VC-tracked company the row was
+    created for is lost. Next lever: a resolver check that the website's
+    identity matches the discovery source (VC portfolio entry / funding
+    headline), plus a reresolve sweep.
+  - **apply ≠ dry-run [S]:** apply re-adjudicates, so non-deterministic
+    verdicts can shift companies across the hold line. Make apply consume a
+    reviewed dry-run's verdict set.
 
 ### ~~P0 — dedup signal gaps the sweep proved~~ — SHIPPED (#240)
 All four: continuation-suffix normalization (uala), investor-evidenced
@@ -835,6 +852,18 @@ description-less, in order:
   total). Remaining description-less ≈ 830 rows are the evidence-less
   residue (no Wikidata entity, no corroborated coverage) — honest empties;
   re-measure as coverage grows.
+- **Non-US suspects — 2026-10-09 status:** most of the list below is already
+  excluded (its /c/<slug>.md returns 404). Still shown: zepto, clio, groww,
+  linear, manifest-law, all with NULL hq_country. #259 fixed the
+  city-implies-US leak and resets unevidenced US stamps on the cron, so
+  infer-hq-country can now judge those rows. Run it per
+  docs/runbooks/non-us-and-nonstartup-backfill.md lever 1.
+- **LLM drift: description prompts [M, owner call]:** the 2026-10-09 live
+  re-record found `company_description_long` over its word caps and padding
+  thin inputs (structure 0.785 → 0.429). `deepseek-chat` is unpinned. The fix
+  is a prompt tightening + version bump, which re-bills all long descriptions
+  via --redescribe-outdated (~$4–11). `company_description`'s first live
+  recording also needs a label review (people scope).
 - **Non-US suspects from the fallback descriptions [S, ops queue]**: the
   backfill's dumb-regex flag surfaced shown companies whose own grounded
   descriptions read non-US — verify each, then ops exclude-company

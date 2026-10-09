@@ -2645,3 +2645,155 @@ Owner: "let's do it" (the QA P0s). Both adversarially reviewed (APPROVE).
 - No DB, no secrets beyond GITHUB_TOKEN; outside the nous-pipeline-db
   concurrency group. actionlint clean. Post-merge: dispatch keepalive once to
   re-enable the two disabled crons.
+
+## PR #257 — fix: RLS on career_moves + fact_verifications; record crashed stages as status='error'
+
+- **RLS (migration 0047).** 0040 `career_moves` and 0043 `fact_verifications`
+  shipped without the RLS-with-no-policies setting that every other public
+  table has. On Supabase's default grants, anyone holding the anon key could
+  read and write them, including forging a `verdict='supported'` row, which
+  renders as a public "✓ Verified". New `tests/test_rls.py` asserts every
+  public table has RLS, so the next table can't repeat the miss.
+- **Alerting.** Stages recorded `pipeline_runs` only on success, so a crashed
+  stage left no row and `pipeline-health --strict-errors` (the #227 issue
+  gate) could never fire on a crash.
+  - `observability.guard_stage` records an `error` row and re-raises.
+  - `cli._run_stage` wraps the 30 cron-wired commands. Dry-run invocations
+    pass `stage=None`, because an error row nothing ever supersedes would
+    alert forever.
+  - The 9 cron stages that recorded nothing on success now record a row, so
+    the next healthy run supersedes a crash.
+
+## PR #258 — feat(pipeline): purge-wrong-entity-batch — the retroactive entity audit as one lever
+
+- **The lever.** Runs the `audit-round-entities` probe uncapped, queues each
+  suspect company largest-round first, and runs the per-company purge on each
+  in its own session. Dry-run by default, plus a hold rail (≥80% of ≥3
+  mismatched), an operator `skip` list, stop on 429, and
+  limit/offset/runtime bounds. Exposed as `ops.yml`
+  `purge-wrong-entity-batch-{dry-run,apply}`.
+- **Hardening forced by prod dry-runs and the live golden set.** The purge
+  now deletes only on a **high-confidence** wrong-entity verdict
+  (`GuardDecision.confident_mismatch`). Before, it deleted on any non-attach,
+  which marked 8 of Blue Origin's own funding articles for deletion; the
+  live golden set's one false purge was a medium-confidence verdict.
+- **Runbook:** `docs/runbooks/wrong-entity-purge.md`.
+
+## PR #259 — fix(pipeline): a city alone is not US evidence; reset unevidenced US stamps
+
+- **The bug.** Enrich and judge-eligibility stamped `hq_country='US'` whenever
+  any state or city was present ("London", "Bangalore", "Ontario" became
+  US). That skipped the non_us exclusion and hid the row from
+  infer-hq-country.
+- **The fix.** Tier 3 now needs a real US state. `normalize-hq-state` (on
+  cron) gains a pass that resets unevidenced US stamps to NULL. Visibility is
+  unchanged; the rows become eligible for infer-hq-country's sourced
+  judgment.
+
+## PR #260 — test(evals): golden sets for the entity gates
+
+- **article_subject_match:** 19 cases. Gates: attach precision, attach
+  recall, `purge_precision`.
+- **company_match:** 17 cases. Gates: merge precision, merge recall.
+- These are the two LLM gates behind irreversible deletes and merges, and
+  until now neither had a regression test. Prompts are built with the
+  stages' own builders.
+
+## PR #261 — fix(dedup): carry every child table through merges; gate domain merges on name corroboration
+
+- **Lost child tables.** `merge_companies` silently cascade-deleted the
+  loser's `company_snapshots` (momentum history that can't be recaptured),
+  `career_moves`, `fact_verifications` and `company_themes`. All four now
+  move to the survivor, with deterministic collision policies.
+- **Provenance and stamps.** `career_extracted_prompt_version` becomes the
+  minimum of the two stamps (forces a re-mine). A borrowed fallback
+  description carries its `description_source`.
+- **Domain merges.** The domain pass no longer auto-merges on a shared domain
+  alone. Names must corroborate the domain, otherwise the pair goes to the
+  `company_match` LLM gate.
+
+## PR #262 — test(golden): live DeepSeek re-record (2026-10-09) for six prompts
+
+- **Taken.** Live recordings for funding_extraction, career_history,
+  source_verification and describe_fallback, plus the first live recordings
+  of article_subject_match and company_match (live recall 1.0; floors
+  re-anchored from 0.666 to 0.833).
+- **NOT taken: two live regressions.**
+  - `company_description`, its first live recording: people_precision 0.667,
+    grounding_min 0.0. Mostly label strictness, plus one "AI-written"
+    embellishment.
+  - `company_description_long`: structure_pass_rate fell from 0.785 to 0.429.
+    Profiles run 820–920 words against an 800 cap, and thin inputs get padded
+    to 5–6 paragraphs. This is drift behind the unpinned `deepseek-chat`
+    alias.
+  - Both stay on their old recordings until a prompt fix lands. The version
+    bump that fix needs re-bills every long description (~$4–11), so it is an
+    owner decision.
+
+## Ops 2026-10-09 — retroactive wrong-entity drain (#258 applied to prod)
+
+- **Queue.** The probe found 220 suspect rounds across 144 companies. Four
+  dry-run→review→apply pages (ops runs 37884769815, 37886094034, 37887852740,
+  37889384840), plus single-company purges of reviewed held companies.
+- **Result.** **843 wrong-entity articles and 119 misattributed funding
+  rounds removed** across 80 companies, about $0.60 of DeepSeek. That is the
+  four batch pages plus single-company purges of 11 reviewed held profiles:
+  built, harbor, logical, depot, clever, oso, mantle, astrix, granular,
+  pharos, swan.
+  - Marquee removals: built ← Anthropic's $30B via "Built In" headlines;
+    neo ← $3.5B; magic ← $500M; monad ← Monad Labs $225M; odyssey ← Odyssey
+    Therapeutics $213M + $101M, plus a false "shut down" status sourced from
+    Odyssey House.
+- **Finding: homonym websites.** Most wrong-money profiles are homonyms: the
+  resolver picked a same-name company's site. Examples: linx-security.com is
+  a Chicago camera installer; fomo.com is social-proof marketing, not the
+  Fomo trading app; forevr.com is a longevity community, not ForeVR Games;
+  astrix.io is a browser game, not Astrix Security. Purging makes those pages
+  consistent. Restoring the *intended* company needs `reresolve-company`.
+- **Left for a human:**
+  - prometheus and humans: the profile is the wrong entity while the coverage
+    is the famous company. Fix with reresolve, not a purge.
+  - transcend: its $40M may be its own.
+  - entire: held; its $30M may be its own.
+  - ~26 suspect companies with no description, which the lever refuses.
+- **Nondeterminism.** An apply re-adjudicates, so it can differ from its
+  dry-run: 3 held → purged on page 3, all of them junk coverage. Follow-up:
+  make apply consume the reviewed dry-run's verdicts.
+
+## PR #263 — fix(hq): scope the unevidenced-US reset to the tier-3 signature; restore 495 rows (0048)
+
+- **The bug in #259.** Its reset pass also matched rows with NEITHER a
+  state NOR a city. The tier-3 rule could not have produced those rows'
+  "US"; it came from an explicit judge-eligibility verdict, which is not
+  stored in the enrich payload. The first prod run (37891595208, --limit
+  500) reset 500 rows, 495 of them wrongly (loom, modular, ...), dropping
+  their "Headquarters: US".
+- **The fix.** The predicate now requires a city or a non-US region to be
+  present. Migration 0048 restored the 495 by slug from the run log, guarded
+  to the post-reset state. Verified on prod:
+  - the US-unchecked cohort went 1298 → 798 → 1293 (all 495 back; the 5
+    intended leak rows such as guesty and nowports stay NULL);
+  - the narrowed pass resets 0.
+- **Lesson.** Before a cron-wired data pass, dry-run it against prod and read
+  a sample of what it selects. The unit tests encoded my mistaken premise.
+
+## Ops 2026-10-09 — infer-hq-country dry-run (runbook lever 1)
+
+- **Run:** 37891595208, 60 companies, about $0.08.
+- **Result:** 21 confirmed US with sourced pages; 1 non_us (AIPOCH PTE. LTD.,
+  Singapore, privacy-policy quote); the rest inconclusive.
+- **Next:** apply runs per the runbook. Of the July suspects still shown
+  (zepto, clio, groww, linear, manifest-law), the drain reaches each in
+  name order.
+
+## PR #264 — ci: re-register cron schedules; fix stale cadence comments
+
+- **Problem.** After keepalive's REST re-enable (03:34 UTC), both crons read
+  `active`, yet no scheduled run fired: the 03:00 and 06:00 slots were missed
+  and a 40-minute watch saw nothing.
+- **Change.** A default-branch commit touching the workflow files re-registers
+  schedules. The edits are real corrections: "10x/day" → "8x/day", and the
+  obsolete private-repo-quota rationale in discovery.yml.
+- **keepalive.yml** records the gap: a REST re-enable alone may not resume
+  schedules.
+

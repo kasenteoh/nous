@@ -7,6 +7,50 @@ authoritative history), then `BACKLOG.md` (annotated with what shipped; its
 **"2026-07-17 post-surgery QA sweep"** section is the active work queue).
 The plan docs under `docs/superpowers/plans/` are historical context.
 
+## LATEST UPDATE — trust arc: RLS, crash alerting, entity drain, dedup safety, live goldens (2026-10-09, PRs #257–#263)
+
+Shipped and merged the same day, each with prod verification (details in the
+worklog):
+
+- **#257: RLS + crash alerting.** RLS on career_moves / fact_verifications
+  (0047), plus `tests/test_rls.py`. Crashed cron stages now record
+  `status='error'`, so the #227 issue alert can fire. 9 more cron stages
+  record success rows and show up on /stats.
+- **#258 + ops: entity drain.** `purge-wrong-entity-batch` drained the
+  wrong-entity queue (220 rounds / 144 companies): **843 articles and 119
+  misattributed rounds removed** (built ← Anthropic $30B, neo $3.5B,
+  magic $500M, monad $225M, odyssey $213M…), about $0.60. It deletes only on
+  HIGH-confidence verdicts. Runbook: `docs/runbooks/wrong-entity-purge.md`.
+- **#259 + #263: non-US leak.** A city alone no longer means US.
+  - #259's reset pass was too broad: it reset 495 explicit-US rows. #263
+    narrowed it and restored them (0048, verified 1298→798→1293).
+  - infer-hq-country dry-run: 21 confirmed US, 1 non_us (AIPOCH, SG).
+- **#260 + #262: entity-gate goldens.** Golden sets for article_subject_match
+  and company_match, live-recorded with six prompts.
+- **#261: dedup safety.** Merges carry snapshots, career_moves,
+  verifications and themes. Domain merges need name corroboration, else
+  they go to the LLM gate.
+
+**Open, in priority order:**
+1. **Confirm the crons actually fire.** keepalive's 03:34 UTC re-enable
+   flipped both workflows to `active`, but no `schedule` run fired (03:00,
+   06:00 and 07:xx all missed; the last one was 2026-09-18). #264 (merged
+   ~07:35 UTC) touches both workflow files to re-register the schedule.
+   Verify that a `schedule`-event pipeline run appears. If not, check
+   Settings → Actions, or GitHub's status page.
+2. **Owner call: description prompt drift.** `company_description_long`
+   breaks its word caps live (structure 0.785 → 0.429, unpinned
+   `deepseek-chat`). Fixing it means a prompt bump, which re-bills all long
+   descriptions (~$4–11).
+3. **Homonym-website class.** Most wrong-money profiles were homonyms
+   (fomo.com, forevr.com, astrix.io, linx-security.com…). Needs a
+   resolver identity check against the discovery source, plus a reresolve
+   sweep. prometheus and humans need `reresolve-company --set-url` now.
+4. infer-hq-country apply drain (runbook lever 1); zepto, clio and groww
+   are still shown.
+5. Make the purge apply consume a reviewed dry-run's verdicts
+   (nondeterminism).
+
 ## LATEST UPDATE — crons were OFF 2026-09-18 → 2026-10-09; keepalive added (PR #255)
 
 The site stopped updating because GitHub auto-disabled `pipeline.yml` and
