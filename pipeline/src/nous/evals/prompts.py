@@ -1058,6 +1058,13 @@ def _build_article_subject_match_prompt(case: CaseSpec, input_text: str) -> str:
     )
 
 
+def _purge_deletes(verdict: ArticleSubjectMatch) -> bool:
+    """The retroactive purge's delete rule (``GuardDecision.confident_mismatch``):
+    an adjudicated NOT-the-subject at medium/high confidence. Anything weaker
+    is kept by the purge (it is only an ingest-time skip)."""
+    return not verdict.is_subject and verdict.confidence != "low"
+
+
 def _guard_attaches(verdict: ArticleSubjectMatch) -> bool:
     """The guard's attach rule (``entity_guard.check_article_entity``): attach
     ONLY on is_subject AND confidence better than 'low'. The purge lever runs
@@ -1081,6 +1088,10 @@ def score_article_subject_match(cases: Sequence[CaseEvaluation]) -> PromptReport
       miss drops legitimate coverage at ingest (recoverable: the next sweep or
       another outlet re-surfaces it) but DELETES it under the purge lever, so
       over-caution is gated too, at a hand-set floor below precision's.
+    - purge_precision — of the articles the recording would let the
+      retroactive purge DELETE (a confident mismatch), the fraction whose
+      ground truth is also a confident mismatch. A false delete strips real
+      coverage and the rounds sourced from it, so the floor is 1.0.
 
     Informational: decision_accuracy (attach agreement), is_subject_accuracy
     and confidence_accuracy (raw fields), is_subject_precision (raw boolean
@@ -1091,6 +1102,7 @@ def score_article_subject_match(cases: Sequence[CaseEvaluation]) -> PromptReport
     issues: dict[str, list[str]] = {}
     parse = Accuracy()
     attach = SlotTally()
+    purge = SlotTally()
     raw_subject = SlotTally()
     decision = Accuracy()
     is_subject = Accuracy()
@@ -1110,6 +1122,15 @@ def score_article_subject_match(cases: Sequence[CaseEvaluation]) -> PromptReport
 
         exp_attach, got_attach = _guard_attaches(expected), _guard_attaches(recorded)
         attach.add(expected_present=exp_attach, got_present=got_attach, match=True)
+        exp_delete, got_delete = _purge_deletes(expected), _purge_deletes(recorded)
+        purge.add(expected_present=exp_delete, got_present=got_delete, match=True)
+        if got_delete and not exp_delete:
+            _issue(
+                issues,
+                case.case_id,
+                "FALSE PURGE: the retroactive purge would delete this article"
+                f" (got is_subject={recorded.is_subject}, {recorded.confidence!r})",
+            )
         decision.add(exp_attach == got_attach)
         if got_attach and not exp_attach:
             _issue(
@@ -1155,7 +1176,9 @@ def score_article_subject_match(cases: Sequence[CaseEvaluation]) -> PromptReport
         "parse_rate": parse.value,
         "attach_precision": attach.precision,
         "attach_recall": attach.recall,
+        "purge_precision": purge.precision,
         # Informational (not gated).
+        "purge_recall": purge.recall,
         "decision_accuracy": decision.value,
         "is_subject_accuracy": is_subject.value,
         "is_subject_precision": raw_subject.precision,
@@ -1167,7 +1190,7 @@ def score_article_subject_match(cases: Sequence[CaseEvaluation]) -> PromptReport
         case_count=len(cases),
         provenance_counts=provenance,
         metrics=metrics,
-        gated=["parse_rate", "attach_precision", "attach_recall"],
+        gated=["parse_rate", "attach_precision", "attach_recall", "purge_precision"],
         issues=issues,
     )
 
