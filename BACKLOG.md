@@ -121,6 +121,16 @@ bunkerhill pair.
   drops the 5th slug silently; garbage semantic queries return 30
   confident results (relevance floor / soft empty state).
 
+### Scheduled crons silently disabled by GitHub's 60-day inactivity rule [S] — P0 — SHIPPED (#255)
+`pipeline.yml` + `discovery.yml` went `disabled_inactivity` 2026-09-18/21, 60
+days after the last commit (2026-07-20); the site stopped updating for ~3
+weeks with every prior run green. `keepalive.yml` (weekly + dispatch)
+re-enables all scheduled workflows via the REST enable endpoint and opens a
+deduped `keepalive` issue at >= 45 days since the last commit. Follow-up: after
+the next quiet 60-day stretch, confirm whether the API re-enable alone kept the
+crons alive (GitHub does not document what resets the timer); any new cron
+workflow must be added to its `WORKFLOWS` list.
+
 ## 2026-07-17 embedder/Vercel decoupling — CLOSED (status quo, owner-decided)
 
 Decision record (don't re-litigate): the /companies embedder STAYS in the
