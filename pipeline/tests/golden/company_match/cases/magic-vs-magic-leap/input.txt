@@ -1,0 +1,24 @@
+{
+  "a": {
+    "name": "Magic",
+    "website": "https://magic.dev",
+    "hq_city": "San Francisco",
+    "hq_state": "CA",
+    "description_short": "Magic builds frontier code models and an AI software engineer that can reason over entire codebases.",
+    "description_long": null,
+    "latest_round_type": null,
+    "latest_round_amount": null,
+    "latest_round_date": null
+  },
+  "b": {
+    "name": "Magic Leap",
+    "website": "https://www.magicleap.com",
+    "hq_city": "Plantation",
+    "hq_state": "FL",
+    "description_short": "Magic Leap develops augmented-reality headsets and optics for enterprise and healthcare.",
+    "description_long": null,
+    "latest_round_type": null,
+    "latest_round_amount": null,
+    "latest_round_date": null
+  }
+}

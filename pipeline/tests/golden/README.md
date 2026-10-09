@@ -7,14 +7,16 @@ here before it merges.
 Currently covered prompts (the highest-value ones; the harness is generic
 — see "Adding a prompt"):
 
-| prompt                     | cases | response schema             |
-|----------------------------|-------|-----------------------------|
-| `company_description`      | 20    | `CompanyDescription`        |
-| `company_description_long` | 16    | `CompanyLongDescription`    |
-| `funding_extraction`       | 20    | `FundingExtraction`         |
-| `career_history`           | 16    | `CareerHistoryExtraction`   |
-| `source_verification`      | 10    | `SourceVerification`        |
-| `describe_fallback`        | 16    | `DescribeFallbackResult`    |
+| prompt                     | cases | response schema             | recordings |
+|----------------------------|-------|-----------------------------|------------|
+| `company_description`      | 20    | `CompanyDescription`        | simulated  |
+| `company_description_long` | 16    | `CompanyLongDescription`    | deepseek   |
+| `funding_extraction`       | 21    | `FundingExtraction`         | deepseek   |
+| `career_history`           | 16    | `CareerHistoryExtraction`   | deepseek   |
+| `source_verification`      | 20    | `SourceVerification`        | deepseek   |
+| `describe_fallback`        | 16    | `DescribeFallbackResult`    | deepseek   |
+| `article_subject_match`    | 19    | `ArticleSubjectMatch`       | simulated  |
+| `company_match`            | 17    | `CompanyMatch`              | simulated  |
 
 `career_history` (the talent-flow founder-background rider) gates
 `empty_accuracy` (the empty-not-fabricate dial — most bios name no pedigree),
@@ -34,12 +36,65 @@ entity-ambiguous / thin evidence → null is correct) and `described_accuracy`
 (a genuinely groundable description must be produced). Its `input.txt` is the
 caller-assembled EVIDENCE block (Wikidata facts first, then corroborated
 article title/excerpts, each with a `(source: url)` suffix) — i.e. exactly what
-the stage passes to `build_prompt`. Its recordings are **simulated
-PLACEHOLDERS** pending the first live re-record via `eval-record.yml` (the
-DeepSeek key exists only in Actions); the `null_accuracy` / `described_accuracy`
-floors are hand-set below the placeholder 1.0 (0.8) until live behavior anchors
-them, while `descriptor_grounding_min` stays at 1.0 because the gate is a hard
-no-fabrication invariant, not a quality dial that live recordings can lower.
+the stage passes to `build_prompt`. Its recordings are live DeepSeek
+recordings (`eval-record.yml`, 2026-07-19); the `null_accuracy` /
+`described_accuracy` floors were hand-set at 0.8 while the set was still
+simulated and have not been re-anchored since, while `descriptor_grounding_min`
+stays at 1.0 because the gate is a hard no-fabrication invariant, not a quality
+dial that live recordings can lower.
+
+### The entity gates: `article_subject_match` and `company_match`
+
+These two prompts drive IRREVERSIBLE writes, so they are scored on the stage's
+*decision*, not the raw fields, and gated asymmetrically:
+
+- `article_subject_match` (the ingest entity guard in
+  `pipeline/entity_guard.py`, reused by `purge-wrong-entity-articles`):
+  attach = `is_subject AND confidence != 'low'`. Gated: `parse_rate`,
+  `attach_precision` (floor **1.0** — one false attach publishes another
+  company's funding: the food-Wonder $650M / bespoke-labs $1B class) and
+  `attach_recall` (floor 0.666, hand-set below the simulated 0.833 — a miss
+  drops real coverage at ingest, recoverably, but DELETES it under the purge
+  lever, so over-caution is gated too, with headroom of one further miss over
+  the 6 true-subject cases). Informational: `decision_accuracy`, raw
+  `is_subject_*` / `confidence_accuracy`, `is_subject_precision` (near-miss
+  false attaches that 'low' happened to veto), and
+  `other_entity_presence_accuracy` (the run-log audit trail).
+  `case.json` carries the tracked company's `profile` (named after the
+  `Company` columns: `website`, `description_short`, `industry_group`,
+  `hq_city`, `hq_state`) and the `article_title`; `input.txt` is the guard's
+  `text` argument (stored body, or headline+snippet for Google-News rows).
+  The adapter builds a session-less `Company` and maps it exactly as
+  `check_article_entity` does (incl. the guard's own `_company_hq`); the prompt
+  builder applies its own 1,200-char excerpt cut. Cases cover the QA-sweep
+  collision classes (food-vs-edtech Wonder, the "Built In" outlet, Blue Origin,
+  Magic Leap, Primary Wave, Drip Capital, "... Therapeutics", Impulse Dynamics,
+  a competitor-only mention, an injected-instruction article), ambiguous
+  thin/conflicting evidence where `low` is correct, and true subjects incl.
+  name extensions that ARE the company (Built Technologies, Bunkerhill Health).
+- `company_match` (dedup-companies' fuzzy pass): merge =
+  `same_company AND confidence == 'high'`; `merge_companies` is a one-way fold.
+  Gated: `parse_rate`, `merge_precision` (floor **1.0** — a false merge is
+  unrecoverable) and `merge_recall` (floor 0.666 vs simulated 0.833 — a missed
+  merge leaves a duplicate the next weekly run can still fold). Informational:
+  `decision_accuracy`, `same_company_*`, `confidence_accuracy`. Its
+  `input.txt` is the JSON candidate pair `{"a": {...}, "b": {...}}` of
+  `Company` columns (`DedupCandidatePair` in `evals/schema.py`); the adapter
+  builds real `dedup_companies._CompanyRow`s and renders them through the
+  stage's own `to_prompt_dict` (description_long preferred, the #240
+  latest-funding evidence line). Cases: true duplicates (Ualá/Uala with a
+  continuation-suffix round, the bunkerhill shared-$55M pair, name-form and
+  suffix variants, Project Prometheus' shared $6.2B), same/similar-name
+  different companies (the uala beauty-vs-neobank chimera, Wave, co-located
+  Wonder, Magic Leap, Drip Capital, same-space Mercury, a same-amount funding
+  coincidence), and thin husk pairs where `false/low` is correct.
+
+Both sets' recordings are **simulated** (plausible correct outputs with
+deliberate safe-direction imperfections: one over-cautious true-subject miss
+each, plus confidence-band drift) pending the first live re-record (dispatch
+`eval-record.yml` with `prompt=<name>`). Re-anchor the recall floors on that;
+keep the precision floors at 1.0 unless a reviewed live miss is judged an
+acceptable label dispute.
 
 Since the W-F split, `company_description` is the *judge* (classification,
 people, HQ, `description_short`) and `company_description_long` is the
@@ -169,6 +224,10 @@ output length tracking input length. Thin/null cases stay deliberately
 tiny — that is the side of the contract they test.
 
 ## Provenance: simulated recordings
+
+Current state: see the `recordings` column of the table above — most sets are
+live DeepSeek recordings; `company_description`, `article_subject_match` and
+`company_match` are still simulated.
 
 The initial `recorded.json`s were authored by hand (no API key was available
 in the environment that created them): plausible model outputs derived from

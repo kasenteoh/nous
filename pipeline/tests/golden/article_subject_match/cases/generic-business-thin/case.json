@@ -1,0 +1,12 @@
+{
+  "company_name": "Atlas",
+  "article_title": "Atlas raises $20M Series A",
+  "profile": {
+    "website": "https://www.atlasap.com",
+    "description_short": "Atlas automates accounts-payable workflows - invoice capture, approvals and vendor payments - for mid-market finance teams.",
+    "industry_group": "fintech",
+    "hq_city": "New York",
+    "hq_state": "NY"
+  },
+  "notes": "Body present but generic: 'software for businesses' neither matches nor contradicts AP automation; no domain, location or product. Name-only link -> low, no attach."
+}

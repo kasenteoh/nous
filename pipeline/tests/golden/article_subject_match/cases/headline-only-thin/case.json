@@ -1,0 +1,12 @@
+{
+  "company_name": "Wonder",
+  "article_title": "Wonder raises $30M",
+  "profile": {
+    "website": "https://www.wonderlearning.com",
+    "description_short": "Wonder is an online education platform connecting students with expert tutors for personalized learning journeys.",
+    "industry_group": "edtech",
+    "hq_city": "New York",
+    "hq_state": "NY"
+  },
+  "notes": "Google-News headline+snippet only: the shared name is the ONLY link. The prompt's explicit rule: too thin -> is_subject=false, 'low'. (NB under the purge lever this verdict DELETES the stored article.)"
+}

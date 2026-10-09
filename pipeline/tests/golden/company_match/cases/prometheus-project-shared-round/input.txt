@@ -1,0 +1,24 @@
+{
+  "a": {
+    "name": "Prometheus",
+    "website": null,
+    "hq_city": null,
+    "hq_state": null,
+    "description_short": "Prometheus is building AI systems for engineering and manufacturing in the physical economy.",
+    "description_long": null,
+    "latest_round_type": "Seed",
+    "latest_round_amount": 6200000000,
+    "latest_round_date": "2025-11-17"
+  },
+  "b": {
+    "name": "Project Prometheus",
+    "website": null,
+    "hq_city": "San Francisco",
+    "hq_state": "CA",
+    "description_short": "Project Prometheus is an AI startup developing models that help design and manufacture computers, aerospace parts and vehicles.",
+    "description_long": null,
+    "latest_round_type": null,
+    "latest_round_amount": 6200000000,
+    "latest_round_date": "2025-11-18"
+  }
+}

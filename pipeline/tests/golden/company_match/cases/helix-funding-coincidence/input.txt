@@ -1,0 +1,24 @@
+{
+  "a": {
+    "name": "Helix",
+    "website": "https://www.helix.com",
+    "hq_city": "San Mateo",
+    "hq_state": "CA",
+    "description_short": "Helix is a population genomics company that runs DNA sequencing programs with health systems.",
+    "description_long": null,
+    "latest_round_type": "Series A",
+    "latest_round_amount": 20000000,
+    "latest_round_date": "2026-03-03"
+  },
+  "b": {
+    "name": "Helix AI",
+    "website": "https://www.helixai.io",
+    "hq_city": "San Francisco",
+    "hq_state": "CA",
+    "description_short": "Helix AI builds a customer-support chatbot for ecommerce stores.",
+    "description_long": null,
+    "latest_round_type": "Series A",
+    "latest_round_amount": 20000000,
+    "latest_round_date": "2026-03-05"
+  }
+}

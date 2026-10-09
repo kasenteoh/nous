@@ -1,0 +1,24 @@
+{
+  "a": {
+    "name": "Wave",
+    "website": "https://www.wave.com",
+    "hq_city": null,
+    "hq_state": null,
+    "description_short": "Wave is building a mobile money network across Africa with free deposits and flat-fee transfers.",
+    "description_long": null,
+    "latest_round_type": null,
+    "latest_round_amount": null,
+    "latest_round_date": null
+  },
+  "b": {
+    "name": "Wave",
+    "website": "https://www.waveapps.com",
+    "hq_city": "Toronto",
+    "hq_state": "ON",
+    "description_short": "Wave makes free invoicing and accounting software for small businesses.",
+    "description_long": null,
+    "latest_round_type": null,
+    "latest_round_amount": null,
+    "latest_round_date": null
+  }
+}

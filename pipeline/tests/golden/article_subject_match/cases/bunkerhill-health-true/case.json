@@ -1,0 +1,12 @@
+{
+  "company_name": "Bunkerhill",
+  "article_title": "Bunkerhill Health raises $55M Series B to scale radiology AI",
+  "profile": {
+    "website": null,
+    "description_short": "Bunkerhill builds AI algorithms that help radiologists detect incidental findings in medical imaging.",
+    "industry_group": "healthcare",
+    "hq_city": null,
+    "hq_state": null
+  },
+  "notes": "bunkerhill <- 'Bunkerhill Health': the probe flagged it as an extended entity, but it is the SAME company (the dedup-miss pair). Product match is the one corroborating signal (profile has no website/HQ) -> medium, attach."
+}

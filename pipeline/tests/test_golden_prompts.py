@@ -28,7 +28,7 @@ from nous.evals import (
     load_baseline,
     render_report,
 )
-from nous.evals.harness import iter_case_dirs, load_cases, load_recorded
+from nous.evals.harness import iter_case_dirs, load_case_inputs, load_cases, load_recorded
 
 GOLDEN_DIR = Path(__file__).parent / "golden"
 
@@ -81,6 +81,42 @@ def test_golden_fixtures_are_well_formed(spec: PromptSpec) -> None:
             assert recorded.model, f"{case_dir.name}: live recording missing model id"
         input_len = len((case_dir / "input.txt").read_text())
         assert input_len <= 16_000, f"{case_dir.name}: input.txt too large ({input_len})"
+
+
+@pytest.mark.parametrize("spec", PROMPT_SPECS, ids=_SPEC_IDS)
+def test_golden_prompts_build_offline(spec: PromptSpec) -> None:
+    """Record mode's prompt adapters must render every fixture without the
+    network — a malformed case input (a bad company_match pair JSON, a
+    profile-less article_subject_match case) fails here in CI instead of in
+    the paid live re-record."""
+    for case_dir in iter_case_dirs(GOLDEN_DIR, spec.name):
+        case_spec, input_text = load_case_inputs(case_dir)
+        prompt = spec.build_prompt(case_spec, input_text)
+        assert prompt.strip(), f"{case_dir.name}: empty prompt"
+
+
+def test_entity_gate_prompts_render_like_the_stages() -> None:
+    """The entity-gate adapters go through the stages' own input builders:
+    dedup's ``_CompanyRow.to_prompt_dict`` (the latest-funding evidence line)
+    and the guard's column mapping (industry_group, ``_company_hq``)."""
+    from nous.evals import get_spec
+
+    pair_spec = get_spec("company_match")
+    case_spec, input_text = load_case_inputs(
+        GOLDEN_DIR / "company_match" / "cases" / "bunkerhill-shared-round"
+    )
+    prompt = pair_spec.build_prompt(case_spec, input_text)
+    assert prompt.count("- Latest funding: Series B $55,000,000 announced 2026-07-10") == 2
+    assert "- HQ: Palo Alto, CA" in prompt
+
+    guard_spec = get_spec("article_subject_match")
+    case_spec, input_text = load_case_inputs(
+        GOLDEN_DIR / "article_subject_match" / "cases" / "built-in-outlet-vs-built"
+    )
+    prompt = guard_spec.build_prompt(case_spec, input_text)
+    assert "- Industry: fintech" in prompt
+    assert "- HQ: Nashville, TN" in prompt
+    assert f"- Headline: {case_spec.article_title}" in prompt
 
 
 def test_baseline_covers_all_gated_metrics() -> None:

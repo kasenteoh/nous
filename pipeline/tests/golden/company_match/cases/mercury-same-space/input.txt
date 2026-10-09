@@ -1,0 +1,24 @@
+{
+  "a": {
+    "name": "Mercury",
+    "website": "https://mercury.com",
+    "hq_city": "San Francisco",
+    "hq_state": "CA",
+    "description_short": "Mercury offers business bank accounts, cards and treasury management for startups.",
+    "description_long": null,
+    "latest_round_type": null,
+    "latest_round_amount": null,
+    "latest_round_date": null
+  },
+  "b": {
+    "name": "Mercury Financial",
+    "website": "https://www.mercuryfinancial.com",
+    "hq_city": "Austin",
+    "hq_state": "TX",
+    "description_short": "Mercury Financial issues consumer credit cards to people building or rebuilding credit.",
+    "description_long": null,
+    "latest_round_type": null,
+    "latest_round_amount": null,
+    "latest_round_date": null
+  }
+}

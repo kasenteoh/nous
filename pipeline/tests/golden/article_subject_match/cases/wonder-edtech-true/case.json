@@ -1,0 +1,12 @@
+{
+  "company_name": "Wonder",
+  "article_title": "Wonder raises $12M to expand live online tutoring",
+  "profile": {
+    "website": "https://www.wonderlearning.com",
+    "description_short": "Wonder is an online education platform connecting students with expert tutors for personalized learning journeys.",
+    "industry_group": "edtech",
+    "hq_city": "New York",
+    "hq_state": "NY"
+  },
+  "notes": "Clear true positive: domain, business and HQ all match the edtech profile — the counterpart that proves the Wonder negatives are not a blanket name block."
+}

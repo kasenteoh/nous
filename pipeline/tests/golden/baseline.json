@@ -1,4 +1,10 @@
 {
+  "article_subject_match": {
+    "attach_precision": 1.0,
+    "attach_recall": 0.666,
+    "parse_rate": 1.0,
+    "purge_precision": 1.0
+  },
   "career_history": {
     "empty_accuracy": 0.937,
     "grounding_mean": 1.0,
@@ -28,6 +34,11 @@
     "insufficiency_accuracy": 0.937,
     "parse_rate": 1.0,
     "structure_pass_rate": 0.785
+  },
+  "company_match": {
+    "merge_precision": 1.0,
+    "merge_recall": 0.666,
+    "parse_rate": 1.0
   },
   "describe_fallback": {
     "described_accuracy": 0.8,

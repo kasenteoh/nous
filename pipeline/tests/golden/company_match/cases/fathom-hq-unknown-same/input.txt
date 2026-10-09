@@ -1,0 +1,24 @@
+{
+  "a": {
+    "name": "Fathom",
+    "website": "https://fathom.video",
+    "hq_city": "San Francisco",
+    "hq_state": "CA",
+    "description_short": "Fathom is an AI meeting assistant that records, transcribes and summarizes Zoom, Google Meet and Microsoft Teams calls.",
+    "description_long": null,
+    "latest_round_type": null,
+    "latest_round_amount": null,
+    "latest_round_date": null
+  },
+  "b": {
+    "name": "Fathom Video",
+    "website": null,
+    "hq_city": null,
+    "hq_state": null,
+    "description_short": "AI notetaker that records, transcribes and summarizes video meetings on Zoom and Google Meet.",
+    "description_long": null,
+    "latest_round_type": null,
+    "latest_round_amount": null,
+    "latest_round_date": null
+  }
+}

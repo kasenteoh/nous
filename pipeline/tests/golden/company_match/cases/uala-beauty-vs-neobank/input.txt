@@ -1,0 +1,24 @@
+{
+  "a": {
+    "name": "Uala",
+    "website": "https://www.uala.it",
+    "hq_city": "Milan",
+    "hq_state": null,
+    "description_short": "Uala is an online booking marketplace for beauty salons, spas and barbers in Italy.",
+    "description_long": null,
+    "latest_round_type": "Series B",
+    "latest_round_amount": 10000000,
+    "latest_round_date": "2019-03-12"
+  },
+  "b": {
+    "name": "Ualá",
+    "website": "https://www.uala.com.ar",
+    "hq_city": "Buenos Aires",
+    "hq_state": null,
+    "description_short": "Ualá is a Latin American fintech offering a mobile app, prepaid Mastercard, payments and personal loans in Argentina, Mexico and Colombia.",
+    "description_long": "Ualá is a Latin American fintech headquartered in Buenos Aires. Its mobile app gives users a free account with a prepaid Mastercard, bill payments, transfers, investments and personal loans.\n\nThe company operates in Argentina, Mexico and Colombia, where it holds banking licenses, and also offers a payments acquiring product for small merchants.",
+    "latest_round_type": "Series E",
+    "latest_round_amount": 300000000,
+    "latest_round_date": "2024-11-19"
+  }
+}

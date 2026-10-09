@@ -1,0 +1,24 @@
+{
+  "a": {
+    "name": "Together AI",
+    "website": "https://www.together.ai",
+    "hq_city": "San Francisco",
+    "hq_state": "CA",
+    "description_short": "Together AI runs a cloud platform for training, fine-tuning and serving open-source generative AI models.",
+    "description_long": null,
+    "latest_round_type": "Series B",
+    "latest_round_amount": 305000000,
+    "latest_round_date": "2025-02-20"
+  },
+  "b": {
+    "name": "Together",
+    "website": null,
+    "hq_city": "San Francisco",
+    "hq_state": "CA",
+    "description_short": "Cloud platform for running and fine-tuning open-source generative AI models.",
+    "description_long": null,
+    "latest_round_type": null,
+    "latest_round_amount": null,
+    "latest_round_date": null
+  }
+}
