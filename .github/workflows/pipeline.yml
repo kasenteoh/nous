@@ -53,7 +53,7 @@ on:
 # discovery.yml). resolve / enrich UPDATE company rows and ingest-news /
 # extract-funding INSERT them, all of which race the dedup DELETEs in
 # discovery.yml. cancel-in-progress: false so a queued run waits its turn — and
-# so two pipeline runs (10x/day) never overlap each other either.
+# so two pipeline runs (8x/day) never overlap each other either.
 permissions:
   contents: read
   # The failure-alert step opens/comments the deduped pipeline-failure issue.
@@ -282,7 +282,7 @@ jobs:
         id: funding
         if: ${{ env.OV_SKIP_FUNDING != 'true' }}
         # Bounded by unprocessed articles, so steady-state cost tracks actual
-        # new-article volume (usually a handful per run at 10x/day). --limit
+        # new-article volume (usually a handful per run at 8x/day). --limit
         # caps the worst case; continue-on-error per the provider-rate-limit
         # logic (the next run resumes the remaining unprocessed rows).
         timeout-minutes: 15
@@ -453,7 +453,7 @@ jobs:
         id: judge
         # Backfills the is-this-a-startup / non-US judgment onto companies
         # enriched before that judgment existed (~1,600 one-time DeepSeek calls).
-        # Each judged row is stamped, so this drains in a couple of weeks at 10x/
+        # Each judged row is stamped, so this drains in a couple of weeks at 8x/
         # day and then no-ops. Runs after enrich so freshly described rows are
         # already stamped by enrich itself and skipped here. Timeout raised to
         # 45m so a high judge_limit can drain the one-time backlog in a single
