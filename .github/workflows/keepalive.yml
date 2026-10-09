@@ -1,0 +1,98 @@
+name: keepalive
+
+# GitHub auto-disables `schedule` workflows in a PUBLIC repo after 60 days with
+# no repository activity. That silently stopped pipeline.yml (2026-09-18) and
+# discovery.yml (2026-09-21) after the last commit on 2026-07-20; both showed
+# state `disabled_inactivity` and every run before the stop was green.
+#
+# Two layers, because GitHub does not document which events reset the timer:
+#   1. Weekly, call the REST "enable workflow" endpoint on every scheduled
+#      workflow, this one included. A workflow found disabled is re-enabled
+#      (self-heal) and flagged; an active one is re-enabled as a no-op that, per
+#      common practice (keepalive-workflow v2), keeps it from being disabled.
+#      ASSUMPTION: that no-op resets the timer. Unverified until day 60 passes.
+#   2. If the last commit on the default branch is >= WARN_DAYS old, open (or
+#      comment on) one deduped `keepalive` issue so the owner gets an email
+#      while there is still time to push a commit. Weekly cadence + WARN_DAYS=45
+#      means the warning lands between day 45 and day 52, before day 60, even
+#      if layer 1 turns out not to work.
+#
+# workflow_dispatch also makes this the one-click way to re-enable everything
+# after a lapse. No DB, no secrets beyond GITHUB_TOKEN, so it stays outside the
+# nous-pipeline-db concurrency group and never queues behind a pipeline run.
+on:
+  schedule:
+    # Wed 06:17 UTC: weekly, off the :00 rush, away from discovery (Mon 02:00).
+    - cron: "17 6 * * 3"
+  workflow_dispatch:
+
+permissions:
+  # PUT /actions/workflows/{id}/enable needs actions: write.
+  actions: write
+  # The staleness / self-heal alert opens or comments on an issue.
+  issues: write
+  contents: read
+
+jobs:
+  keepalive:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+      # Every workflow with a `schedule` trigger. Add new cron workflows here.
+      WORKFLOWS: "pipeline.yml discovery.yml keepalive.yml"
+      WARN_DAYS: "45"
+    steps:
+      - name: Re-enable scheduled workflows
+        id: enable
+        run: |
+          set -euo pipefail
+          healed=""
+          for wf in $WORKFLOWS; do
+            state=$(gh api "repos/$REPO/actions/workflows/$wf" --jq .state)
+            gh api -X PUT "repos/$REPO/actions/workflows/$wf/enable"
+            echo "$wf: $state -> active"
+            if [ "$state" != "active" ]; then
+              echo "::warning::$wf was $state; re-enabled"
+              healed="$healed $wf($state)"
+            fi
+          done
+          echo "healed=${healed# }" >> "$GITHUB_OUTPUT"
+
+      - name: Check repository staleness
+        id: stale
+        run: |
+          set -euo pipefail
+          branch=$(gh api "repos/$REPO" --jq .default_branch)
+          last=$(gh api "repos/$REPO/commits/$branch" --jq .commit.committer.date)
+          days=$(( ( $(date -u +%s) - $(date -u -d "$last" +%s) ) / 86400 ))
+          echo "Last commit on $branch: $last ($days days ago; warn at $WARN_DAYS, GitHub disables at 60)"
+          echo "days=$days" >> "$GITHUB_OUTPUT"
+
+      - name: Alert (GitHub issue)
+        # Deduped like pipeline.yml's failure alert: one open `keepalive` issue
+        # collects comments until it is closed.
+        if: ${{ steps.enable.outputs.healed != '' || fromJSON(steps.stale.outputs.days) >= fromJSON(env.WARN_DAYS) }}
+        env:
+          HEALED: ${{ steps.enable.outputs.healed }}
+          DAYS: ${{ steps.stale.outputs.days }}
+        run: |
+          set -euo pipefail
+          gh label create keepalive --repo "$REPO" --color FBCA04 \
+            --description "Automated: scheduled workflows at risk of GitHub's 60-day inactivity disable" \
+            --force
+          TITLE="Scheduled workflows: inactivity disable risk"
+          RUN_URL="${{ github.server_url }}/$REPO/actions/runs/${{ github.run_id }}"
+          BODY="Automated alert from [keepalive run ${{ github.run_id }}]($RUN_URL). Last commit on the default branch was $DAYS days ago; GitHub disables scheduled workflows in a public repo after 60 days without activity."
+          if [ -n "$HEALED" ]; then
+            BODY="$BODY Found disabled and re-enabled: $HEALED. The API keepalive alone did not prevent this."
+          fi
+          BODY="$BODY Pushing any commit to the default branch resets the timer."
+          existing=$(gh issue list --repo "$REPO" --state open --label keepalive \
+            --json number,title --jq "[.[] | select(.title == \"$TITLE\")][0].number // empty")
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --repo "$REPO" --body "$BODY"
+          else
+            gh issue create --repo "$REPO" --title "$TITLE" --label keepalive --body "$BODY"
+          fi

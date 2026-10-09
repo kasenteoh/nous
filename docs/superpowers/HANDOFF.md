@@ -1,4 +1,4 @@
-# Handoff — state of the world as of 2026-07-18 (midday)
+# Handoff — state of the world as of 2026-10-09
 
 Written for the next agent (any model) picking this project up cold. Read
 this, then root `CLAUDE.md` (conventions), then the worklog
@@ -6,6 +6,19 @@ this, then root `CLAUDE.md` (conventions), then the worklog
 authoritative history), then `BACKLOG.md` (annotated with what shipped; its
 **"2026-07-17 post-surgery QA sweep"** section is the active work queue).
 The plan docs under `docs/superpowers/plans/` are historical context.
+
+## LATEST UPDATE — crons were OFF 2026-09-18 → 2026-10-09; keepalive added (PR #255)
+
+The site stopped updating because GitHub auto-disabled `pipeline.yml` and
+`discovery.yml` (`disabled_inactivity`: public repo, 60 days without a commit
+after 2026-07-20). Every run before the stop was green; no code fault.
+#255 adds `keepalive.yml` (weekly Wed 06:17 UTC + dispatch): re-enables every
+scheduled workflow via the REST enable endpoint, and opens a deduped
+`keepalive` issue once the last commit is >= 45 days old. **Merging does not
+re-enable the two crons**: dispatch `keepalive` once (or click Enable on each
+workflow in the Actions UI). Expect the first pipeline runs after the gap to
+drain ~3 weeks of news backlog under the usual per-stage `--limit`s. GOTCHA:
+any new `schedule` workflow must be added to keepalive's `WORKFLOWS` list.
 
 ## LATEST UPDATE — descriptions arc COMPLETE: profiles LIVE (2026-07-20, PRs #241–#252)
 

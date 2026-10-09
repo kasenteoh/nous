@@ -2629,3 +2629,19 @@ Owner: "let's do it" (the QA P0s). Both adversarially reviewed (APPROVE).
   route for now; local residential scrape-assist raised, undecided).
   Ingestion improvement stands regardless: new GN articles that DO
   resolve store real text via the shared path.
+
+## PR #255 — ci: keepalive workflow against GitHub's 60-day schedule disable
+
+- Diagnosis: owner reported the site was not updating. Both cron workflows
+  were `disabled_inactivity` (GitHub disables `schedule` triggers in a public
+  repo after 60 days without activity); last commit 2026-07-20, last pipeline
+  run 2026-09-18, last discovery run 2026-09-21, all green. No code fault.
+- Fix: `keepalive.yml`, weekly + dispatch. Layer 1 re-enables pipeline,
+  discovery and itself via `PUT /actions/workflows/{id}/enable` (self-heals a
+  lapse; no-op refresh otherwise). Layer 2 opens a deduped `keepalive` issue
+  when the last default-branch commit is >= 45 days old, landing between day
+  45 and 52, so the owner is warned before day 60 even if layer 1 does not
+  reset GitHub's timer (undocumented; recorded as an assumption).
+- No DB, no secrets beyond GITHUB_TOKEN; outside the nous-pipeline-db
+  concurrency group. actionlint clean. Post-merge: dispatch keepalive once to
+  re-enable the two disabled crons.
