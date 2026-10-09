@@ -10,8 +10,11 @@ The harness core (:mod:`nous.evals.harness`) is generic over specs, so
 adding a prompt to the golden set means writing one spec + fixtures — no
 harness changes. Currently scoped to the highest-value prompts:
 ``company_description`` (the judge), ``company_description_long`` (the
-dedicated long-form profile), ``funding_extraction``, and ``career_history``
-(the talent-flow founder-background rider).
+dedicated long-form profile), ``funding_extraction``, ``career_history``
+(the talent-flow founder-background rider), ``source_verification``,
+``describe_fallback``, and the two entity gates that drive irreversible
+deletes/merges: ``article_subject_match`` (ingest guard + retroactive purge)
+and ``company_match`` (dedup's fuzzy merge gate).
 
 Scoring runs on responses that already passed the runtime
 parse/validate path (``schema.model_validate_json`` — including model
@@ -24,11 +27,14 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING
+from uuid import UUID
 
 from pydantic import BaseModel
 
-from nous.evals.schema import CaseSpec, PromptReport
+from nous.db.models import Company
+from nous.evals.schema import CaseSpec, DedupCandidate, DedupCandidatePair, PromptReport
 from nous.evals.scoring import (
     Accuracy,
     SlotTally,
@@ -38,6 +44,10 @@ from nous.evals.scoring import (
     word_count,
 )
 from nous.llm.client import MAX_PROMPT_INPUT_CHARS
+from nous.llm.prompts.article_subject_match import (
+    ArticleSubjectMatch,
+    build_article_subject_match_prompt,
+)
 from nous.llm.prompts.career_history import CareerHistoryExtraction
 from nous.llm.prompts.career_history import build_prompt as build_career_history_prompt
 from nous.llm.prompts.company_description import CompanyDescription
@@ -49,6 +59,7 @@ from nous.llm.prompts.company_description_long import (
 from nous.llm.prompts.company_description_long import (
     build_prompt as build_long_description_prompt,
 )
+from nous.llm.prompts.company_match import CompanyMatch, build_company_match_prompt
 from nous.llm.prompts.describe_fallback import (
     MAX_EVIDENCE_CHARS as DESCRIBE_FALLBACK_MAX_EVIDENCE_CHARS,
 )
@@ -75,10 +86,17 @@ from nous.llm.prompts.source_verification import (
     build_prompt as build_source_verification_prompt,
 )
 
+# The entity-gate stages' own input builders, reused so the golden prompts are
+# rendered EXACTLY as the stages render them: the dedup row projection
+# (description_long preference + latest-funding line) here, and the entity
+# guard's HQ formatter (``_company_hq``) below.
+from nous.pipeline.dedup_companies import _CompanyRow
+
 # The runtime moat check, reused verbatim so the golden set verifies the SAME
 # descriptor-in-evidence gate the stage applies (the source_verification golden
 # set reuses quote_is_grounded the same way).
 from nous.pipeline.describe_fallback import _descriptor_in_evidence
+from nous.pipeline.entity_guard import _company_hq
 from nous.util.industry import normalize_industry
 from nous.util.slugify import normalize_name
 from nous.util.text import truncate_to_chars
@@ -999,6 +1017,295 @@ def score_describe_fallback(cases: Sequence[CaseEvaluation]) -> PromptReport:
 
 
 # ---------------------------------------------------------------------------
+# article_subject_match (the ingest entity guard + retroactive purge gate)
+# ---------------------------------------------------------------------------
+
+
+def _build_article_subject_match_prompt(case: CaseSpec, input_text: str) -> str:
+    """Mirror ``entity_guard.check_article_entity``'s prompt construction.
+
+    The case's profile is materialized as a transient (session-less)
+    ``Company`` so the guard's own ``_company_hq`` formats the HQ, and every
+    argument is mapped from the same column the guard reads — notably
+    ``industry`` comes from ``industry_group``. ``input.txt`` is the guard's
+    ``text`` argument (stored body, or headline+snippet for Google-News rows);
+    the prompt builder applies its own ``EXCERPT_CHARS`` cut.
+    """
+    profile = case.profile
+    if profile is None or not (profile.description_short or "").strip():
+        # The guard attaches no-profile companies WITHOUT an LLM call, so a
+        # case without a description never reaches this prompt at runtime.
+        raise ValueError(
+            "article_subject_match cases need profile.description_short — the "
+            "guard never adjudicates a no-profile company"
+        )
+    company = Company(
+        name=case.company_name,
+        website=profile.website,
+        description_short=profile.description_short,
+        industry_group=profile.industry_group,
+        hq_city=profile.hq_city,
+        hq_state=profile.hq_state,
+    )
+    return build_article_subject_match_prompt(
+        name=company.name,
+        website=company.website,
+        description=company.description_short,
+        industry=company.industry_group,
+        hq=_company_hq(company),
+        title=case.article_title,
+        article_text=input_text,
+    )
+
+
+def _guard_attaches(verdict: ArticleSubjectMatch) -> bool:
+    """The guard's attach rule (``entity_guard.check_article_entity``): attach
+    ONLY on is_subject AND confidence better than 'low'. The purge lever runs
+    the same decision, so a non-attach there DELETES the stored article."""
+    return verdict.is_subject and verdict.confidence != "low"
+
+
+def score_article_subject_match(cases: Sequence[CaseEvaluation]) -> PromptReport:
+    """Score article_subject_match recordings against ground truth.
+
+    Scored on the guard's DECISION (attach = is_subject AND confidence !=
+    'low'), not the raw fields — that is what the runtime acts on. The safety
+    asymmetry drives the gates:
+
+    - parse_rate — recordings surviving runtime schema validation.
+    - attach_precision — of the articles the recording would attach, the
+      fraction that truly are about the company. A false attach publishes
+      another company's funding (the bespoke-labs/$1B, food-Wonder $650M
+      class), so the floor is 1.0: one wrong-entity attach fails the gate.
+    - attach_recall — of the true-subject articles, the fraction attached. A
+      miss drops legitimate coverage at ingest (recoverable: the next sweep or
+      another outlet re-surfaces it) but DELETES it under the purge lever, so
+      over-caution is gated too, at a hand-set floor below precision's.
+
+    Informational: decision_accuracy (attach agreement), is_subject_accuracy
+    and confidence_accuracy (raw fields), is_subject_precision (raw boolean
+    regardless of confidence — near-miss false attaches that 'low' happened
+    to block), other_entity_presence_accuracy (did the model name the other
+    entity exactly when one is visible — the run-log audit trail).
+    """
+    issues: dict[str, list[str]] = {}
+    parse = Accuracy()
+    attach = SlotTally()
+    raw_subject = SlotTally()
+    decision = Accuracy()
+    is_subject = Accuracy()
+    confidence = Accuracy()
+    other_presence = Accuracy()
+    provenance: dict[str, int] = {}
+
+    for case in cases:
+        expected = case.expected
+        assert isinstance(expected, ArticleSubjectMatch)
+        parse.add(case.recorded is not None)
+        if case.recorded is None:
+            _issue(issues, case.case_id, "recorded response failed runtime schema validation")
+            continue
+        recorded = case.recorded
+        assert isinstance(recorded, ArticleSubjectMatch)
+
+        exp_attach, got_attach = _guard_attaches(expected), _guard_attaches(recorded)
+        attach.add(expected_present=exp_attach, got_present=got_attach, match=True)
+        decision.add(exp_attach == got_attach)
+        if got_attach and not exp_attach:
+            _issue(
+                issues,
+                case.case_id,
+                "FALSE ATTACH: a wrong-entity/too-thin article would attach"
+                f" (got is_subject={recorded.is_subject}, {recorded.confidence!r})",
+            )
+        elif exp_attach and not got_attach:
+            _issue(
+                issues,
+                case.case_id,
+                "missed attach: a true-subject article would be dropped (purged"
+                f" under the retroactive lever) (got is_subject={recorded.is_subject},"
+                f" {recorded.confidence!r})",
+            )
+
+        raw_subject.add(
+            expected_present=expected.is_subject,
+            got_present=recorded.is_subject,
+            match=True,
+        )
+        is_subject.add(recorded.is_subject == expected.is_subject)
+        confidence.add(recorded.confidence == expected.confidence)
+        if recorded.confidence != expected.confidence:
+            _issue(
+                issues,
+                case.case_id,
+                f"confidence: expected {expected.confidence!r}, got {recorded.confidence!r}",
+            )
+        exp_other = bool((expected.other_entity_name or "").strip())
+        got_other = bool((recorded.other_entity_name or "").strip())
+        other_presence.add(exp_other == got_other)
+        if exp_other != got_other:
+            _issue(
+                issues,
+                case.case_id,
+                f"other_entity_name: expected {expected.other_entity_name!r},"
+                f" got {recorded.other_entity_name!r}",
+            )
+
+    metrics: dict[str, float] = {
+        "parse_rate": parse.value,
+        "attach_precision": attach.precision,
+        "attach_recall": attach.recall,
+        # Informational (not gated).
+        "decision_accuracy": decision.value,
+        "is_subject_accuracy": is_subject.value,
+        "is_subject_precision": raw_subject.precision,
+        "confidence_accuracy": confidence.value,
+        "other_entity_presence_accuracy": other_presence.value,
+    }
+    return PromptReport(
+        prompt="article_subject_match",
+        case_count=len(cases),
+        provenance_counts=provenance,
+        metrics=metrics,
+        gated=["parse_rate", "attach_precision", "attach_recall"],
+        issues=issues,
+    )
+
+
+# ---------------------------------------------------------------------------
+# company_match (dedup-companies' fuzzy-pass merge gate)
+# ---------------------------------------------------------------------------
+
+# Projection field the prompt never renders; fixed so fixtures stay minimal.
+_DEDUP_ROW_CREATED_AT = datetime(2026, 1, 1, tzinfo=UTC)
+
+
+def _dedup_row(candidate: DedupCandidate, index: int) -> _CompanyRow:
+    return _CompanyRow(
+        id=UUID(int=index),
+        name=candidate.name,
+        normalized_name=normalize_name(candidate.name),
+        website=candidate.website,
+        hq_city=candidate.hq_city,
+        hq_state=candidate.hq_state,
+        description_short=candidate.description_short,
+        description_long=candidate.description_long,
+        latest_round_amount=candidate.latest_round_amount,
+        latest_round_date=candidate.latest_round_date,
+        latest_round_type=candidate.latest_round_type,
+        created_at=_DEDUP_ROW_CREATED_AT,
+    )
+
+
+def _build_company_match_prompt(case: CaseSpec, input_text: str) -> str:
+    """Mirror ``dedup_companies._run_fuzzy_pass``: build real ``_CompanyRow``
+    projections from the fixture pair and render them through the stage's own
+    ``to_prompt_dict`` (description_long preferred over short, the
+    latest-funding evidence line) before ``build_company_match_prompt``."""
+    pair = DedupCandidatePair.model_validate_json(input_text)
+    return build_company_match_prompt(
+        _dedup_row(pair.a, 1).to_prompt_dict(),
+        _dedup_row(pair.b, 2).to_prompt_dict(),
+    )
+
+
+def _dedup_merges(verdict: CompanyMatch) -> bool:
+    """The fuzzy pass's merge rule: same_company AND confidence == 'high'."""
+    return verdict.same_company and verdict.confidence == "high"
+
+
+def score_company_match(cases: Sequence[CaseEvaluation]) -> PromptReport:
+    """Score company_match recordings against ground truth.
+
+    Scored on the dedup stage's DECISION (merge = same_company AND confidence
+    == 'high'). ``merge_companies`` is a one-way fold — the loser row is gone
+    and its slug redirects to the survivor — so:
+
+    - parse_rate — recordings surviving runtime schema validation.
+    - merge_precision — of the pairs the recording would merge, the fraction
+      that truly are one company. Floor 1.0: a single false merge (two real
+      companies folded into one page) is unrecoverable.
+    - merge_recall — of the true duplicate pairs, the fraction merged. A miss
+      leaves a duplicate page the next weekly run can still fold, so the
+      floor is hand-set well below precision's.
+
+    Informational: decision_accuracy, same_company_accuracy,
+    confidence_accuracy, and same_company_precision (raw boolean regardless
+    of confidence — near-miss false merges that a non-'high' band happened to
+    block).
+    """
+    issues: dict[str, list[str]] = {}
+    parse = Accuracy()
+    merges = SlotTally()
+    raw_same = SlotTally()
+    decision = Accuracy()
+    same_company = Accuracy()
+    confidence = Accuracy()
+    provenance: dict[str, int] = {}
+
+    for case in cases:
+        expected = case.expected
+        assert isinstance(expected, CompanyMatch)
+        parse.add(case.recorded is not None)
+        if case.recorded is None:
+            _issue(issues, case.case_id, "recorded response failed runtime schema validation")
+            continue
+        recorded = case.recorded
+        assert isinstance(recorded, CompanyMatch)
+
+        exp_merge, got_merge = _dedup_merges(expected), _dedup_merges(recorded)
+        merges.add(expected_present=exp_merge, got_present=got_merge, match=True)
+        decision.add(exp_merge == got_merge)
+        if got_merge and not exp_merge:
+            _issue(
+                issues,
+                case.case_id,
+                "FALSE MERGE: two distinct companies would be irreversibly folded"
+                f" (got same_company={recorded.same_company}, {recorded.confidence!r})",
+            )
+        elif exp_merge and not got_merge:
+            _issue(
+                issues,
+                case.case_id,
+                "missed merge: a true duplicate pair stays split"
+                f" (got same_company={recorded.same_company}, {recorded.confidence!r})",
+            )
+
+        raw_same.add(
+            expected_present=expected.same_company,
+            got_present=recorded.same_company,
+            match=True,
+        )
+        same_company.add(recorded.same_company == expected.same_company)
+        confidence.add(recorded.confidence == expected.confidence)
+        if recorded.confidence != expected.confidence:
+            _issue(
+                issues,
+                case.case_id,
+                f"confidence: expected {expected.confidence!r}, got {recorded.confidence!r}",
+            )
+
+    metrics: dict[str, float] = {
+        "parse_rate": parse.value,
+        "merge_precision": merges.precision,
+        "merge_recall": merges.recall,
+        # Informational (not gated).
+        "decision_accuracy": decision.value,
+        "same_company_accuracy": same_company.value,
+        "same_company_precision": raw_same.precision,
+        "confidence_accuracy": confidence.value,
+    }
+    return PromptReport(
+        prompt="company_match",
+        case_count=len(cases),
+        provenance_counts=provenance,
+        metrics=metrics,
+        gated=["parse_rate", "merge_precision", "merge_recall"],
+        issues=issues,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Registry
 # ---------------------------------------------------------------------------
 
@@ -1038,6 +1345,18 @@ PROMPT_SPECS: tuple[PromptSpec, ...] = (
         schema=DescribeFallbackResult,
         build_prompt=_build_describe_fallback_prompt,
         score=score_describe_fallback,
+    ),
+    PromptSpec(
+        name="article_subject_match",
+        schema=ArticleSubjectMatch,
+        build_prompt=_build_article_subject_match_prompt,
+        score=score_article_subject_match,
+    ),
+    PromptSpec(
+        name="company_match",
+        schema=CompanyMatch,
+        build_prompt=_build_company_match_prompt,
+        score=score_company_match,
     ),
 )
 

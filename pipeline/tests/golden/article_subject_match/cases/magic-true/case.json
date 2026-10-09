@@ -1,0 +1,12 @@
+{
+  "company_name": "Magic",
+  "article_title": "Magic raises $320M to build an AI software engineer",
+  "profile": {
+    "website": "https://magic.dev",
+    "description_short": "Magic builds frontier code models and an AI software engineer that can reason over entire codebases.",
+    "industry_group": "developer tools",
+    "hq_city": "San Francisco",
+    "hq_state": "CA"
+  },
+  "notes": "Clear true positive for the Magic profile (product + HQ match)."
+}

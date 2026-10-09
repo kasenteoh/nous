@@ -1,0 +1,12 @@
+{
+  "company_name": "Wave",
+  "article_title": "Wave raises $200M to expand mobile money in West Africa",
+  "profile": {
+    "website": "https://www.wave.com",
+    "description_short": "Wave is building a mobile money network across Africa with free deposits and flat-fee transfers.",
+    "industry_group": "fintech",
+    "hq_city": null,
+    "hq_state": null
+  },
+  "notes": "True positive with an unknown profile HQ: domain + business match (two independent signals) -> high."
+}

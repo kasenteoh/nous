@@ -1,0 +1,24 @@
+{
+  "a": {
+    "name": "Bunkerhill",
+    "website": null,
+    "hq_city": null,
+    "hq_state": null,
+    "description_short": null,
+    "description_long": null,
+    "latest_round_type": "Series B",
+    "latest_round_amount": 55000000,
+    "latest_round_date": "2026-07-10"
+  },
+  "b": {
+    "name": "Bunkerhill Health",
+    "website": null,
+    "hq_city": "Palo Alto",
+    "hq_state": "CA",
+    "description_short": "Bunkerhill Health builds AI algorithms that flag incidental findings in medical imaging for radiologists.",
+    "description_long": null,
+    "latest_round_type": "Series B",
+    "latest_round_amount": 55000000,
+    "latest_round_date": "2026-07-10"
+  }
+}

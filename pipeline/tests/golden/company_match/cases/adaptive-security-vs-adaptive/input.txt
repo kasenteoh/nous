@@ -1,0 +1,24 @@
+{
+  "a": {
+    "name": "Adaptive Security",
+    "website": "https://www.adaptivesecurity.com",
+    "hq_city": "New York",
+    "hq_state": "NY",
+    "description_short": "Adaptive Security trains employees to spot AI-powered phishing and deepfake social-engineering attacks.",
+    "description_long": null,
+    "latest_round_type": null,
+    "latest_round_amount": null,
+    "latest_round_date": null
+  },
+  "b": {
+    "name": "Adaptive",
+    "website": "https://www.adaptive.build",
+    "hq_city": "San Francisco",
+    "hq_state": "CA",
+    "description_short": "Adaptive is an AI-powered accounting platform for construction companies.",
+    "description_long": null,
+    "latest_round_type": null,
+    "latest_round_amount": null,
+    "latest_round_date": null
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "a": {
+    "name": "Hugging Face",
+    "website": "https://huggingface.co",
+    "hq_city": "New York",
+    "hq_state": "NY",
+    "description_short": "Hugging Face hosts an open platform where the machine-learning community shares models, datasets and applications.",
+    "description_long": null,
+    "latest_round_type": null,
+    "latest_round_amount": null,
+    "latest_round_date": null
+  },
+  "b": {
+    "name": "HuggingFace Inc.",
+    "website": null,
+    "hq_city": "New York",
+    "hq_state": "NY",
+    "description_short": "Open-source hub for machine learning models and datasets.",
+    "description_long": null,
+    "latest_round_type": null,
+    "latest_round_amount": null,
+    "latest_round_date": null
+  }
+}

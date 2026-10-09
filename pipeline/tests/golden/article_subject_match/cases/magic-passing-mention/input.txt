@@ -1,0 +1,1 @@
+Devline, a two-year-old startup that builds an AI pair programmer for enterprise engineering teams, has raised $45 million in a Series B led by Lightspeed. The company competes with a crowded field of AI coding startups including Magic, Cognition and Poolside, and says its agent now writes a third of the code merged at its largest customers.

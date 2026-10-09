@@ -1,0 +1,12 @@
+{
+  "company_name": "Lumen",
+  "article_title": "Lumen raises $15M seed for data monitoring",
+  "profile": {
+    "website": "https://www.lumendata.io",
+    "description_short": "Lumen is an observability platform that monitors data pipelines and alerts data teams to broken dashboards.",
+    "industry_group": "data infrastructure",
+    "hq_city": "Austin",
+    "hq_state": "TX"
+  },
+  "notes": "Signals CONFLICT: the business loosely matches (data monitoring) but the HQ contradicts (Berlin vs Austin, TX), there is no domain, and 'founded last year' gives no anchor. The prompt: conflicting -> low. A medium attach here is the false-attach failure mode."
+}
