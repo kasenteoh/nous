@@ -79,9 +79,9 @@ class PurgeWrongEntitySummary(BaseModel):
     articles_purged: int = 0
     articles_kept: int = 0
     articles_llm_error_kept: int = 0
-    # Adjudicated but not a CONFIDENT mismatch (thin evidence / low
-    # confidence): kept — the purge deletes only on a medium/high "another
-    # entity" verdict.
+    # Adjudicated but not a CONFIDENT mismatch (thin evidence, low or medium
+    # confidence): kept — the purge deletes only on a HIGH-confidence
+    # "another entity" verdict.
     articles_uncertain_kept: int = 0
     rounds_purged: int = 0
     round_labels: list[str] = Field(default_factory=list)
@@ -172,7 +172,7 @@ async def run_purge_wrong_entity_articles(
                 )
             )
             continue
-        # Delete only on a confident "another entity" verdict. A thin-evidence
+        # Delete only on a HIGH-confidence "another entity" verdict. A thin-evidence
         # answer (headline-only text, low confidence either way) is what
         # attach=False ALSO means at ingest, where skipping is recoverable;
         # here it would delete real coverage and the rounds sourced from it.
