@@ -22,7 +22,10 @@ calibrated corroboration signals, then LLM adjudication
 - denorms (``funding_round_count``, ``latest_round_*``) refresh after.
 
 Fail-KEEP semantics per article: an LLM error keeps the article (a later
-run retries — never delete on an unread verdict); a 429 aborts the run
+run retries — never delete on an unread verdict), and so does an
+adjudication short of a CONFIDENT mismatch — the prompt answers thin
+evidence (headline-only text) with is_subject=false at LOW confidence, which
+is the right ingest-time skip but no proof for a delete; a 429 aborts the run
 loudly (idempotent — re-dispatch when the limiter clears). A company with
 no description cannot be adjudicated and is refused (enrich it first, or
 use exclude-company / delete-round directly).
@@ -56,6 +59,12 @@ class PurgeWrongEntityError(Exception):
     """Unknown company, no description to adjudicate against, or rate limit."""
 
 
+class PurgeRateLimitedError(PurgeWrongEntityError):
+    """The LLM rate-limited mid-run. Distinct so a batch caller can stop the
+    whole queue (every later company would hit the same limiter) instead of
+    skipping just this company."""
+
+
 class ArticleVerdict(BaseModel):
     title: str
     url: str
@@ -70,6 +79,10 @@ class PurgeWrongEntitySummary(BaseModel):
     articles_purged: int = 0
     articles_kept: int = 0
     articles_llm_error_kept: int = 0
+    # Adjudicated but not a CONFIDENT mismatch (thin evidence, low or medium
+    # confidence): kept — the purge deletes only on a HIGH-confidence
+    # "another entity" verdict.
+    articles_uncertain_kept: int = 0
     rounds_purged: int = 0
     round_labels: list[str] = Field(default_factory=list)
     # Rounds spared because a KEPT article still links to them; on apply
@@ -78,6 +91,10 @@ class PurgeWrongEntitySummary(BaseModel):
     total_raised_cleared: bool = False
     status_reset: bool = False
     verifications_deleted: int = 0
+    # Set when the hold rail fired (see ``hold_fraction``): verdicts are
+    # reported but NOTHING is written, even on apply.
+    held: bool = False
+    hold_reason: str | None = None
     verdicts: list[ArticleVerdict] = Field(default_factory=list)
     dry_run: bool = True
 
@@ -93,9 +110,19 @@ async def run_purge_wrong_entity_articles(
     slug: str,
     force_adjudicate: bool = True,
     dry_run: bool = True,
+    hold_fraction: float | None = None,
+    hold_min_articles: int = 3,
 ) -> PurgeWrongEntitySummary:
     """Adjudicate every stored article of ``slug``; purge the wrong-entity
-    ones and everything sourced from them. See module doc."""
+    ones and everything sourced from them. See module doc.
+
+    ``hold_fraction`` is the batch caller's safety rail: when at least
+    ``hold_min_articles`` were checked and the purged share reaches
+    ``hold_fraction``, the company is HELD — summary reported, nothing
+    written. A company whose coverage is (nearly) all another entity's is not
+    a purge case: its profile itself is likely the wrong entity (blue ← Blue
+    Origin), which needs a human (exclude / reresolve), not an article sweep.
+    ``None`` (the single-company ops default) never holds."""
     company = (
         await session.execute(select(Company).where(Company.slug == slug))
     ).scalar_one_or_none()
@@ -127,7 +154,7 @@ async def run_purge_wrong_entity_articles(
             force_adjudicate=force_adjudicate,
         )
         if decision.rate_limited:
-            raise PurgeWrongEntityError(
+            raise PurgeRateLimitedError(
                 "LLM rate-limited mid-run — aborting (idempotent; re-dispatch "
                 f"when the limiter clears; {summary.articles_checked - 1} of "
                 f"{len(articles)} articles already adjudicated this run)"
@@ -145,7 +172,14 @@ async def run_purge_wrong_entity_articles(
                 )
             )
             continue
-        keep = decision.attach
+        # Delete only on a HIGH-confidence "another entity" verdict. A thin-evidence
+        # answer (headline-only text, low confidence either way) is what
+        # attach=False ALSO means at ingest, where skipping is recoverable;
+        # here it would delete real coverage and the rounds sourced from it.
+        uncertain = not decision.attach and not decision.confident_mismatch
+        keep = decision.attach or uncertain
+        if uncertain:
+            summary.articles_uncertain_kept += 1
         summary.verdicts.append(
             ArticleVerdict(
                 title=article.title[:110],
@@ -254,7 +288,21 @@ async def run_purge_wrong_entity_articles(
         summary.verifications_deleted,
         summary.articles_llm_error_kept,
     )
-    if dry_run:
+    if (
+        hold_fraction is not None
+        and summary.articles_checked >= hold_min_articles
+        and summary.articles_purged / summary.articles_checked >= hold_fraction
+    ):
+        summary.held = True
+        summary.hold_reason = (
+            f"{summary.articles_purged}/{summary.articles_checked} articles "
+            f"adjudicated as another entity (>= {hold_fraction:.0%}) — the "
+            "profile itself may be the wrong entity; review by hand"
+        )
+        logger.warning(
+            "purge-wrong-entity-articles: %s HELD — %s", slug, summary.hold_reason
+        )
+    if dry_run or summary.held:
         return summary
 
     for r, survivor_url in repointed:

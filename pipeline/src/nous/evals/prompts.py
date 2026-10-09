@@ -1060,9 +1060,9 @@ def _build_article_subject_match_prompt(case: CaseSpec, input_text: str) -> str:
 
 def _purge_deletes(verdict: ArticleSubjectMatch) -> bool:
     """The retroactive purge's delete rule (``GuardDecision.confident_mismatch``):
-    an adjudicated NOT-the-subject at medium/high confidence. Anything weaker
-    is kept by the purge (it is only an ingest-time skip)."""
-    return not verdict.is_subject and verdict.confidence != "low"
+    an adjudicated NOT-the-subject at HIGH confidence. Anything weaker is kept
+    by the purge (it is only an ingest-time skip)."""
+    return not verdict.is_subject and verdict.confidence == "high"
 
 
 def _guard_attaches(verdict: ArticleSubjectMatch) -> bool:

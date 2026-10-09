@@ -35,6 +35,8 @@ on:
           - clear-company-facts-apply
           - purge-wrong-entity-articles-dry-run
           - purge-wrong-entity-articles-apply
+          - purge-wrong-entity-batch-dry-run
+          - purge-wrong-entity-batch-apply
           - audit-round-entities
       slug:
         description: "Company slug to operate on (required for company-scoped commands; ignored by repair-misattributed-news-*)."
@@ -80,6 +82,18 @@ on:
         description: "audit-round-entities only: only audit rounds with amount_raised >= this, whole USD."
         required: false
         type: string
+      limit:
+        description: "purge-wrong-entity-batch-* only: suspect companies to adjudicate this run (default 10; largest suspect round first)."
+        required: false
+        type: string
+      offset:
+        description: "purge-wrong-entity-batch-* only: skip this many companies into the suspect queue (default 0)."
+        required: false
+        type: string
+      skip:
+        description: "purge-wrong-entity-batch-* only: comma-separated slugs to leave untouched (e.g. profiles that look like the wrong entity)."
+        required: false
+        type: string
       no_force_adjudicate:
         description: "purge-wrong-entity-articles-* only: allow the cheap strong-corroboration fast path to keep articles without an LLM verdict (default: adjudicate everything)."
         required: false
@@ -97,9 +111,10 @@ concurrency:
 jobs:
   ops:
     runs-on: ubuntu-latest
-    # 20: the repair-misattributed-news commands scan the whole catalog
-    # (batch-loaded, ~1-2 min expected; headroom for pooler latency).
-    timeout-minutes: 20
+    # 45: purge-wrong-entity-batch adjudicates a few dozen articles per company
+    # sequentially (it also passes --max-runtime-minutes 35 so it stops cleanly
+    # at a company boundary first). Every other command finishes in minutes.
+    timeout-minutes: 45
     defaults:
       run:
         working-directory: pipeline
@@ -136,6 +151,9 @@ jobs:
           OP_CLEAR_TOTAL: ${{ inputs.clear_total }}
           OP_CLEAR_STATUS: ${{ inputs.clear_status }}
           OP_MIN_AMOUNT: ${{ inputs.min_amount }}
+          OP_LIMIT: ${{ inputs.limit }}
+          OP_OFFSET: ${{ inputs.offset }}
+          OP_SKIP: ${{ inputs.skip }}
           OP_NO_FORCE_ADJUDICATE: ${{ inputs.no_force_adjudicate }}
         # Inputs pass through env vars (never string-interpolated into the
         # script) and the command itself is a choice allowlist. pipefail so a
@@ -187,6 +205,27 @@ jobs:
             if [ "$OP_COMMAND" = "unexclude-prominent-apply" ]; then ARGS+=(--apply); fi
             uv run nous unexclude-prominent "${ARGS[@]}" \
               | { echo '```json'; cat; echo '```'; } | tee "$GITHUB_STEP_SUMMARY"
+          elif [ "${OP_COMMAND#purge-wrong-entity-batch}" != "$OP_COMMAND" ]; then
+            # Retroactive entity audit: probe, then per-company purge of the top
+            # suspects. Dry-run itemizes would-purge articles; HELD companies
+            # (profile likely the wrong entity) are never purged.
+            ARGS=(--max-runtime-minutes 35)
+            if [ -n "$OP_LIMIT" ]; then
+              case "$OP_LIMIT" in *[!0-9]*) echo "::error::limit must be a whole number"; exit 1;; esac
+              ARGS+=(--limit "$OP_LIMIT")
+            fi
+            if [ -n "$OP_OFFSET" ]; then
+              case "$OP_OFFSET" in *[!0-9]*) echo "::error::offset must be a whole number"; exit 1;; esac
+              ARGS+=(--offset "$OP_OFFSET")
+            fi
+            if [ -n "$OP_MIN_AMOUNT" ]; then ARGS+=(--min-amount "$OP_MIN_AMOUNT"); fi
+            if [ -n "$OP_SKIP" ]; then
+              case "$OP_SKIP" in *[!a-z0-9,-]*) echo "::error::skip must be comma-separated slugs"; exit 1;; esac
+              ARGS+=(--skip "$OP_SKIP")
+            fi
+            if [ "$OP_COMMAND" = "purge-wrong-entity-batch-apply" ]; then ARGS+=(--apply); fi
+            uv run nous purge-wrong-entity-batch "${ARGS[@]}" \
+              | { echo '```json'; cat; echo '```'; } | tee -a "$GITHUB_STEP_SUMMARY"
           elif [ "$OP_COMMAND" = "audit-round-entities" ]; then
             # Catalog-wide $0 entity-corroboration probe: read-only report.
             ARGS=()

@@ -2902,6 +2902,131 @@ def purge_wrong_entity_articles_cmd(
     asyncio.run(_run())
 
 
+@cli.command("purge-wrong-entity-batch")
+@click.option(
+    "--limit",
+    type=int,
+    default=10,
+    show_default=True,
+    help="Suspect companies to adjudicate this run (largest suspect round first).",
+)
+@click.option(
+    "--offset",
+    type=int,
+    default=0,
+    show_default=True,
+    help="Skip this many companies into the queue (page through a dry-run).",
+)
+@click.option(
+    "--min-amount",
+    type=str,
+    default=None,
+    help="Only queue suspect rounds with amount_raised >= this (whole USD).",
+)
+@click.option(
+    "--hold-fraction",
+    type=float,
+    default=0.8,
+    show_default=True,
+    help=(
+        "HOLD (never purge) a company when this share of >= 3 checked "
+        "articles adjudicates as another entity — the profile itself is "
+        "likely wrong and needs a human."
+    ),
+)
+@click.option(
+    "--max-runtime-minutes",
+    type=float,
+    default=None,
+    help="Wall-clock budget, checked between companies.",
+)
+@click.option(
+    "--skip",
+    "skip_slugs",
+    type=str,
+    default="",
+    help=(
+        "Comma-separated slugs to leave untouched (review a dry-run page, then "
+        "apply it skipping companies whose PROFILE looks like the wrong entity)."
+    ),
+)
+@click.option(
+    "--apply",
+    is_flag=True,
+    default=False,
+    help="Actually purge. Default is a dry-run itemizing every would-purge article.",
+)
+def purge_wrong_entity_batch_cmd(
+    limit: int,
+    offset: int,
+    min_amount: str | None,
+    hold_fraction: float,
+    max_runtime_minutes: float | None,
+    skip_slugs: str,
+    apply: bool,
+) -> None:
+    """The retroactive entity audit: probe for wrong-entity suspect rounds,
+    then run purge-wrong-entity-articles over the top suspect companies.
+
+    DeepSeek-paid (~$0.01/company). Dry-run by default; companies whose
+    coverage is nearly all another entity's are HELD for a human; stops the
+    whole queue on a rate limit.
+    """
+    from datetime import UTC, datetime
+    from decimal import Decimal, InvalidOperation
+
+    from nous.db.session import get_session_factory
+    from nous.observability import (
+        emit_run_telemetry,
+        record_pipeline_run,
+        write_step_summary,
+    )
+    from nous.pipeline.purge_wrong_entity_batch import (
+        render_batch_table,
+        run_purge_wrong_entity_batch,
+    )
+
+    try:
+        parsed_min = Decimal(min_amount) if min_amount else None
+    except InvalidOperation:
+        raise click.ClickException(
+            f"--min-amount must be a whole-USD number, got {min_amount!r}"
+        ) from None
+    if not 0 < hold_fraction <= 1:
+        raise click.ClickException("--hold-fraction must be in (0, 1]")
+
+    async def _run() -> None:
+        started = datetime.now(UTC)
+        try:
+            summary = await run_purge_wrong_entity_batch(
+                get_session_factory(),
+                limit=limit,
+                offset=offset,
+                min_amount=parsed_min,
+                dry_run=not apply,
+                hold_fraction=hold_fraction,
+                max_runtime_minutes=max_runtime_minutes,
+                skip=frozenset(s.strip() for s in skip_slugs.split(",") if s.strip()),
+            )
+            click.echo(summary.model_dump_json(indent=2))
+            write_step_summary(render_batch_table(summary))
+            if apply:
+                await record_pipeline_run(
+                    "purge-wrong-entity-batch",
+                    started_at=started,
+                    inputs_seen=summary.articles_checked,
+                    rows_written=summary.articles_purged + summary.rounds_purged,
+                    summary=summary,
+                )
+        finally:
+            emit_run_telemetry("purge-wrong-entity-batch")
+
+    # Unguarded like the other ops levers: a manually-dispatched lever's crash
+    # is watched live, and an error row would nag every cron until its next
+    # successful apply.
+    _run_stage(None, _run())
+
+
 @cli.command("clear-company-facts")
 @click.argument("slug")
 @click.option(

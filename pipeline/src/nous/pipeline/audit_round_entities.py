@@ -111,9 +111,13 @@ async def run_audit_round_entities(
     session: AsyncSession,
     *,
     min_amount: Decimal | None = None,
+    suspect_limit: int | None = SUSPECT_LIMIT,
 ) -> AuditRoundEntitiesSummary:
     """Audit every shown company's rounds for entity corroboration. See
-    module docstring. Read-only."""
+    module docstring. Read-only.
+
+    ``suspect_limit`` caps the itemized list for the human-read JSON report;
+    ``None`` returns every suspect (the purge-wrong-entity-batch queue)."""
     rows = (
         await session.execute(
             select(
@@ -259,8 +263,9 @@ async def run_audit_round_entities(
     # Secondary slug key: equal-amount (incl. null-amount) suspects keep a
     # stable order across runs regardless of DB iteration order.
     all_suspects.sort(key=lambda t: (-t[0], t[1].slug))
-    summary.suspects = [s for _, s in all_suspects[:SUSPECT_LIMIT]]
-    summary.suspects_truncated = max(0, len(all_suspects) - SUSPECT_LIMIT)
+    kept = all_suspects if suspect_limit is None else all_suspects[:suspect_limit]
+    summary.suspects = [s for _, s in kept]
+    summary.suspects_truncated = len(all_suspects) - len(kept)
 
     logger.info(
         "audit-round-entities: %d rounds, %d checked (%d body / %d headline), "

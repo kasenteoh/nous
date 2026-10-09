@@ -405,3 +405,32 @@ async def test_llm_error_skips_unstored_then_next_sweep_attaches(
     assert summary2.articles_inserted == 1
     rows = (await db.execute(select(NewsArticle))).scalars().all()
     assert len(rows) == 1
+
+
+@pytest.mark.parametrize(
+    ("verdict", "confident"),
+    [
+        (ArticleSubjectMatch(is_subject=False, confidence="high"), True),
+        (ArticleSubjectMatch(is_subject=False, confidence="medium"), False),
+        (ArticleSubjectMatch(is_subject=False, confidence="low"), False),
+        (ArticleSubjectMatch(is_subject=True, confidence="low"), False),
+    ],
+)
+async def test_confident_mismatch_flag(
+    monkeypatch: pytest.MonkeyPatch, verdict: ArticleSubjectMatch, confident: bool
+) -> None:
+    """Only a HIGH-confidence 'not this company' is a confident mismatch —
+    the retroactive purge deletes on nothing weaker."""
+
+    async def _fake(prompt: str, schema: type) -> ArticleSubjectMatch:
+        return verdict
+
+    monkeypatch.setattr("nous.pipeline.entity_guard.complete_json", _fake)
+    decision = await check_article_entity(
+        _co("Wonder", _EDTECH_WONDER_DESC),
+        title="Wonder raises $30M",
+        text=_FOOD_WONDER_BODY,
+        force_adjudicate=True,
+    )
+    assert decision.attach is False
+    assert decision.confident_mismatch is confident
