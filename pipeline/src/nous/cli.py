@@ -1,7 +1,14 @@
 import logging
+from collections.abc import Coroutine
 from pathlib import Path
+from typing import TYPE_CHECKING, Any, TypeVar
 
 import click
+
+if TYPE_CHECKING:
+    from pydantic import BaseModel
+
+_T = TypeVar("_T")
 
 
 @click.group()
@@ -13,6 +20,36 @@ def cli() -> None:
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
     )
+
+
+def _sum_counts(summary: "BaseModel") -> int:
+    """Total of a repair summary's integer counters (bools excluded) — the
+    rows_written figure for multi-pass repairs that have no single output."""
+    return sum(
+        v
+        for v in summary.model_dump().values()
+        if isinstance(v, int) and not isinstance(v, bool)
+    )
+
+
+def _run_stage(stage: str | None, main: Coroutine[Any, Any, _T]) -> _T:
+    """``asyncio.run(main)``, recording a ``status='error'`` pipeline_runs row
+    under *stage* if the stage crashes (see ``observability.guard_stage``).
+
+    Pass ``stage=None`` for invocations whose success path records no row under
+    that name (e.g. ``--dry-run``): an error row there would never be superseded
+    and ``pipeline-health --strict-errors`` would alert on every later run.
+    ``click.ClickException`` is an operator/usage error, not a stage failure,
+    so it propagates without a row.
+    """
+    import asyncio
+
+    if stage is None:
+        return asyncio.run(main)
+
+    from nous.observability import guard_stage
+
+    return asyncio.run(guard_stage(stage, main, ignore=(click.ClickException,)))
 
 
 @cli.command("resolve-homepages")
@@ -56,16 +93,18 @@ def resolve_homepages(
     concurrency: int,
 ) -> None:
     """Attempt to resolve a homepage URL for companies that lack one."""
-    import asyncio
+    from datetime import UTC, datetime
 
     from nous.config import Settings
     from nous.db.session import AsyncSessionLocal
+    from nous.observability import record_pipeline_run
     from nous.pipeline.resolve_homepages import run_resolve_homepages
     from nous.sources.homepage import HomepageClient
 
     settings = Settings()
 
     async def _run() -> None:
+        started = datetime.now(UTC)
         async with (
             HomepageClient(
                 settings.SEC_USER_AGENT,
@@ -82,8 +121,15 @@ def resolve_homepages(
                 concurrency=concurrency,
             )
             click.echo(summary.model_dump_json(indent=2))
+            await record_pipeline_run(
+                "resolve-homepages",
+                started_at=started,
+                inputs_seen=summary.companies_seen,
+                rows_written=summary.websites_resolved,
+                summary=summary,
+            )
 
-    asyncio.run(_run())
+    _run_stage("resolve-homepages", _run())
 
 
 @cli.command("scrape-homepages")
@@ -134,10 +180,11 @@ def scrape_homepages(
     concurrency: int,
 ) -> None:
     """Fetch each company's homepage and store raw HTML in raw_pages."""
-    import asyncio
+    from datetime import UTC, datetime
 
     from nous.config import Settings
     from nous.db.session import AsyncSessionLocal
+    from nous.observability import record_pipeline_run
     from nous.pipeline.scrape_homepages import run_scrape_homepages
     from nous.sources.headless_browser import HeadlessBrowserClient
     from nous.sources.homepage import HomepageClient
@@ -145,6 +192,7 @@ def scrape_homepages(
     settings = Settings()
 
     async def _run() -> None:
+        started = datetime.now(UTC)
         async with (
             HomepageClient(
                 settings.SEC_USER_AGENT,
@@ -167,11 +215,18 @@ def scrape_homepages(
                     concurrency=concurrency,
                 )
                 click.echo(summary.model_dump_json(indent=2))
+                await record_pipeline_run(
+                    "scrape-homepages",
+                    started_at=started,
+                    inputs_seen=summary.companies_seen,
+                    rows_written=summary.pages_fetched,
+                    summary=summary,
+                )
             finally:
                 if browser_client is not None:
                     await browser_client.__aexit__(None, None, None)
 
-    asyncio.run(_run())
+    _run_stage("scrape-homepages", _run())
 
 
 @cli.command("enrich-companies")
@@ -224,7 +279,6 @@ def enrich_companies(
     redescribe_outdated: bool,
 ) -> None:
     """Call the LLM to generate descriptions + people for companies with raw pages."""
-    import asyncio
     from datetime import UTC, datetime
 
     from nous.db.session import AsyncSessionLocal
@@ -282,7 +336,7 @@ def enrich_companies(
         finally:
             emit_run_telemetry("enrich-companies")
 
-    asyncio.run(_run())
+    _run_stage("enrich-companies", _run())
 
 
 @cli.command("embed-companies")
@@ -304,7 +358,6 @@ def embed_companies(limit: int) -> None:
     cleanly without it. Selection is idempotent via embedding_text_hash:
     unchanged rows are never re-embedded, so steady-state runs no-op.
     """
-    import asyncio
     from datetime import UTC, datetime
 
     from nous.config import Settings
@@ -332,7 +385,7 @@ def embed_companies(limit: int) -> None:
             summary=summary,
         )
 
-    asyncio.run(_run())
+    _run_stage("embed-companies", _run())
 
 
 @cli.command("compute-themes")
@@ -372,7 +425,6 @@ def compute_themes(limit: int, ttl_days: int, force: bool) -> None:
     centroid-match their previous themes (slugs stable, zero LLM calls), and
     only refresh metrics; the TTL gate keeps the effective cadence monthly.
     """
-    import asyncio
     from datetime import UTC, datetime
 
     from nous.db.session import AsyncSessionLocal
@@ -407,7 +459,7 @@ def compute_themes(limit: int, ttl_days: int, force: bool) -> None:
         finally:
             emit_run_telemetry("compute-themes")
 
-    asyncio.run(_run())
+    _run_stage("compute-themes", _run())
 
 
 @cli.command("compute-map-positions")
@@ -435,7 +487,6 @@ def compute_map_positions(ttl_days: int, force: bool) -> None:
     it. $0: local CPU, no LLM. Idempotent: unchanged embeddings re-project to
     byte-identical coords; the per-industry TTL gate keeps the cadence monthly.
     """
-    import asyncio
     from datetime import UTC, datetime
 
     from nous.db.session import AsyncSessionLocal
@@ -466,7 +517,7 @@ def compute_map_positions(ttl_days: int, force: bool) -> None:
             summary=summary,
         )
 
-    asyncio.run(_run())
+    _run_stage("compute-map-positions", _run())
 
 
 @cli.command("compute-momentum")
@@ -490,7 +541,6 @@ def compute_momentum(as_of_week: str | None) -> None:
     re-run overwrites with byte-identical momentum_score (re-stamping only
     momentum_computed_at).
     """
-    import asyncio
     from datetime import UTC, datetime
     from datetime import date as _date
 
@@ -517,7 +567,7 @@ def compute_momentum(as_of_week: str | None) -> None:
             summary=summary,
         )
 
-    asyncio.run(_run())
+    _run_stage("compute-momentum", _run())
 
 
 @cli.command("compute-completeness")
@@ -542,7 +592,6 @@ def compute_completeness(limit: int | None) -> None:
     overwrites with byte-identical completeness_score (re-stamping only
     completeness_computed_at).
     """
-    import asyncio
     from datetime import UTC, datetime
 
     from nous.db.session import AsyncSessionLocal
@@ -564,7 +613,7 @@ def compute_completeness(limit: int | None) -> None:
             summary=summary,
         )
 
-    asyncio.run(_run())
+    _run_stage("compute-completeness", _run())
 
 
 @cli.command("refresh-vc-portfolios")
@@ -592,10 +641,11 @@ def refresh_vc_portfolios_cmd(
     firms: tuple[str, ...], similarity_threshold: float | None
 ) -> None:
     """Refresh companies from registered VC firm portfolio pages."""
-    import asyncio
+    from datetime import UTC, datetime
 
     from nous.config import Settings
     from nous.db.session import AsyncSessionLocal
+    from nous.observability import record_pipeline_run
     from nous.pipeline.refresh_vc_portfolios import run_refresh_vc_portfolios
     from nous.sources.homepage import HomepageClient
 
@@ -610,6 +660,7 @@ def refresh_vc_portfolios_cmd(
     logger = logging.getLogger("nous.cli.refresh_vc_portfolios")
 
     async def _run() -> None:
+        started = datetime.now(UTC)
         async with (
             HomepageClient(
                 settings.SEC_USER_AGENT,
@@ -627,8 +678,15 @@ def refresh_vc_portfolios_cmd(
                 "refresh-vc-portfolios summary: %s", summary.model_dump_json()
             )
             click.echo(summary.model_dump_json(indent=2))
+            await record_pipeline_run(
+                "refresh-vc-portfolios",
+                started_at=started,
+                inputs_seen=summary.entries_seen,
+                rows_written=summary.companies_created + summary.investors_linked,
+                summary=summary,
+            )
 
-    asyncio.run(_run())
+    _run_stage("refresh-vc-portfolios", _run())
 
 
 @cli.command("discover-github-trending")
@@ -654,7 +712,6 @@ def discover_github_trending_cmd(
     limit: int | None, similarity_threshold: float | None
 ) -> None:
     """Discover companies from GitHub's trending page (LLM-gated)."""
-    import asyncio
     from datetime import UTC, datetime
 
     from nous.config import Settings
@@ -705,7 +762,7 @@ def discover_github_trending_cmd(
         finally:
             emit_run_telemetry("discover-github-trending")
 
-    asyncio.run(_run())
+    _run_stage("discover-github-trending", _run())
 
 
 @cli.command("ingest-news")
@@ -744,7 +801,6 @@ def ingest_news(
     similarity_threshold: float | None,
 ) -> None:
     """Pull funding-keyword news articles into the news_articles table."""
-    import asyncio
     from datetime import UTC, datetime
 
     from nous.config import Settings
@@ -794,7 +850,7 @@ def ingest_news(
         finally:
             emit_run_telemetry("ingest-news")
 
-    asyncio.run(_run())
+    _run_stage("ingest-news", _run())
 
 
 @cli.command("extract-funding")
@@ -827,7 +883,6 @@ def extract_funding(
     limit: int, include_low_confidence: bool, requery_totals: bool
 ) -> None:
     """Run the funding-extraction LLM over unprocessed news_articles."""
-    import asyncio
     from datetime import UTC, datetime
 
     from nous.db.session import AsyncSessionLocal
@@ -856,7 +911,7 @@ def extract_funding(
         finally:
             emit_run_telemetry("extract-funding")
 
-    asyncio.run(_run())
+    _run_stage("extract-funding", _run())
 
 
 # ~5-year window: long enough to recover a company's full visible funding
@@ -1038,7 +1093,6 @@ def extract_funding_website(
     Runs only for companies that have scraped pages but no funding rounds yet,
     so the news/TechCrunch path always stays the primary source.
     """
-    import asyncio
     from datetime import UTC, datetime
 
     from nous.db.session import AsyncSessionLocal
@@ -1076,7 +1130,7 @@ def extract_funding_website(
         finally:
             emit_run_telemetry("extract-funding-website")
 
-    asyncio.run(_run())
+    _run_stage("extract-funding-website", _run())
 
 
 @cli.command("analyze-competitors")
@@ -1115,7 +1169,6 @@ def analyze_competitors(
     limit: int, ttl_days: int, dry_run: bool, concurrency: int
 ) -> None:
     """Run the competitor-analysis LLM over eligible companies."""
-    import asyncio
     from datetime import UTC, datetime
 
     from nous.db.session import AsyncSessionLocal
@@ -1146,7 +1199,7 @@ def analyze_competitors(
         finally:
             emit_run_telemetry("analyze-competitors")
 
-    asyncio.run(_run())
+    _run_stage(None if dry_run else "analyze-competitors", _run())
 
 
 @cli.command("refresh-investor-counts")
@@ -1158,7 +1211,6 @@ def refresh_investor_counts_cmd() -> None:
     Idempotent: a full recompute from first principles, including zeroing
     investors with no qualifying links.
     """
-    import asyncio
     from datetime import UTC, datetime
 
     from nous.db.session import AsyncSessionLocal
@@ -1179,7 +1231,7 @@ def refresh_investor_counts_cmd() -> None:
             summary=summary,
         )
 
-    asyncio.run(_run())
+    _run_stage("refresh-investor-counts", _run())
 
 
 @cli.command("refresh-latest-round")
@@ -1192,7 +1244,6 @@ def refresh_latest_round_cmd() -> None:
     cross-table aggregate. Set-based and idempotent: a full recompute that also
     clears stale values for companies whose last round was removed.
     """
-    import asyncio
     from datetime import UTC, datetime
 
     from nous.db.session import AsyncSessionLocal
@@ -1213,7 +1264,7 @@ def refresh_latest_round_cmd() -> None:
             summary=summary,
         )
 
-    asyncio.run(_run())
+    _run_stage("refresh-latest-round", _run())
 
 
 @cli.command("dedup-investors")
@@ -1231,7 +1282,6 @@ def dedup_investors_cmd() -> None:
     Idempotent: a second run finds no junk/duplicates and reclassifies to the
     same types, so it is a no-op.
     """
-    import asyncio
     from datetime import UTC, datetime
 
     from nous.db.session import AsyncSessionLocal
@@ -1256,7 +1306,7 @@ def dedup_investors_cmd() -> None:
             summary=summary,
         )
 
-    asyncio.run(_run())
+    _run_stage("dedup-investors", _run())
 
 
 @cli.command("dedup-companies")
@@ -1275,13 +1325,14 @@ def dedup_investors_cmd() -> None:
 )
 def dedup_companies(llm_limit: int, dry_run: bool) -> None:
     """Collapse duplicate company rows (exact-domain, then LLM-gated fuzzy)."""
-    import asyncio
+    from datetime import UTC, datetime
 
     from nous.db.session import AsyncSessionLocal
-    from nous.observability import emit_run_telemetry
+    from nous.observability import emit_run_telemetry, record_pipeline_run
     from nous.pipeline.dedup_companies import run_dedup_companies
 
     async def _run() -> None:
+        started = datetime.now(UTC)
         try:
             async with AsyncSessionLocal() as session:
                 summary = await run_dedup_companies(
@@ -1290,10 +1341,18 @@ def dedup_companies(llm_limit: int, dry_run: bool) -> None:
                     dry_run=dry_run,
                 )
                 click.echo(summary.model_dump_json(indent=2))
+                if not dry_run:
+                    await record_pipeline_run(
+                        "dedup-companies",
+                        started_at=started,
+                        inputs_seen=summary.companies_seen,
+                        rows_written=summary.domain_merges + summary.llm_merges,
+                        summary=summary,
+                    )
         finally:
             emit_run_telemetry("dedup-companies")
 
-    asyncio.run(_run())
+    _run_stage(None if dry_run else "dedup-companies", _run())
 
 
 @cli.command("estimate-employees")
@@ -1333,10 +1392,11 @@ def estimate_employees(
     source is recorded for attribution. Wellfound is tried last because it is
     mostly Cloudflare-blocked.
     """
-    import asyncio
+    from datetime import UTC, datetime
 
     from nous.config import Settings
     from nous.db.session import AsyncSessionLocal
+    from nous.observability import record_pipeline_run
     from nous.pipeline.estimate_employees import run_estimate_employees
     from nous.sources.homepage import HomepageClient
 
@@ -1348,6 +1408,7 @@ def estimate_employees(
     )
 
     async def _run() -> None:
+        started = datetime.now(UTC)
         async with (
             HomepageClient(
                 settings.SEC_USER_AGENT,
@@ -1364,8 +1425,15 @@ def estimate_employees(
                 max_runtime_minutes=max_runtime_minutes,
             )
             click.echo(summary.model_dump_json(indent=2))
+            await record_pipeline_run(
+                "estimate-employees",
+                started_at=started,
+                inputs_seen=summary.companies_seen,
+                rows_written=summary.updated,
+                summary=summary,
+            )
 
-    asyncio.run(_run())
+    _run_stage("estimate-employees", _run())
 
 
 @cli.command("snapshot-companies")
@@ -1385,10 +1453,11 @@ def snapshot_companies(week: str | None) -> None:
     Monday). Idempotent: re-running for the same week refreshes the row in
     place. Cheap enough to run weekly; backfill a past week with --week.
     """
-    import asyncio
+    from datetime import UTC, datetime
     from datetime import date as _date
 
     from nous.db.session import AsyncSessionLocal
+    from nous.observability import record_pipeline_run
     from nous.pipeline.snapshot_companies import run_snapshot_companies
 
     parsed_week: _date | None = (
@@ -1396,11 +1465,19 @@ def snapshot_companies(week: str | None) -> None:
     )
 
     async def _run() -> None:
+        started = datetime.now(UTC)
         async with AsyncSessionLocal() as session:
             summary = await run_snapshot_companies(session, week=parsed_week)
             click.echo(summary.model_dump_json(indent=2))
+            await record_pipeline_run(
+                "snapshot-companies",
+                started_at=started,
+                inputs_seen=summary.snapshot_count,
+                rows_written=summary.snapshot_count,
+                summary=summary,
+            )
 
-    asyncio.run(_run())
+    _run_stage("snapshot-companies", _run())
 
 
 @cli.command("normalize-taxonomy")
@@ -1418,7 +1495,6 @@ def normalize_taxonomy_cmd() -> None:
     and idempotent: a second run finds nothing to change. No schema change
     (content update only).
     """
-    import asyncio
     from datetime import UTC, datetime
 
     from nous.db.session import AsyncSessionLocal
@@ -1438,7 +1514,7 @@ def normalize_taxonomy_cmd() -> None:
             summary=summary,
         )
 
-    asyncio.run(_run())
+    _run_stage("normalize-taxonomy", _run())
 
 
 @cli.command("name-quality")
@@ -1515,7 +1591,6 @@ def normalize_hq_state_cmd(limit: int | None, dry_run: bool) -> None:
     One commit per row. Idempotent: a second full run rewrites nothing. Records
     no new source — pure format normalization, no schema change.
     """
-    import asyncio
     from datetime import UTC, datetime
 
     from nous.db.session import AsyncSessionLocal
@@ -1538,7 +1613,7 @@ def normalize_hq_state_cmd(limit: int | None, dry_run: bool) -> None:
                 summary=summary,
             )
 
-    asyncio.run(_run())
+    _run_stage(None if dry_run else "normalize-hq-state", _run())
 
 
 @cli.command("resolve-website-fallback")
@@ -1595,7 +1670,6 @@ def resolve_website_fallback_cmd(
     Idempotent, self-bounding on ``website IS NULL``. Use ``--dry-run`` to
     measure per-source yield before an apply run. $0 (both sources are free).
     """
-    import asyncio
     from datetime import UTC, datetime
 
     from nous.config import Settings
@@ -1643,7 +1717,7 @@ def resolve_website_fallback_cmd(
                 flag_empty=True,
             )
 
-    asyncio.run(_run())
+    _run_stage(None if dry_run else "resolve-website-fallback", _run())
 
 
 @cli.command("describe-fallback")
@@ -1845,7 +1919,6 @@ def link_competitors(
     normalized_name exactly; this densifies the graph by trigram-matching the
     rest, best-match-only with a tie guard. Idempotent (only touches NULL FKs).
     """
-    import asyncio
     from datetime import UTC, datetime
 
     from nous.db.session import AsyncSessionLocal
@@ -1872,7 +1945,7 @@ def link_competitors(
                 summary=summary,
             )
 
-    asyncio.run(_run())
+    _run_stage(None if dry_run else "link-competitors", _run())
 
 
 @cli.command("derive-relationships")
@@ -1895,7 +1968,6 @@ def derive_relationships(dry_run: bool, max_similar_per_company: int) -> None:
     Replace-style and idempotent, zero LLM. Run after link-competitors so the
     competitor projection picks up freshly resolved FKs.
     """
-    import asyncio
     from datetime import UTC, datetime
 
     from nous.db.session import AsyncSessionLocal
@@ -1920,7 +1992,7 @@ def derive_relationships(dry_run: bool, max_similar_per_company: int) -> None:
                 summary=summary,
             )
 
-    asyncio.run(_run())
+    _run_stage(None if dry_run else "derive-relationships", _run())
 
 
 @cli.command("db-stats")
@@ -2167,7 +2239,6 @@ def verify_sources_cmd(limit: int, dry_run: bool, refetch: bool) -> None:
     web shows the ✓ for ``supported`` only. ``--refetch`` widens the slice to
     the refetch bucket (live-fetched transiently, scraping etiquette applies).
     """
-    import asyncio
     from datetime import UTC, datetime
 
     from nous.config import Settings
@@ -2217,7 +2288,7 @@ def verify_sources_cmd(limit: int, dry_run: bool, refetch: bool) -> None:
         finally:
             emit_run_telemetry("verify-sources")
 
-    asyncio.run(_run())
+    _run_stage(None if dry_run else "verify-sources", _run())
 
 
 @cli.command("judge-eligibility")
@@ -2243,13 +2314,14 @@ def verify_sources_cmd(limit: int, dry_run: bool, refetch: bool) -> None:
 )
 def judge_eligibility(limit: int | None, rejudge_nonstartup_signals: bool) -> None:
     """Backfill the is-this-a-startup judgment for already-enriched companies."""
-    import asyncio
+    from datetime import UTC, datetime
 
     from nous.db.session import get_session_factory
-    from nous.observability import emit_run_telemetry
+    from nous.observability import emit_run_telemetry, record_pipeline_run
     from nous.pipeline.judge_eligibility import run_judge_eligibility
 
     async def _run() -> None:
+        started = datetime.now(UTC)
         # The stage manages its own per-company sessions from the factory, so a
         # wedged free-tier connection skips one company instead of hanging.
         try:
@@ -2259,10 +2331,19 @@ def judge_eligibility(limit: int | None, rejudge_nonstartup_signals: bool) -> No
                 rejudge_nonstartup_signals=rejudge_nonstartup_signals,
             )
             click.echo(summary.model_dump_json(indent=2))
+            await record_pipeline_run(
+                "judge-eligibility",
+                started_at=started,
+                inputs_seen=summary.companies_judged
+                + summary.llm_failures
+                + summary.skipped_rate_limited,
+                rows_written=summary.companies_judged,
+                summary=summary,
+            )
         finally:
             emit_run_telemetry("judge-eligibility")
 
-    asyncio.run(_run())
+    _run_stage("judge-eligibility", _run())
 
 
 @cli.command("infer-hq-country")
@@ -2451,17 +2532,27 @@ def adapter_health(floor: int | None, strict: bool) -> None:
 )
 def repair_catalog(dry_run: bool) -> None:
     """One-time catalog repair: Lightspeed badge-suffix names + parked-domain rows."""
-    import asyncio
+    from datetime import UTC, datetime
 
     from nous.db.session import AsyncSessionLocal
+    from nous.observability import record_pipeline_run
     from nous.pipeline.repair_catalog import run_repair_catalog
 
     async def _run() -> None:
+        started = datetime.now(UTC)
         async with AsyncSessionLocal() as session:
             summary = await run_repair_catalog(session, dry_run=dry_run)
             click.echo(summary.model_dump_json(indent=2))
+            if not dry_run:
+                await record_pipeline_run(
+                    "repair-catalog",
+                    started_at=started,
+                    inputs_seen=0,
+                    rows_written=_sum_counts(summary),
+                    summary=summary,
+                )
 
-    asyncio.run(_run())
+    _run_stage(None if dry_run else "repair-catalog", _run())
 
 
 @cli.command("repair-misattributed-news")
@@ -2564,17 +2655,27 @@ def repair_wrong_websites(dry_run: bool) -> None:
         → clear exclusion + eligibility_checked_at so judge-eligibility
           re-judges from the corrected site.
     """
-    import asyncio
+    from datetime import UTC, datetime
 
     from nous.db.session import AsyncSessionLocal
+    from nous.observability import record_pipeline_run
     from nous.pipeline.repair_wrong_websites import run_repair_wrong_websites
 
     async def _run() -> None:
+        started = datetime.now(UTC)
         async with AsyncSessionLocal() as session:
             summary = await run_repair_wrong_websites(session, dry_run=dry_run)
             click.echo(summary.model_dump_json(indent=2))
+            if not dry_run:
+                await record_pipeline_run(
+                    "repair-wrong-websites",
+                    started_at=started,
+                    inputs_seen=0,
+                    rows_written=_sum_counts(summary),
+                    summary=summary,
+                )
 
-    asyncio.run(_run())
+    _run_stage(None if dry_run else "repair-wrong-websites", _run())
 
 
 @cli.command("repair-duplicate-rounds")
@@ -2595,7 +2696,6 @@ def repair_duplicate_rounds(dry_run: bool) -> None:
     non-null fields in and repointing their investor links. Idempotent: a
     second run finds nothing to collapse.
     """
-    import asyncio
     from datetime import UTC, datetime
 
     from nous.db.session import AsyncSessionLocal
@@ -2617,7 +2717,7 @@ def repair_duplicate_rounds(dry_run: bool) -> None:
                 summary=summary,
             )
 
-    asyncio.run(_run())
+    _run_stage(None if dry_run else "repair-duplicate-rounds", _run())
 
 
 @cli.command("delete-round")
