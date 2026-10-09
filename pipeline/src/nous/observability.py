@@ -7,15 +7,24 @@ Public API:
     emit_run_telemetry(stage)   — log ledger + optional GH step summary block
     write_step_summary(markdown) — append markdown to GITHUB_STEP_SUMMARY if set
     record_pipeline_run(...)     — persist a stage run to pipeline_runs + alert
+    guard_stage(stage, main)     — run a stage; record status='error' if it raises
 """
 
 from __future__ import annotations
 
 import logging
 import os
+from collections.abc import Awaitable
 from datetime import UTC, datetime
+from typing import TypeVar
 
 from pydantic import BaseModel
+
+_T = TypeVar("_T")
+
+# pipeline_runs.error is TEXT, but a full traceback repr can be enormous; the
+# exception type + message is what the alert needs (the step log has the rest).
+_MAX_ERROR_CHARS = 2000
 
 # nous.llm.client / nous.db are intentionally imported lazily inside the
 # functions that need them so that importing observability.py (e.g. for
@@ -156,3 +165,52 @@ async def record_pipeline_run(
         # A GitHub Actions annotation (surfaces in the run UI); harmless locally.
         print(f"::warning::{msg}", flush=True)
         logger.warning(msg)
+
+
+def format_stage_error(exc: BaseException) -> str:
+    """``"<ExcType>: <message>"``, truncated to fit a pipeline_runs.error cell."""
+    text = f"{type(exc).__name__}: {exc}"
+    if len(text) > _MAX_ERROR_CHARS:
+        text = text[: _MAX_ERROR_CHARS - 1] + "…"
+    return text
+
+
+async def guard_stage(
+    stage: str,
+    main: Awaitable[_T],
+    *,
+    ignore: tuple[type[BaseException], ...] = (),
+) -> _T:
+    """Await *main*; if it raises, record a ``status='error'`` run, then re-raise.
+
+    Without this, a stage that CRASHES writes no ``pipeline_runs`` row at all
+    (stages record only on their success path), so ``pipeline-health
+    --strict-errors`` — and the deduped GitHub-issue alert it gates — can never
+    fire on the failure class it exists for. Every workflow stage step is
+    ``continue-on-error``, so the red step alone is easy to miss.
+
+    The error row must be SUPERSEDED by a later success row for the same
+    ``stage`` (pipeline-health reads the latest row per stage), so only guard
+    invocations whose success path records under the same stage name —
+    otherwise one crash alerts forever.
+
+    ``ignore`` lists exception types that are operator/usage errors rather than
+    stage failures (the CLI passes ``click.ClickException``); they propagate
+    without a row. ``BaseException`` subclasses outside ``Exception``
+    (KeyboardInterrupt, SystemExit, cancellation) are never recorded.
+    Recording is best-effort (``record_pipeline_run`` never raises), so the
+    original exception is always the one that propagates.
+    """
+    started_at = datetime.now(UTC)
+    try:
+        return await main
+    except Exception as exc:
+        if not isinstance(exc, ignore):
+            await record_pipeline_run(
+                stage,
+                started_at=started_at,
+                inputs_seen=0,
+                rows_written=0,
+                error=format_stage_error(exc),
+            )
+        raise
