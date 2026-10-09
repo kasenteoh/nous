@@ -406,3 +406,58 @@ async def test_error_paths(db: AsyncSession) -> None:
     await db.commit()
     with pytest.raises(PurgeWrongEntityError, match="no description"):
         await run_purge_wrong_entity_articles(db, slug=husk.slug)
+
+
+async def test_hold_rail_reports_but_never_writes_on_apply(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # 2 of 3 articles are the other Wonder (67%): at hold_fraction 0.6 the
+    # profile itself looks like the wrong entity — held, nothing written even
+    # though apply was requested.
+    co, wrong_round, _ = await _seed_wonder(db)
+    _adjudicate_by_content(monkeypatch)
+    summary = await run_purge_wrong_entity_articles(
+        db, slug=co.slug, dry_run=False, hold_fraction=0.6
+    )
+    assert summary.held is True
+    assert summary.hold_reason and "2/3" in summary.hold_reason
+    assert summary.articles_purged == 2  # verdicts still reported
+
+    arts = (
+        (await db.execute(select(NewsArticle).where(NewsArticle.company_id == co.id)))
+        .scalars()
+        .all()
+    )
+    assert len(arts) == 3
+    assert await db.get(FundingRound, wrong_round.id) is not None
+    await db.refresh(co)
+    assert co.status == "ipo"
+
+
+async def test_hold_rail_below_threshold_purges(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    co, wrong_round, real_round = await _seed_wonder(db)
+    _adjudicate_by_content(monkeypatch)
+    summary = await run_purge_wrong_entity_articles(
+        db, slug=co.slug, dry_run=False, hold_fraction=0.8
+    )
+    assert summary.held is False
+    assert summary.articles_purged == 2
+    assert await db.get(FundingRound, wrong_round.id) is None
+    assert await db.get(FundingRound, real_round.id) is not None
+
+
+async def test_rate_limit_raises_distinct_error(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from nous.pipeline.purge_wrong_entity_articles import PurgeRateLimitedError
+
+    co, _, _ = await _seed_wonder(db)
+
+    async def _limited(prompt: str, schema: type) -> ArticleSubjectMatch:
+        raise LLMRateLimitError("429")
+
+    monkeypatch.setattr("nous.pipeline.entity_guard.complete_json", _limited)
+    with pytest.raises(PurgeRateLimitedError):
+        await run_purge_wrong_entity_articles(db, slug=co.slug)
