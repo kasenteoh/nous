@@ -461,3 +461,22 @@ async def test_rate_limit_raises_distinct_error(
     monkeypatch.setattr("nous.pipeline.entity_guard.complete_json", _limited)
     with pytest.raises(PurgeRateLimitedError):
         await run_purge_wrong_entity_articles(db, slug=co.slug)
+
+
+async def test_low_confidence_mismatch_is_kept(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Thin evidence → the prompt answers is_subject=false at LOW confidence.
+    # That's the right ingest-time skip, but never proof enough to DELETE.
+    co, wrong_round, _ = await _seed_wonder(db)
+
+    async def _unsure(prompt: str, schema: type) -> ArticleSubjectMatch:
+        return ArticleSubjectMatch(is_subject=False, confidence="low")
+
+    monkeypatch.setattr("nous.pipeline.entity_guard.complete_json", _unsure)
+    summary = await run_purge_wrong_entity_articles(db, slug=co.slug, dry_run=False)
+    assert summary.articles_purged == 0
+    assert summary.articles_uncertain_kept == 3
+    assert summary.rounds_purged == 0
+    assert await db.get(FundingRound, wrong_round.id) is not None
+    assert {v.reason for v in summary.verdicts} == {"llm-uncertain"}

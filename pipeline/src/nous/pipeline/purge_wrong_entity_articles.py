@@ -22,7 +22,10 @@ calibrated corroboration signals, then LLM adjudication
 - denorms (``funding_round_count``, ``latest_round_*``) refresh after.
 
 Fail-KEEP semantics per article: an LLM error keeps the article (a later
-run retries — never delete on an unread verdict); a 429 aborts the run
+run retries — never delete on an unread verdict), and so does an
+adjudication short of a CONFIDENT mismatch — the prompt answers thin
+evidence (headline-only text) with is_subject=false at LOW confidence, which
+is the right ingest-time skip but no proof for a delete; a 429 aborts the run
 loudly (idempotent — re-dispatch when the limiter clears). A company with
 no description cannot be adjudicated and is refused (enrich it first, or
 use exclude-company / delete-round directly).
@@ -76,6 +79,10 @@ class PurgeWrongEntitySummary(BaseModel):
     articles_purged: int = 0
     articles_kept: int = 0
     articles_llm_error_kept: int = 0
+    # Adjudicated but not a CONFIDENT mismatch (thin evidence / low
+    # confidence): kept — the purge deletes only on a medium/high "another
+    # entity" verdict.
+    articles_uncertain_kept: int = 0
     rounds_purged: int = 0
     round_labels: list[str] = Field(default_factory=list)
     # Rounds spared because a KEPT article still links to them; on apply
@@ -165,7 +172,14 @@ async def run_purge_wrong_entity_articles(
                 )
             )
             continue
-        keep = decision.attach
+        # Delete only on a confident "another entity" verdict. A thin-evidence
+        # answer (headline-only text, low confidence either way) is what
+        # attach=False ALSO means at ingest, where skipping is recoverable;
+        # here it would delete real coverage and the rounds sourced from it.
+        uncertain = not decision.attach and not decision.confident_mismatch
+        keep = decision.attach or uncertain
+        if uncertain:
+            summary.articles_uncertain_kept += 1
         summary.verdicts.append(
             ArticleVerdict(
                 title=article.title[:110],

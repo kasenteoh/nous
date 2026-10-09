@@ -56,6 +56,12 @@ class GuardDecision(BaseModel):
     rate_limited: bool = False
     reason: str
     other_entity: str | None = None
+    # True only for an adjudicated "NOT this company" at medium/high
+    # confidence. ``attach=False`` alone also covers thin-evidence answers
+    # (is_subject at low confidence, or a low-confidence mismatch) — right for
+    # ingest, where skipping is recoverable, but not proof enough for the
+    # retroactive purge, which DELETES on its verdict and so requires this.
+    confident_mismatch: bool = False
 
 
 def _company_hq(company: Company) -> str | None:
@@ -150,9 +156,11 @@ async def check_article_entity(
         return GuardDecision(
             attach=True, adjudicated=True, reason=f"llm-match-{verdict.confidence}"
         )
+    confident = not verdict.is_subject and verdict.confidence != "low"
     return GuardDecision(
         attach=False,
         adjudicated=True,
-        reason="llm-mismatch",
+        reason="llm-mismatch" if confident else "llm-uncertain",
         other_entity=verdict.other_entity_name,
+        confident_mismatch=confident,
     )
