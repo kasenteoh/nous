@@ -14,29 +14,36 @@ from nous.pipeline.normalize_hq_state import is_unevidenced_us
 
 
 @pytest.mark.parametrize(
-    ("hq_state", "payload", "expected"),
+    ("hq_state", "hq_city", "payload", "expected"),
     [
-        # City-only / foreign region / garbage, nothing stated → unevidenced.
-        (None, {"hq_city": "Mumbai"}, True),
-        ("Ontario", {"hq_country": None}, True),
-        ("San Francisco", None, True),
-        (None, {}, True),
+        # City-only / foreign region / garbage, nothing stated → the tier-3
+        # leak signature → unevidenced.
+        (None, "Mumbai", {}, True),
+        ("Ontario", None, {"hq_country": None}, True),
+        ("San Francisco", None, None, True),
+        (None, "Tel Aviv", None, True),
+        # Neither state nor city: tier 3 could not have produced this "US"
+        # (explicit judge verdict / legacy) → out of scope, never reset. The
+        # 2026-10-09 broad predicate wrongly reset 495 of these.
+        (None, None, {}, False),
+        (None, None, None, False),
+        ("  ", "", None, False),
         # Real US state (code or name) → evidenced.
-        ("CA", None, False),
-        ("California", None, False),
-        # The enrich LLM stated a country → evidenced (even if it said US
-        # with no state — that's the model's explicit statement).
-        (None, {"hq_country": "US"}, False),
+        ("CA", "Oakland", None, False),
+        ("California", None, None, False),
+        # The enrich LLM stated a country → evidenced.
+        (None, "Austin", {"hq_country": "US"}, False),
         # Blank stated country is no statement.
-        (None, {"hq_country": "  "}, True),
+        (None, "Austin", {"hq_country": "  "}, True),
     ],
 )
 def test_is_unevidenced_us(
     hq_state: str | None,
+    hq_city: str | None,
     payload: dict[str, object] | None,
     expected: bool,
 ) -> None:
     assert (
-        is_unevidenced_us(hq_state=hq_state, enriched_payload=payload)
+        is_unevidenced_us(hq_state=hq_state, hq_city=hq_city, enriched_payload=payload)
         is expected
     )

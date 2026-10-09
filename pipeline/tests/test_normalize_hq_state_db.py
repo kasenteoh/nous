@@ -134,13 +134,16 @@ async def test_unevidenced_us_reset_to_null(db: AsyncSession) -> None:
     city_only = _make_company("City Only Co", None)
     city_only.hq_city = "London"
     stated = _make_company("Stated Co", None)
+    stated.hq_city = "Austin"
     stated.last_enriched_payload = {"hq_country": "US"}
+    # Neither state nor city: not the tier-3 signature — never reset.
+    bare = _make_company("Bare Co", None)
     real_state = _make_company("Real State Co", "WA")
     verified = _make_company("Verified Co", None)
     verified.hq_country_checked_at = datetime.now(UTC)
     excluded = _make_company("Excluded Co", None)
     excluded.exclusion_reason = "manual"
-    db.add_all([city_only, stated, real_state, verified, excluded])
+    db.add_all([city_only, stated, bare, real_state, verified, excluded])
     await db.commit()
 
     dry = await run_normalize_hq_state(db, dry_run=True)
@@ -153,6 +156,7 @@ async def test_unevidenced_us_reset_to_null(db: AsyncSession) -> None:
     expected = {
         city_only.id: None,
         stated.id: "US",
+        bare.id: "US",
         real_state.id: "US",
         verified.id: "US",
         excluded.id: "US",
