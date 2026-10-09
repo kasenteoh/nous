@@ -57,6 +57,7 @@ from nous.llm.prompts.company_eligibility import EligibilityJudgment, build_prom
 from nous.pipeline.enrich_companies import _infer_country_from_url
 from nous.util.prominence import PROMINENCE_OVERRIDE_USD, max_recorded_round_usd
 from nous.util.text import extract_visible_text, truncate_to_chars
+from nous.util.us_state import canonical_us_state
 
 logger = logging.getLogger(__name__)
 
@@ -205,7 +206,8 @@ async def _judge_one_company(
     # Country resolution — mirrors the enrich-companies three-tier logic:
     #   1. LLM explicit statement (highest confidence).
     #   2. ccTLD of the company website (deterministic, no cost).
-    #   3. US state/city already set → infer US.
+    #   3. A real US state already set → infer US (a city alone is not
+    #      evidence — see enrich_companies).
     # Only set US when there is positive evidence; leave NULL otherwise.
     llm_country = (judgment.hq_country or "").strip().upper() or None
     if llm_country:
@@ -214,7 +216,7 @@ async def _judge_one_company(
         cctld_country = _infer_country_from_url(company.website)
         if cctld_country:
             company.hq_country = cctld_country
-        elif company.hq_state or company.hq_city:
+        elif canonical_us_state(company.hq_state):
             company.hq_country = "US"
 
     if judgment.is_startup is False:
