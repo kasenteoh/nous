@@ -177,11 +177,24 @@ async def run_normalize_hq_state(
 def is_unevidenced_us(
     *,
     hq_state: str | None,
+    hq_city: str | None,
     enriched_payload: dict[str, object] | None,
 ) -> bool:
-    """True when a stored ``hq_country='US'`` rests on no evidence: no real US
-    state and no country stated in the enrich LLM payload. Pure."""
+    """True when a stored ``hq_country='US'`` carries the old tier-3 leak
+    signature: a city or a non-US region was present (that is what fired the
+    rule), there is no real US state, and the enrich LLM payload states no
+    country. Pure.
+
+    Rows with NEITHER a state nor a city are deliberately out of scope: the
+    tier-3 rule could not have produced their "US" (it needed a state or a
+    city), so it came from another path — typically an explicit
+    judge-eligibility verdict, which is not stored in the enrich payload. The
+    first prod run (2026-10-09) used the broader predicate and wrongly reset
+    495 such rows; migration 0048 restored them.
+    """
     if canonical_us_state(hq_state) is not None:
+        return False
+    if not ((hq_state or "").strip() or (hq_city or "").strip()):
         return False
     stated = (enriched_payload or {}).get("hq_country")
     return not (isinstance(stated, str) and stated.strip())
@@ -223,7 +236,9 @@ async def _reset_unevidenced_us(
     for company_id, slug, hq_state, hq_city, payload in rows:
         if limit is not None and summary.unevidenced_us_reset >= limit:
             break
-        if not is_unevidenced_us(hq_state=hq_state, enriched_payload=payload):
+        if not is_unevidenced_us(
+            hq_state=hq_state, hq_city=hq_city, enriched_payload=payload
+        ):
             continue
         logger.info(
             "normalize-hq-state: unevidenced US reset (slug=%s state=%r city=%r)%s",
