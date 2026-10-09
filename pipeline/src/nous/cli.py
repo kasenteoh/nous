@@ -2941,6 +2941,16 @@ def purge_wrong_entity_articles_cmd(
     help="Wall-clock budget, checked between companies.",
 )
 @click.option(
+    "--skip",
+    "skip_slugs",
+    type=str,
+    default="",
+    help=(
+        "Comma-separated slugs to leave untouched (review a dry-run page, then "
+        "apply it skipping companies whose PROFILE looks like the wrong entity)."
+    ),
+)
+@click.option(
     "--apply",
     is_flag=True,
     default=False,
@@ -2952,6 +2962,7 @@ def purge_wrong_entity_batch_cmd(
     min_amount: str | None,
     hold_fraction: float,
     max_runtime_minutes: float | None,
+    skip_slugs: str,
     apply: bool,
 ) -> None:
     """The retroactive entity audit: probe for wrong-entity suspect rounds,
@@ -2995,6 +3006,7 @@ def purge_wrong_entity_batch_cmd(
                 dry_run=not apply,
                 hold_fraction=hold_fraction,
                 max_runtime_minutes=max_runtime_minutes,
+                skip=frozenset(s.strip() for s in skip_slugs.split(",") if s.strip()),
             )
             click.echo(summary.model_dump_json(indent=2))
             write_step_summary(render_batch_table(summary))

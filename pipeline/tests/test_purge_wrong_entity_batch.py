@@ -191,3 +191,16 @@ async def test_render_table_mentions_every_company(fake_seams: dict[str, Any]) -
     assert "DRY-RUN" in table
     for slug in ("blue", "wave", "nodesc", "clean-co", "late"):
         assert f"`{slug}`" in table
+
+
+async def test_batch_operator_skip_keeps_queue_position(
+    fake_seams: dict[str, Any],
+) -> None:
+    summary = await batch.run_purge_wrong_entity_batch(
+        _FakeSessionFactory(),  # type: ignore[arg-type]
+        limit=3,
+        skip=frozenset({"wave"}),
+    )
+    assert fake_seams["purged"] == ["blue", "nodesc"]  # wave never adjudicated
+    assert [r.outcome for r in summary.results] == ["held", "operator_skip", "skipped"]
+    assert summary.companies_operator_skipped == 1

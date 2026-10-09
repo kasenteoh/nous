@@ -29,6 +29,14 @@ Safety:
   checked at company boundaries; ``offset`` pages deeper into the queue.
   Re-running is idempotent: purged rounds leave the probe's suspect set, and
   a company whose articles all adjudicate as ours is simply re-confirmed.
+- **Skip list.** ``skip`` slugs are reported but never adjudicated. The
+  intended apply flow is: dry-run a page, review it, then apply that same page
+  with ``skip`` naming every company whose PROFILE looks like the wrong entity.
+  The first prod dry-run (2026-10-09) proved the need: ``prometheus`` (a
+  prometheus.com profile carrying Bezos's $12B Prometheus coverage) adjudicated
+  58% "another entity" — under the hold rail, yet purging it would delete the
+  real story the slug is named for. The fix there is a website re-resolve, not
+  an article sweep.
 
 Cost: one DeepSeek adjudication per stored article of each queued company
 (~$0.0005 each; a few dozen articles per company), so ~$0.01 per company.
@@ -60,7 +68,7 @@ HOLD_MIN_ARTICLES: int = 3
 # Would-purge titles itemized per company in the report (counts are exact).
 _TITLES_PER_COMPANY: int = 12
 
-Outcome = Literal["purged", "would_purge", "clean", "held", "skipped"]
+Outcome = Literal["purged", "would_purge", "clean", "held", "skipped", "operator_skip"]
 
 
 class BatchCompanyResult(BaseModel):
@@ -90,6 +98,7 @@ class PurgeWrongEntityBatchSummary(BaseModel):
     companies_clean: int = 0
     companies_held: int = 0
     companies_skipped: int = 0
+    companies_operator_skipped: int = 0
     articles_checked: int = 0
     articles_purged: int = 0
     rounds_purged: int = 0
@@ -127,6 +136,7 @@ async def run_purge_wrong_entity_batch(
     dry_run: bool = True,
     hold_fraction: float = DEFAULT_HOLD_FRACTION,
     max_runtime_minutes: float | None = None,
+    skip: frozenset[str] = frozenset(),
 ) -> PurgeWrongEntityBatchSummary:
     """Probe for suspect rounds, then purge-adjudicate the top suspect
     companies. See module doc."""
@@ -156,6 +166,12 @@ async def run_purge_wrong_entity_batch(
         )
         summary.results.append(result)
         summary.companies_processed += 1
+        if slug in skip:
+            # Keeps its queue position so --offset paging is unchanged.
+            result.outcome = "operator_skip"
+            result.note = "skipped by operator (--skip)"
+            summary.companies_operator_skipped += 1
+            continue
         try:
             async with session_factory() as session:
                 purge = await run_purge_wrong_entity_articles(
@@ -233,7 +249,8 @@ def render_batch_table(summary: PurgeWrongEntityBatchSummary) -> str:
         f"({summary.suspect_rounds_total} suspect rounds); processed "
         f"{summary.companies_processed} from offset {summary.offset}: "
         f"{summary.companies_purged} purge, {summary.companies_clean} clean, "
-        f"{summary.companies_held} held, {summary.companies_skipped} skipped"
+        f"{summary.companies_held} held, {summary.companies_skipped} skipped, "
+        f"{summary.companies_operator_skipped} operator-skipped"
         + (" — **stopped: rate-limited**" if summary.aborted_rate_limited else "")
         + (" — stopped: runtime budget" if summary.stopped_early else "")
         + "\n",
