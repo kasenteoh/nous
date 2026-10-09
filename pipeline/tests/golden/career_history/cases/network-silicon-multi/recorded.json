@@ -1,7 +1,7 @@
 {
   "provenance": "deepseek",
   "model": "deepseek-chat",
-  "recorded_at": "2026-07-14T07:54:18+00:00",
+  "recorded_at": "2026-10-09T04:16:17+00:00",
   "response": {
     "people": [
       {
@@ -26,13 +26,13 @@
         "prior_roles": [
           {
             "company": "Broadcom",
-            "role": "technical leadership positions",
+            "role": "technical leadership",
             "start_year": null,
             "end_year": null
           },
           {
             "company": "Arista",
-            "role": "technical leadership positions",
+            "role": "technical leadership",
             "start_year": null,
             "end_year": null
           }

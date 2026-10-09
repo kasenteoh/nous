@@ -1,8 +1,10 @@
 {
-  "provenance": "simulated",
+  "provenance": "deepseek",
+  "model": "deepseek-chat",
+  "recorded_at": "2026-10-09T04:17:07+00:00",
   "response": {
     "is_subject": false,
     "confidence": "high",
-    "other_entity_name": "Primary Wave"
+    "other_entity_name": "Primary Wave Music"
   }
 }
