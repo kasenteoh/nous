@@ -1,7 +1,7 @@
 {
   "article_subject_match": {
     "attach_precision": 1.0,
-    "attach_recall": 0.666,
+    "attach_recall": 0.833,
     "parse_rate": 1.0,
     "purge_precision": 1.0
   },
@@ -37,7 +37,7 @@
   },
   "company_match": {
     "merge_precision": 1.0,
-    "merge_recall": 0.666,
+    "merge_recall": 0.833,
     "parse_rate": 1.0
   },
   "describe_fallback": {

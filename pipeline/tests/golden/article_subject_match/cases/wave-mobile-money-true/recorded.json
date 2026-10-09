@@ -1,5 +1,7 @@
 {
-  "provenance": "simulated",
+  "provenance": "deepseek",
+  "model": "deepseek-chat",
+  "recorded_at": "2026-10-09T04:17:08+00:00",
   "response": {
     "is_subject": true,
     "confidence": "high",

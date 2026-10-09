@@ -1,14 +1,14 @@
 {
   "provenance": "deepseek",
   "model": "deepseek-chat",
-  "recorded_at": "2026-07-17T16:05:58+00:00",
+  "recorded_at": "2026-10-09T04:15:45+00:00",
   "response": {
     "is_funding_announcement": true,
     "round_type": "Series A",
     "amount_raised_usd": "30000000",
     "valuation_post_money_usd": null,
     "valuation_source": null,
-    "announced_date": "2026-01-22",
+    "announced_date": null,
     "lead_investors": [
       "Larchmont Capital"
     ],

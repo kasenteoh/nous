@@ -1,9 +1,9 @@
 {
   "provenance": "deepseek",
   "model": "deepseek-chat",
-  "recorded_at": "2026-07-16T15:33:56+00:00",
+  "recorded_at": "2026-10-09T04:16:23+00:00",
   "response": {
     "verdict": "supported",
-    "supporting_quote": "raised $12 million in a Series A round"
+    "supporting_quote": "Nimbus, the cloud-security startup, said on Monday it raised $12 million in a Series A round led by Accel."
   }
 }
