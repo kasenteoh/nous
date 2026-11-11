@@ -16,7 +16,7 @@ dependencies = [
     "tenacity>=8",
     "feedparser>=6.0",
     "curl_cffi>=0.7",
-    "playwright>=1.40",
+    "playwright>=1.61",
     # SQLAlchemy Vector type for companies.embedding (migration 0033). Main
     # dependency (not the embeddings group): db/models.py imports it
     # unconditionally, and it's a tiny pure-Python package. The heavy model

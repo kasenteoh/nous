@@ -148,6 +148,16 @@ the next quiet 60-day stretch, confirm whether the API re-enable alone kept the
 crons alive (GitHub does not document what resets the timer); any new cron
 workflow must be added to its `WORKFLOWS` list.
 
+### Pipeline cron broken by `ubuntu-latest` → Ubuntu 26.04 [S] — P0 — SHIPPED (#267)
+`pipeline.yml` died at "Install Playwright Chromium" (`Playwright does not
+support chromium on ubuntu26.04-x64`): the runner image moved to 26.04 and
+Playwright 1.60 predates 26.04 support (added in 1.61). Fix: bump Playwright to
+1.65.0 in both `pipeline/uv.lock` (floor `>=1.61`) and `web/package-lock.json`.
+No workflow edit, because the gh token lacks the `workflow` scope. Follow-up: the pipeline
+install step omits `--with-deps` on the assumption that the runner ships
+Chromium's OS libs. If a future image drops them, the step needs
+`--with-deps` (that is a workflow edit, so the owner has to make it).
+
 ## 2026-07-17 embedder/Vercel decoupling — CLOSED (status quo, owner-decided)
 
 Decision record (don't re-litigate): the /companies embedder STAYS in the

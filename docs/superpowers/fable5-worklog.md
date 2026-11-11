@@ -2797,3 +2797,22 @@ Owner: "let's do it" (the QA P0s). Both adversarially reviewed (APPROVE).
 - **keepalive.yml** records the gap: a REST re-enable alone may not resume
   schedules.
 
+
+## PR #267 — ci: upgrade Playwright to 1.65.0 for Ubuntu 26.04 runners
+
+- **Problem.** `ubuntu-latest` moved to Ubuntu 26.04. The scheduled
+  `pipeline` run failed at `uv run playwright install chromium` with
+  `Playwright does not support chromium on ubuntu26.04-x64`, because the lock
+  had Playwright 1.60.0.
+- **Change.** Playwright 1.61.0 added Ubuntu 26.04 support
+  (microsoft/playwright#41025). Python went 1.60.0 → 1.65.0 (pyproject floor
+  `>=1.40` → `>=1.61`); web `@playwright/test` went 1.60.0 → 1.65.0, which also
+  fixes lint.yml's `npx playwright install --with-deps chromium`.
+- **Why not a runner pin.** Pinning `runs-on: ubuntu-24.04` is a workflow edit,
+  and the token lacks the `workflow` scope. It would also only postpone the
+  upgrade.
+- **Verified locally (Debian 13).** Both Playwright CLIs report 1.65.0, and
+  Chromium installs and launches. The web e2e structural smoke passed (19/19),
+  as did vitest 465/465, lint, build, ruff, and mypy. pytest had 2 favicon
+  failures that also occur on main: the SSRF guard does a real DNS lookup, which
+  this sandbox blocks.
