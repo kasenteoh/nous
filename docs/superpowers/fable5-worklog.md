@@ -2798,7 +2798,7 @@ Owner: "let's do it" (the QA P0s). Both adversarially reviewed (APPROVE).
   schedules.
 
 
-## PR #PRNUM — ci: upgrade Playwright to 1.65.0 for Ubuntu 26.04 runners
+## PR #267 — ci: upgrade Playwright to 1.65.0 for Ubuntu 26.04 runners
 
 - **Problem.** `ubuntu-latest` moved to Ubuntu 26.04. The scheduled
   `pipeline` run failed at `uv run playwright install chromium` with
